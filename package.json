@@ -1,0 +1,17 @@
+{
+  "name": "rpg-online-cloudflare",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "engines": {"node": ">=22"},
+  "scripts": {
+    "dev": "wrangler dev --local --var APP_ENV:local",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "cli:smoke": "node scripts/cli-mock.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "wrangler": "^4.0.0"
+  }
+}
