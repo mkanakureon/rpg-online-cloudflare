@@ -1,0 +1,87 @@
+{
+  "$comment": "issue-run.mjs が claude -p に --settings で渡す設定の元（Node 版）。{{STOP_HOOK}} は実行時に絶対パスへ、{{REPO}} は作業場所の POSIX 形（Windows の D:\\x\\y は d/x/y、Mac の /Users/x/y は Users/x/y）へ置き換える。対話のセッションには効かない。権限は狭めるだけ（deny）で広げない。CLAUDE.md と .claude/ の deny は //{{REPO}}/ の絶対パスで直下だけに効かせる（裸の CLAUDE.md はどの深さにも効いてしまう）。PowerShell(…) の行は Windows の Claude Code の道具を断るためのもので、この版の脚本は Node.js だけで動く。説明は docs/guides/working/issue-run.md の「止まらない仕組み」",
+  "env": {
+    "DISABLE_AUTOUPDATER": "1",
+    "BASH_DEFAULT_TIMEOUT_MS": "600000",
+    "BASH_MAX_TIMEOUT_MS": "5400000"
+  },
+  "permissions": {
+    "deny": [
+      "AskUserQuestion",
+      "EnterPlanMode",
+      "Edit(//{{REPO}}/CLAUDE.md)",
+      "Write(//{{REPO}}/CLAUDE.md)",
+      "Edit(//{{REPO}}/.claude/**)",
+      "Write(//{{REPO}}/.claude/**)",
+      "Edit(//{{REPO}}/docs/inspecs/**)",
+      "Write(//{{REPO}}/docs/inspecs/**)",
+      "Bash(git push:*)",
+      "Bash(git worktree:*)",
+      "Bash(git checkout:*)",
+      "Bash(git switch:*)",
+      "Bash(git reset:*)",
+      "Bash(git rebase:*)",
+      "Bash(git stash:*)",
+      "Bash(git gc:*)",
+      "Bash(git config:*)",
+      "Bash(git remote:*)",
+      "Bash(git clean:*)",
+      "Bash(gh issue comment:*)",
+      "Bash(gh issue edit:*)",
+      "Bash(gh issue close:*)",
+      "Bash(gh pr:*)",
+      "Bash(gh release:*)",
+      "Bash(gh repo:*)",
+      "Bash(gh api:*)",
+      "Bash(rm:*)",
+      "Bash(kill:*)",
+      "Bash(pkill:*)",
+      "Bash(taskkill:*)",
+      "Bash(npm publish:*)",
+      "Bash(npx wrangler deploy:*)",
+      "Bash(wrangler deploy:*)",
+      "Bash(npm run deploy:*)",
+      "PowerShell(git push:*)",
+      "PowerShell(git worktree:*)",
+      "PowerShell(git checkout:*)",
+      "PowerShell(git switch:*)",
+      "PowerShell(git reset:*)",
+      "PowerShell(git rebase:*)",
+      "PowerShell(git stash:*)",
+      "PowerShell(git gc:*)",
+      "PowerShell(git config:*)",
+      "PowerShell(git remote:*)",
+      "PowerShell(git clean:*)",
+      "PowerShell(gh issue comment:*)",
+      "PowerShell(gh issue edit:*)",
+      "PowerShell(gh issue close:*)",
+      "PowerShell(gh pr:*)",
+      "PowerShell(gh release:*)",
+      "PowerShell(gh repo:*)",
+      "PowerShell(gh api:*)",
+      "PowerShell(Remove-Item:*)",
+      "PowerShell(rm:*)",
+      "PowerShell(del:*)",
+      "PowerShell(Stop-Process:*)",
+      "PowerShell(kill:*)",
+      "PowerShell(taskkill:*)",
+      "PowerShell(npm publish:*)",
+      "PowerShell(npx wrangler deploy:*)",
+      "PowerShell(wrangler deploy:*)",
+      "PowerShell(npm run deploy:*)"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"{{STOP_HOOK}}\"",
+            "timeout": 3600
+          }
+        ]
+      }
+    ]
+  }
+}
