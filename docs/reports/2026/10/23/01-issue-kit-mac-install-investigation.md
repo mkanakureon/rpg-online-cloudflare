@@ -77,6 +77,7 @@ vitest 4 の任意の peer（`@vitejs/devtools-vitest` など）が `vitest@*` �
 | K-5 | ガイド | 「確かめた版」の git は 2.55.0（Windows）。Mac の標準は Apple Git 2.39.5。点検・DryRun まで差による不具合は出ていない | Mac の表に書き足す |
 | K-6 | ガイド・CLAUDE.md の雛形 | 付録 C・手順 4 の「`@cloudflare/vitest-pool-workers` を足す」は、**非推奨のパッケージ**を指している。後継は `@cloudflare/vitest-plugin`（vitest 4 と 5 の両方に対応・`cloudflareTest` プラグインで設定） | パッケージ名と設定の例（`vitest.config.ts` の 3 行）をガイドに書く |
 | K-7 | ガイド | `@cloudflare/vitest-plugin` に入っている workerd は、`compatibility_date` の上限が新しい wrangler より古い（1.4.0 は 2026-10-13）。今日の日付で書いた `wrangler.jsonc` だと、テストが `ERR_RUNTIME_FAILURE` で 1 本も回らない。テストの入口は `FAIL (0/1)` と出すので見落としはしない | 「困ったとき」に症状と直し方（`compatibility_date` を下げる）を足す |
+| K-9 | ガイド | 手順 1.3 の `! claude setup-token` は、Claude Code の `!` が TTY 無し・標準入力 `/dev/null` で回すため、ブラウザの承認の後で止まってトークンが出ない（120 秒で背景に回り、出力 0 バイト）。トークンを会話に出さない意味でも `!` は向かない | 「Claude Code の外のターミナルで `claude setup-token` を実行し、値は会話に貼らずに `~/.zprofile` 等へ入れる」と書き直す |
 | K-8 | 点検 | `doctor.mjs` が npm の版を 11.4.2 に固定して `WARN` を出す。K-4 で上げると必ず WARN が残る | K-4 と合わせて固定の版を上げる。利用先が版を決められるなら、`package.json` の `engines` か `.issue-kit` から読む |
 
 キットの `settings.json` は最初から `wrangler deploy`・`npx wrangler deploy`・`npm run deploy` を断るので、付録 C の手順 4 の「wrangler deploy は無人の回でも断る」は設定の追加なしで満たしている。
