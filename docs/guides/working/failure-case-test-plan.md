@@ -76,7 +76,7 @@
 | 3 | `スコアが0と10億ちょうどなら受け付ける` | いま | L2 | 別のプレイヤーで `score: 0` と `score: 1000000000` | どちらも 200・`{"ok":true,…}`。GET で両方が載る（K1） |
 | 4 | `他のゲームのランキングは返さない` | いま | L2 | `demo-rpg` と `other-rpg` の `boss-score` に 1 行ずつ入れて `GET /v1/rankings/boss-score?gameId=demo-rpg` | 200・`items` は `demo-rpg` の行だけ。`other-rpg` の `playerId` が無い（K1） |
 | 4 | `他のゲームのお知らせは返さない` | いま | L2 | `other-rpg` にお知らせを 1 件足し、`GET /v1/announcements?gameId=demo-rpg` | 200・`items` は `welcome` だけ（マイグレーションの初期データ）（K1） |
-| 4 | `SQLを混ぜたgameIdはINVALID_ARGUMENTの400を返す` | いま | L2 | `gameId=demo-rpg' OR '1'='1`（URL エンコード）で GET と POST | どちらも 400・`INVALID_ARGUMENT`。他ゲームの行は返らない（K1） |
+| 4 | `SQLを混ぜたgameIdはINVALID_ARGUMENTの400を返す` | いま | L2 | GET は `gameId=demo-rpg' OR '1'='1`（URL エンコード）。POST は `APP_ENV=local` で本文の `gameId` を同じ文字列に | どちらも 400・`INVALID_ARGUMENT`。他ゲームの行は返らない（K1） |
 | 4 | `同じプレイヤーIDでも他のゲームの記録は書き換えない` | いま | L2 | `demo-rpg` の `p1` が 1200 の状態で、`other-rpg` の `p1` を 5000 で POST | `demo-rpg` の GET の `p1` は 1200 のまま（K1） |
 | 4 | `他のプレイヤーになりすました書き込みを弾く` | 認証後 | L2 | トークンのプレイヤーと違う `playerId` で POST | 403（コードは認証の設計で決める）。行は変わらない |
 | 5 | `同じスコアを二重送信しても行は1つで結果は同じ` | いま | L2 | `APP_ENV=local`・同じ本文の POST を 2 回 | どちらも 200・同じ本文。GET でそのプレイヤーは 1 行・`score` は 1200（K2） |
@@ -85,9 +85,9 @@
 | 5 | `決めた回数を超えて連投すると429を返す` | 認証後 | L2 | 同じプレイヤーが決めた時間の中で決めた回数を超えて POST | 429（コード名・回数・時間は Phase 1 の利用制限で決める）。行は変わらない |
 | 5 | `同じ送信IDの二重送信は1回分として扱う` | 認証後 | L2 | 同じ送信 ID（ヘッダーか欄。形は認証と一緒に決める）の POST を 2 回 | 2 回目は 1 回目と同じ応答で、記録は 1 回分（決めること 4） |
 | 6 | `クライアントが送った時刻の欄は無視しサーバーの時刻で記録する` | いま | L2 | `APP_ENV=local`・本文に `"submittedAt":"2099-01-01T00:00:00Z"` を足して POST | 200。D1 の `updated_at` はサーバーの今の時刻（2099 年でない）。応答に時刻の欄は無い（K2） |
-| 6 | `同点なら先に記録した人が上に並ぶ` | いま | L2 | `updated_at` を `2026-01-01 00:00:00` と `2026-01-02 00:00:00` にした同点の 2 行を入れて GET | 先の時刻の行が上（`ORDER BY score DESC, updated_at ASC, player_id ASC`）（K2） |
+| 6 | `同点なら先に記録した人が上に並ぶ` | いま | L2 | 同点の 2 行を入れて GET。`p2` の `updated_at` を `2026-01-01 00:00:00`、`p1` を `2026-01-02 00:00:00` にする（ID の順と時刻の順を逆にする） | 先の時刻の `p2` が上（`ORDER BY score DESC, updated_at ASC, player_id ASC`）（K2） |
 | 6 | `UEクライアントは端末の時刻がずれていても期間の判定にサーバーの時刻を使う` | UE統合後 | L3 | 端末の時計を 1 日ずらしたゲームで、期間限定イベントを開く | 期間の内か外かがサーバーの時刻で決まる（ユーザーが見る。イベントの API は Phase 2） |
-| 7 | `マイグレーションを2回当ててもデータは壊れない` | いま | L2 | `applyD1Migrations` を当てたあとに 1 行入れ、もう一度当てる | 2 回目でエラーにならず、入れた行と `welcome` が残る（K2） |
+| 7 | `マイグレーションを2回当ててもデータは壊れない` | いま | L2 | `applyD1Migrations` を当てたあとに 1 行入れ、`readD1Migrations` の各 `queries` を `env.DB.batch` で直にもう一度流す（`applyD1Migrations` の 2 回目は当てた記録を見て飛ばすので、それでは確かめにならない） | 2 回目の SQL がエラーにならず、入れた行と `welcome` が残る（K2） |
 | 7 | `今のCLIモックと同じ形の要求を受け付ける` | いま | L2 | `scripts/cli-mock.mjs` と同じ本文（`gameId`・`playerId`・`displayName`・`score`）で POST のあと GET | 200・`ok: true`。GET に載る（API を変えたら CLI モックも直す合図）（K2） |
 | 7 | `知らない欄が付いた要求も受け付ける` | いま | L2 | 正しい本文に `"clientVersion":"0.0.1"` と `"extra":{}` を足して POST | 200。知らない欄は保存されない（新しい CLI と古いサーバー、の向きの互換）（K2） |
 | 7 | `旧CLIはスキーマ変更後のAPIでもランキングを送って読める` | UE統合後 | L2 | 次のマイグレーションを当てたあと、その前の版の CLI モックの要求の形で POST と GET | 200 で送れて読める。変えるなら版の番号の扱いを先に決める（決めること 5） |
@@ -134,7 +134,7 @@ requireTests([
   'SQLを混ぜたgameIdはINVALID_ARGUMENTの400を返す',
   '同じプレイヤーIDでも他のゲームの記録は書き換えない',
 ]);
-gitClean(['migrations/', ['package', 'json'].join('.'), 'wrangler.jsonc']);
+gitClean(['src/', 'migrations/', ['package', 'json'].join('.'), 'wrangler.jsonc']);
 done();
 ```
 
@@ -156,7 +156,7 @@ requireTests([
   '今のCLIモックと同じ形の要求を受け付ける',
   '知らない欄が付いた要求も受け付ける',
 ]);
-gitClean(['migrations/', ['package', 'json'].join('.'), 'wrangler.jsonc']);
+gitClean(['src/', 'migrations/', ['package', 'json'].join('.'), 'wrangler.jsonc']);
 done();
 ```
 
