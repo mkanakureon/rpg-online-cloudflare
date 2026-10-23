@@ -59,6 +59,7 @@ node scripts/issue-run/issue-run.mjs --dry-run     # 対象の Issue を見る�
 | **機能・改善を作る**（ゴール → 合格の条件 → 詳しい設計書 → 実装 → テスト → NG を設計か実装かに振り分け → 合格判定） | `.claude/skills/design-cycle/SKILL.md` |
 | **テストを回す・結果を読む・テストを書く場所** | `docs/guides/procedures/node-test-procedure.md` |
 | **テスト計画**（用語・テストレベル・合格基準・中断基準・欠陥管理。これ1か所が正） | `docs/guides/decisions/test-plan.md` |
+| **失敗ケースの試験**（試験の名前の表・実装の束 K1〜K4・決めたこと） | `docs/guides/working/failure-case-test-plan.md` |
 | **Issue 駆動の全体**（誰が何をするか・部品・1 件の流れ・どの文書が何の正か）と**再現**（版・ゼロからの手順・点検 `scripts/issue-run/doctor.mjs`） | `docs/guides/working/issue-driven-development.md` |
 | **Issue を作る・見る・無人で回す**（会話の中で） | `.claude/skills/github-issue/SKILL.md` |
 | **ゴールと合格の条件を決めて Issue に書く**（確認コマンド・守るファイル・例） | `docs/guides/procedures/issue-goal-setting.md` |
