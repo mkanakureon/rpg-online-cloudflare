@@ -66,6 +66,19 @@ verbose stack     at async #loadPeerSet (.../build-ideal-tree.js:1308:11)
 
 vitest 4 の任意の peer（`@vitejs/devtools-vitest` など）が `vitest@*` を引き、その先で vitest 5.0.5 系の peer を辿る途中で、npm 11.4.2 の arborist が落ちている。
 
+## 無人の回（ガイドの M5・基本設計の K-7）
+
+| 見たこと | 結果 |
+|---|---|
+| Issue | #5 失敗ケース 8 つのテスト計画を書く（確認コマンドは事前に「まだ無い」で NG 20・偽の正しい文書で NG 1（未コミットだけ）・偽の誤った文書で 3 つとも NG を確かめた） |
+| `node scripts/issue-run/issue-run.mjs --issue 5 --dry-run` | 合格の条件 8 行・確認コマンド あり・守るファイル 4 本（`package.json` は `['package','json'].join('.')` で守らずに済んだ） |
+| 起動（人が別のターミナルで `node scripts/issue-run/issue-run.mjs`） | 18:44:58 開始。試しの `claude -p` で Stop hook が動いた（`probe-stop-hook.txt` に `stop-hook ran`） |
+| 眠らせない | `pgrep -fl caffeinate` で `/usr/bin/caffeinate -i -w <issue-run の PID>` が動いていた |
+| 結果 | **1 回目で合格**（`claude-done`）。18:45〜18:50 の 6 分・18 ターン・コミット 2（`4c5f501`・`e2b1716`）・断られた操作 0。確認コマンドは `OK（全部満たす）` |
+| まとめ | `docs/reports/2026/10/23/02-issue-run.md` を issue-run.mjs が書いた（未コミット・push はしない、のとおり） |
+
+Mac で、入れる → 確かめる → 無人の回で 1 件合格、まで通った。起動した窓に `CLAUDE_CODE_OAUTH_TOKEN` があったかは見ていない（点検を回した時点では WARN）。
+
 ## キットへの申し送り（見つかった点）
 
 | # | 種類 | 内容 | 案 |
