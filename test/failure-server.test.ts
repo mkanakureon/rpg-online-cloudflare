@@ -6,6 +6,7 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
+import { SMOKE_BOARD_ID, scoreSubmission } from '../scripts/cli-requests.mjs';
 
 type Migration = { name: string; queries: string[] };
 type TestEnv = { DB: D1Database; APP_ENV: string; TEST_MIGRATIONS: Migration[] };
@@ -145,13 +146,13 @@ describe('ケース 7: マイグレーションと互換', () => {
   });
 
   it('今のCLIモックと同じ形の要求を受け付ける', async () => {
-    // scripts/cli-mock.mjs と同じ本文の形。API を変えたら CLI モックも直す合図
-    const playerId = 'mac-cli-test';
-    const res = await post('boss-score', { gameId: 'demo-rpg', playerId, displayName: 'Mac CLI Tester', score: 1200 });
+    // scripts/cli-mock.mjs が送る本文そのもの（scripts/cli-requests.mjs で共有）。落ちたら API か CLI モックを直す合図
+    const body = scoreSubmission();
+    const res = await post(SMOKE_BOARD_ID, body);
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true });
-    const list = await items(await get('/v1/rankings/boss-score?gameId=demo-rpg&limit=10'));
-    expect(list).toEqual([{ playerId, displayName: 'Mac CLI Tester', score: 1200 }]);
+    const list = await items(await get(`/v1/rankings/${SMOKE_BOARD_ID}?gameId=${body.gameId}&limit=10`));
+    expect(list).toEqual([{ playerId: body.playerId, displayName: body.displayName, score: body.score }]);
   });
 
   it('知らない欄が付いた要求も受け付ける', async () => {

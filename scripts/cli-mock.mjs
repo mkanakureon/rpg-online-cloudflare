@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 /** Mac-side CLI replacement for a future UE HTTP client. Local testing only. */
+import { SMOKE_BOARD_ID, scoreSubmission } from './cli-requests.mjs';
+
 const base = process.env.API_BASE_URL || 'http://127.0.0.1:8787';
 
 async function call(path, options = {}) {
@@ -15,14 +17,14 @@ try {
   if (health.status !== 'ok') throw new Error('Health check failed');
   await call('/v1/announcements?gameId=demo-rpg');
 
-  const playerId = 'cli-smoke-player';
-  await call('/v1/rankings/boss-score', {
+  const submission = scoreSubmission();
+  await call(`/v1/rankings/${SMOKE_BOARD_ID}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ gameId: 'demo-rpg', playerId, displayName: 'Mac CLI Tester', score: 1200 })
+    body: JSON.stringify(submission)
   });
-  const result = await call('/v1/rankings/boss-score?gameId=demo-rpg&limit=10');
-  if (!result.items.some((entry) => entry.playerId === playerId && entry.score >= 1200)) {
+  const result = await call(`/v1/rankings/${SMOKE_BOARD_ID}?gameId=${submission.gameId}&limit=10`);
+  if (!result.items.some((entry) => entry.playerId === submission.playerId && entry.score >= submission.score)) {
     throw new Error('Submitted score not found in top 10');
   }
   console.log('\nPASS: local CLI smoke test');
