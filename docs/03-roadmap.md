@@ -13,7 +13,7 @@
 - [x] Mac/CLI/UE後回しの決定をADR化
 - [x] Worker・D1・CLIの最小雛形
 - [x] お知らせ・ランキングのローカル試作
-- [ ] Mac実機で`npm install`、D1マイグレーション、スモークテストを実施
+- [x] Mac実機で`npm install`、D1マイグレーション、スモークテストを実施（2026-10-24。`npm run cli:smoke` → `PASS`）
 - [x] GitHubに新規リポジトリを作成して初回push
 
 ## Phase 1：APIとCLIの安定化
