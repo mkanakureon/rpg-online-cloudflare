@@ -37,7 +37,7 @@
 | --- | --- | --- | --- |
 | `GET /health` | なし | 200 `{"status":"ok","service":"rpg-online-backend"}` | — |
 | `GET /v1/announcements` | クエリ `gameId`（`^[a-zA-Z0-9_-]{1,64}$`・必須） | 200 `{"gameId","items":[{"id","title","body"}]}`。`items` は最大 50・`id` の昇順。データが無くても 200 と空の `items` | 400 `INVALID_ARGUMENT` `Invalid gameId` |
-| `GET /v1/rankings/{boardId}` | パス `boardId`（`^[a-zA-Z0-9_-]{1,64}$`）・クエリ `gameId`（同じ形・必須）・`limit`（数字だけの 1〜50・既定 10） | 200 `{"gameId","boardId","items":[{"playerId","displayName","score"}]}`。`items` は最大 `limit`・`score` の降順 | 400 `INVALID_ARGUMENT`（`Invalid gameId`・`limit must be 1..50`）。`boardId` の形が外れたらどのルートにも当たらず 404 `NOT_FOUND` |
+| `GET /v1/rankings/{boardId}` | パス `boardId`（`^[a-zA-Z0-9_-]{1,64}$`）・クエリ `gameId`（同じ形・必須）・`limit`（数字だけの 1〜50・既定 10） | 200 `{"gameId","boardId","items":[{"playerId","displayName","score"}]}`。`items` は最大 `limit`・`score DESC, updated_at ASC, player_id ASC` の順 | 400 `INVALID_ARGUMENT`（`Invalid gameId`・`limit must be 1..50`）。`boardId` の形が外れたらどのルートにも当たらず 404 `NOT_FOUND` |
 | `POST /v1/rankings/{boardId}` | パス `boardId`・本文 JSON `{"gameId","playerId","displayName","score"}`。`gameId`・`playerId` は ID の形、`displayName` は 1〜40 文字の文字列、`score` は 0〜1,000,000,000 の安全な整数。知らない欄は無視 | 200 `{"ok":true,"gameId","boardId","playerId"}` | 403 `NOT_READY_FOR_PRODUCTION` `Authentication not implemented`（`APP_ENV !== 'local'`。本文を読む前）・400 `INVALID_JSON` `Request body must be JSON`・400 `INVALID_ARGUMENT`（`Object required`・`Invalid ranking payload`） |
 | どれにも当たらない | — | — | 404 `NOT_FOUND` `Endpoint not found` |
 | どのエンドポイントでも | — | — | 例外は 500 `INTERNAL_ERROR` `Internal server error`（中身を返さない） |
@@ -54,7 +54,7 @@
 - OpenAPI 3.1 の `components.schemas` は JSON Schema（2020-12）そのものなので、要求・応答の形は JSON Schema で書く。YAML にしないのは、パッケージを足さずに読めるため（Vite が JSON をそのまま読み込める。YAML は読む道具が要る）。
 - **検証の関数はパッケージを足さずに自前で書く**（S1）。このスキーマが使う JSON Schema の語だけを見る小さな関数（`type`・`properties`・`required`・`additionalProperties`・`items`・`maxItems`・`pattern`・`minLength`・`maxLength`・`minimum`・`maximum`・`const`・`enum`・`$ref` の `#/components/schemas/…`）。置き場は試験の側の `test/support/schema-check.ts`（`src/` を変えない）。スキーマで使う語を増やすときは、この関数と S1 の自己試験を同じコミットで直す。
 - **契約の正**: 形（欄・型・範囲・状態コードとエラーコードの組）の正はスキーマ、挙動の説明（順位の付け方・最高スコアの保持・互換の決まり・書き込みの守り）の正は `docs/api-contract.md`。`docs/api-contract.md` の例はスキーマに合うことを S2 の試験で確かめる（どちらかだけ直すと落ちる）。`docs/api-contract.md` の書き換え（スキーマを指す 1 行を足す）は、S1 の実装の Issue で行う（この設計書ではしない）。
-- 試験は vitest で、いまの試験と同じく Workers のランタイムの中で回す。スキーマは `import spec from '../openapi/rpg-online.v1.json'` で読む。`docs/api-contract.md` は `?raw` の import で文字列として読む（読めなければ S2 の実装の Issue で、Node.js 側の `vitest.config.ts` で読んで `miniflare.bindings` に渡す形に切り替える。いまの `TEST_MIGRATIONS` と同じ渡し方）。
+- 試験は vitest で、いまの試験と同じく Workers のランタイムの中で回す。スキーマは `import spec from '../openapi/rpg-online.v1.json'` で読む。`docs/api-contract.md` は `?raw` の import で文字列として読む。いまの `tsconfig.json` には `?raw` の型が無いので、S2 で `test/` に `declare module '*?raw'` の型のファイルを足す（JSON の import は `resolveJsonModule` で型が通る）（読めなければ S2 の実装の Issue で、Node.js 側の `vitest.config.ts` で読んで `miniflare.bindings` に渡す形に切り替える。いまの `TEST_MIGRATIONS` と同じ渡し方）。
 
 ## 3. スキーマの中身（いまの挙動を写す）
 
@@ -69,6 +69,7 @@
 
 | 形（`components.schemas`） | 中身 |
 | --- | --- |
+| `AnnouncementList`・`RankingList`・`ScoreAccepted` | `gameId`・`boardId`・`playerId` は `Id`。欄は全部必須 |
 | `Id` | `type: string`・`pattern: "^[a-zA-Z0-9_-]{1,64}$"`（`gameId`・`playerId`・`boardId` で共通。`docs/02-architecture.md` の「識別」） |
 | `Announcement` | `id`・`title`・`body`（どれも `string`・必須） |
 | `RankingEntry` | `playerId`（`Id`）・`displayName`（`string`・1〜40）・`score`（`integer`・0〜1000000000） |
@@ -89,7 +90,9 @@
 - 応答の形は `additionalProperties: false`（§5 の決めること 4）。欄を足すときはスキーマも同じコミットで足す合図になる。
 - `limit` はスキーマでは `integer`。`src/worker.ts` は `1.5`・`abc`・`-1` を 400 にする（数字だけの文字列）。クエリは文字列で来るので、検証の関数は「数字だけの文字列を整数に直してから見る」とし、それ以外は外れにする。
 - `message` は `string` だけにして、文は決めない（§5 の決めること 5）。
-- 応答のヘッダー（`content-type`・`cache-control`）はスキーマの `headers` に書く。
+- `content-type` は応答の `content` の `application/json` で表す（OpenAPI 3.1 は `headers` の `Content-Type` を無視する決まり）。`charset=utf-8` は説明の文に書き、S1 の試験が実物のヘッダーを見る。`cache-control` だけを `headers` に書く。
+- `displayName` の長さ: `src/worker.ts` は `displayName.length`（UTF-16 の単位）で 1〜40 を見る。JSON Schema の `minLength`・`maxLength` は文字（コードポイント）で数えるので、BMP の外の文字（絵文字など）で食い違う。自前の検証関数（§2）は `src/worker.ts` に合わせて `.length` で数え、そのことをスキーマの `description` に書く。数え方を文字に揃えるかは、挙動を変えることなので別の Issue で決める（§5 の決めること 3 の振り分け）。S2 の境目の試験は BMP の中の文字だけを使う。
+- 応答の `RankingEntry` は DB より厳しい（DB の `display_name`・`player_id` に CHECK が無い）。いまは API だけが書くので合うが、手やマイグレーションで行を入れたら S1 が落ちうる。
 
 ## 4. 試験の名前の表
 
@@ -111,11 +114,12 @@
 | S2 | `api-contract.mdの要求と応答の例はスキーマに合う` | `docs/api-contract.md` の ```json の例（各エンドポイントの応答・入力・エラー）が、その節の操作のスキーマに合う | L1 |
 | S2 | `api-contract.mdのエラーコードの一覧はスキーマと一致する` | 「エラーレスポンス」の節の「コード（状態）」の並びが、§3 の状態とエラーコードの組と同じ | L1 |
 | S2 | `CLIモックの要求の本文はスキーマの入力に合う` | `scripts/cli-requests.mjs` の `scoreSubmission()` が `ScoreSubmission` に合う（`scripts/cli-mock.mjs` とスキーマが食い違わない） | L1 |
-| S3 | `OpenAPIの検証の道具がスキーマのファイルを正しいと判定する` | §5 の決めること 2 で足すと決めた道具（例: `@redocly/cli lint`）でスキーマのファイルを確かめ、エラーが 0 | 道具 |
+| S3 | `OpenAPIのメタスキーマでスキーマのファイルが正しいと判定される` | §5 の決めること 2 で足すと決めた `ajv`（2020-12）で、OpenAPI 3.1 のメタスキーマ（JSON のファイルとして `openapi/` に置く）にスキーマのファイルを当て、エラーが 0。Workers のランタイムでは子プロセスを起こせないので、`@redocly/cli lint` のような CLI は `it()` にせず、確認コマンドの `check()` で回す | L1 |
 | S3 | `自前の検証関数と検証の道具の判定が一致する` | S1 の応答と §4 S2 の境目の値で、自前の関数と道具（例: `ajv`）の合否が全部同じ | L1 |
 
 数（行）: S1 が 8・S2 が 6・S3 が 2。
 
+- `スキーマの入力の制約の境目でAPIの合否がスキーマと一致する` は、K1 の `limitが1から50の外なら400を返す`・`スコアが10億を超えると400を返す` などと入力が重なるが、値をスキーマから作り「スキーマと API が同じ所で分かれる」ことを見る。K1 の代わりにはしない（K1 は挙動の正、こちらはスキーマの正しさ）。
 - L2 の試験の作り方（`src/worker.ts` の `default` を直に呼ぶ・`env` に `APP_ENV: 'local'` を渡す・偽の DB・試験ごとにデータを消す）は `docs/guides/working/failure-case-test-plan.md` §2 と同じ。
 - 置き場は束ごとに 1 ファイル（S1 は `test/schema-conformance.test.ts`、S2 は `test/schema-contract.test.ts`）。検証の関数は `test/support/schema-check.ts`。
 - テストの名前は表の文そのまま `it('…')` に書く。名前を変えるときは、この表も同じコミットで直す（`docs/guides/procedures/node-test-procedure.md`）。
@@ -186,13 +190,13 @@ gitClean(['src/', 'migrations/', ['package', 'json'].join('.'), 'wrangler.jsonc'
 done();
 ```
 
-S3（決めること 2 で B か C に決めたときだけ。`package.json` と `package-lock.json` は `npm install` で対で変える）:
+S3（決めること 2 で B か C に決めたときだけ。`package.json` と `package-lock.json` は `npm install` で対で変える。C の lint の CLI は、ここに `spawnSync` の結果を `check()` で見る行を足す）:
 
 ```js
 import { runTests, requireTests, gitClean, done } from './scripts/issue-run/check-lib.mjs';
 runTests();
 requireTests([
-  'OpenAPIの検証の道具がスキーマのファイルを正しいと判定する',
+  'OpenAPIのメタスキーマでスキーマのファイルが正しいと判定される',
   '自前の検証関数と検証の道具の判定が一致する',
 ]);
 gitClean(['src/', 'migrations/', 'wrangler.jsonc']);
