@@ -3,11 +3,16 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": ["ES2022", "DOM"],
+    "lib": ["ES2022"],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
     "types": []
   },
-  "include": ["src/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "worker-configuration.d.ts",
+    "node_modules/@cloudflare/vitest-plugin/types/cloudflare-test.d.ts"
+  ]
 }
