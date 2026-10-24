@@ -18,7 +18,8 @@ Issue 駆動キット（Node 版）を入れた。入れた版は `.issue-kit/ve
 ```text
 node scripts/test.mjs                              # テスト（npm test も同じ）
 node scripts/test.mjs --filter '<テストの名前>'      # 1 本
-npm run typecheck                                  # 型の確かめ（src/ のみ）
+npm run typecheck                                  # 型の確かめ（src/ と test/）
+npm run cf-typegen                                 # wrangler.jsonc・wrangler の版を変えたら worker-configuration.d.ts を作り直す
 npm run db:migrate:local && npm run dev            # ローカルの D1 を作って Worker を起動（APP_ENV=local・127.0.0.1:8787）
 npm run cli:smoke                                  # 起動中の Worker に CLI モックで通しの確かめ
 node scripts/issue-run/doctor.mjs                  # Issue の無人実行の点検
