@@ -1,9 +1,10 @@
 // rankings/index.ts — ランキングのモジュール（GET・POST /v1/rankings/{boardId}）。
 //
-// GET は gameId → limit の順に確かめて上位を返す。POST は APP_ENV=local の門（本文を読む前）
-// → JSON の読み取り → 形の検証（validate.ts）→ 書き込み（高いほうのスコアを残す）。
+// GET は gameId → limit → ゲームの登録の順に確かめて上位を返す。POST は APP_ENV=local の門（本文を読む前）
+// → JSON の読み取り → 形の検証（validate.ts）→ ゲームの登録 → 書き込み（高いほうのスコアを残す）。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
+import { requireGame } from '../../core/games';
 import { requireLocalWrite } from '../../core/guards';
 import { error, json } from '../../core/http';
 import { validId } from '../../core/ids';
@@ -30,6 +31,8 @@ export const rankings: GameModule = {
         if (!validId(gameId)) return error('INVALID_ARGUMENT', 'Invalid gameId', 400);
         const limit = parseLimit(url.searchParams.get('limit'));
         if (limit === null) return error('INVALID_ARGUMENT', 'limit must be 1..50', 400);
+        const unknown = await requireGame(env, gameId, rankings.name);
+        if (unknown) return unknown;
         const rows = await env.DB.prepare(
           'SELECT player_id AS playerId, display_name AS displayName, score FROM ranking_entries '
           + 'WHERE game_id = ? AND board_id = ? ORDER BY score DESC, updated_at ASC, player_id ASC LIMIT ?'
@@ -50,6 +53,8 @@ export const rankings: GameModule = {
         const parsed = parseScoreSubmission(value);
         if (!parsed.ok) return error('INVALID_ARGUMENT', parsed.message, 400);
         const { gameId, playerId, displayName, score } = parsed.value;
+        const unknown = await requireGame(env, gameId, rankings.name);
+        if (unknown) return unknown;
         await env.DB.prepare(
           `INSERT INTO ranking_entries (game_id, board_id, player_id, display_name, score)
          VALUES (?, ?, ?, ?, ?)

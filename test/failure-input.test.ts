@@ -6,6 +6,7 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
+import { registerGame } from './support/games';
 
 type TestEnv = { DB: D1Database; APP_ENV: string };
 const baseEnv = env as unknown as TestEnv;
@@ -49,23 +50,11 @@ beforeEach(async () => {
 });
 
 describe('ケース 2: 存在しないもの・形の正しくない入力', () => {
-  it('存在しないゲームのランキングは200と空の一覧を返す', async () => {
-    const res = await get('/v1/rankings/boss-score?gameId=no-such-game');
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ gameId: 'no-such-game', boardId: 'boss-score', items: [] });
-  });
-
   it('存在しないボードのランキングは200と空の一覧を返す', async () => {
     expect((await post('boss-score', entry('demo-rpg', 'p1', 1200))).status).toBe(200);
     const res = await get('/v1/rankings/no-such-board?gameId=demo-rpg');
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ gameId: 'demo-rpg', boardId: 'no-such-board', items: [] });
-  });
-
-  it('存在しないゲームのお知らせは200と空の一覧を返す', async () => {
-    const res = await get('/v1/announcements?gameId=no-such-game');
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ gameId: 'no-such-game', items: [] });
   });
 
   it('ボードIDの形が正しくなければNOT_FOUNDの404を返す', async () => {
@@ -131,6 +120,11 @@ describe('ケース 3: スコアの範囲と型', () => {
 });
 
 describe('ケース 4: 他ゲームの分離', () => {
+  // other-rpg へ書き込むので、開始状態として登録しておく（core-foundation-design.md §5）
+  beforeEach(async () => {
+    await registerGame(baseEnv.DB, 'other-rpg');
+  });
+
   it('他のゲームのランキングは返さない', async () => {
     expect((await post('boss-score', entry('demo-rpg', 'demo-player', 100))).status).toBe(200);
     expect((await post('boss-score', entry('other-rpg', 'other-player', 999))).status).toBe(200);
