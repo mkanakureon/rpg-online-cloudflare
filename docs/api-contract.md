@@ -151,6 +151,37 @@
 - 消した後は`GET`が 404・一覧に出ない・スロットの数に数えない。同じスロットに`baseRevision: 0`で書き直せるが、`revision`は 1 に戻らず消す前より先へ進む（サーバーは消した印を残す）。だから消す前のリビジョンを覚えた古い端末の書き込みは 409 `SAVE_CONFLICT`になる。
 - 書込み系 API なので`APP_ENV=local`の時だけ・トークンがある時だけ通る（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順: `APP_ENV`の守り → トークン → プレイヤーの利用制限（429 `RATE_LIMITED`。`PUT`と合わせて数え、断ったときは消さない）→ `gameId`の形 → トークンのゲームとの突き合わせ → `baseRevision`の形（400）→ ゲームの登録と機能の設定（404）→ 消す（409・404）。
 
+## GET /v1/inventory?gameId=demo-rpg
+
+トークンのプレイヤーの通貨と所持品の残高を読む。見出しは`Authorization: Bearer <token>`（`POST /v1/accounts/guest`が返したもの）。設計の正は`docs/guides/working/event-reward-design.md`。
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","currencies":[{"itemId":"gold","amount":100}],"items":[{"itemId":"potion","amount":3}]}
+```
+
+- `currencies`は種類が通貨の品目、`items`は種類が所持品の品目。どちらも品目の ID の昇順。残高の行が無い品目は載せない（何も受け取っていなければ両方とも空の配列）。
+- 品目の ID と種類（通貨か所持品か）はサーバーの表`inventory_items`（`migrations/0009_inventory.sql`。`demo-rpg`は`gold`〔通貨〕と`potion`〔所持品〕）にある。品目の名前・絵・効果・値段はマスターデータに置き、サーバーは解釈しない。
+- 残高は 0〜1,000,000,000（`MAX_ITEM_AMOUNT`）。クライアントが残高を増やす・減らす口は無い（増やすのはサーバーだけ）。
+- 自分（トークンのプレイヤー）の残高だけが出る。プレイヤーはトークンだけで決まり、問い合わせの`playerId`は読まない。
+- 読むのも`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順は`APP_ENV`の守り → トークン（401）→ プレイヤーの利用制限（429 `RATE_LIMITED`。受領の履歴と合わせて数える）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録と機能の設定（404 `NOT_FOUND`。所持品の機能`inventory`を使わない設定のゲームは`Feature not enabled for this game`）→ 読む。
+
+## GET /v1/inventory/history?gameId=demo-rpg&limit=20&before=42
+
+トークンのプレイヤーの受領の履歴（増減 1 回で 1 行）を新しい順に読む。見出しは`GET /v1/inventory`と同じ`Authorization: Bearer <token>`。
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","items":[{"entryId":41,"itemId":"gold","delta":100,"sourceType":"event-claim","sourceId":"<claimId>","createdAt":"2026-10-30T15:30:00Z"}],"nextBefore":41}
+```
+
+- 並びは`entryId`の降順（新しい順）。`limit`は 1〜100 の整数（無ければ 20）。`before`は 1 以上の整数で、付けるとその`entryId`より古い行だけを返す。外れは**400 `INVALID_ARGUMENT`**。
+- 続きがあれば`nextBefore`（最後の行の`entryId`）が載る。次はそれを`before`に付けて読む。続きが無ければ`nextBefore`の欄ごと載らない。
+- `delta`は増減の数（いまは付与だけで正の数）。`sourceType`・`sourceId`は増減の元（イベントの報酬の受け取りは`event-claim`と受け取りの`claimId`）。`createdAt`はサーバーが書いた時刻（ISO 8601・UTC・秒まで）。履歴は API から書き換えも消しもしない。
+- 確かめの順は`GET /v1/inventory`と同じで、利用制限の後の`gameId`の形と同じ所で`limit`・`before`の形を見る（400）。
+
 ## GET /v1/config?gameId=demo-rpg&clientVersion=…
 
 ゲームの設定（機能フラグ・クライアントの版・マスターデータのキーと大きさの一覧）を読む。クライアントは起動時に 1 回読む。設計の正は`docs/guides/working/config-design.md`。
@@ -203,7 +234,7 @@
 
 ## 利用制限
 
-ゲストの発行・スコアの投稿・セーブの操作は、決めた秒の窓（固定。窓の始まりは UNIX 秒を窓の長さで割り切った時刻）の中の回数を数え、上限を超えると断る。設計の正は`docs/guides/working/abuse-protection-design.md`。
+ゲストの発行・スコアの投稿・セーブの操作・所持品の読み取りは、決めた秒の窓（固定。窓の始まりは UNIX 秒を窓の長さで割り切った時刻）の中の回数を数え、上限を超えると断る。設計の正は`docs/guides/working/abuse-protection-design.md`。
 
 | 口 | 数える単位 | 上限 |
 | --- | --- | --- |
@@ -211,6 +242,7 @@
 | `POST /v1/accounts/guest` | ゲーム（本文の`gameId`） | 60 秒に 300 回 |
 | `POST /v1/rankings/{boardId}` | プレイヤー（トークンのゲームとプレイヤー） | 60 秒に 30 回 |
 | `PUT`・`GET`・`DELETE /v1/saves/{slotId}`と`GET /v1/saves` | プレイヤー（トークンのゲームとプレイヤー。4 つの操作を合わせて数え、スコアの投稿とは別に数える） | 60 秒に 60 回 |
+| `GET /v1/inventory`と`GET /v1/inventory/history` | プレイヤー（トークンのゲームとプレイヤー。報酬の操作として合わせて数え、セーブの操作とは別に数える） | 60 秒に 60 回 |
 
 レスポンス例（429。見出し`Retry-After: 37`）:
 
