@@ -85,7 +85,7 @@
 export type Route = {
   method: 'GET' | 'POST';
   pattern: RegExp;                       // url.pathname に当てる。^…$ で書く
-  handle(req: Request, env: Env, match: RegExpExecArray, url: URL): Promise<Response>;
+  handle(req: Request, env: Env, match: RegExpExecArray, url: URL, known: readonly string[]): Promise<Response>;  // known は M3 で足した
 };
 export type GameModule = {
   name: string;                          // 'announcements' | 'rankings'（M3 の機能の設定の名前と同じ）
@@ -115,7 +115,7 @@ INSERT OR IGNORE INTO games (game_id, display_name) VALUES ('demo-rpg', 'Demo RP
 
 ```sql
 CREATE TABLE IF NOT EXISTS game_modules (
-  game_id TEXT NOT NULL REFERENCES games(game_id),
+  game_id TEXT NOT NULL REFERENCES games(game_id) ON DELETE CASCADE,
   module TEXT NOT NULL,                        -- src/modules/index.ts の name
   PRIMARY KEY (game_id, module)
 );
@@ -124,6 +124,7 @@ INSERT OR IGNORE INTO game_modules (game_id, module) SELECT game_id, 'announceme
 INSERT OR IGNORE INTO game_modules (game_id, module) SELECT game_id, 'rankings' FROM games;
 ```
 
+- `ON DELETE CASCADE` は、ゲームの行を消したときに機能の設定の行が外部キーで残らないようにするため（M3 の実装で足した。試験の準備で `games` だけを消す M2 の試験がそのまま通る）。
 - `game_id` だけを持ち、`tenant_id` は持たない（ADR 0002。デプロイが 1 テナント）。一つのデプロイに複数のゲームを入れられる形にしておくのは、試験が `demo-rpg` と `other-rpg` の分離を確かめるため。
 - 行があれば「その機能を使う」。行が無ければ使わない（§6 の決めること 3）。後のアカウント・セーブ・設定配信は、`src/modules/index.ts` に名前を足し、使うゲームの行を新しいマイグレーションで足す。
 - 「公開状態」（`docs/guides/working/architecture.md` §4 の想定）の欄はいま作らない。要る場面（公開前のゲームを隠す）が出たら欄を足す。
@@ -143,11 +144,11 @@ export function enabledModules(rows: Array<{ module: string | null }>, known: re
 // D1 を 1 回引く。登録が無ければ null
 export async function loadGame(db: Database, gameId: string, known: readonly string[]): Promise<{ gameId: string; modules: Set<string> } | null>;
 // 断る応答か null。登録が無い → 404 NOT_FOUND 'Unknown game'。機能を使わない → 404 NOT_FOUND 'Feature not enabled for this game'
-export async function requireGame(env: Env, gameId: string, module: string): Promise<Response | null>;
+export async function requireGame(env: Env, gameId: string, module: string, known: readonly string[]): Promise<Response | null>;
 ```
 
 - SQL は `SELECT g.game_id, m.module FROM games g LEFT JOIN game_modules m ON m.game_id = g.game_id WHERE g.game_id = ?` を `prepare().bind()` で引く（M2 では `game_modules` が無いので `SELECT game_id FROM games WHERE game_id = ?` だけ。M3 で JOIN に変える）。
-- `known` は `src/modules/index.ts` の名前を入口から渡す（core が modules を読み込まない決まりを守る）。表にある知らない名前は捨てる。
+- `known` は `src/modules/index.ts` の名前。`src/core/router.ts` が渡された一覧の `name` から作り、`handle` の 5 番目の引数で各モジュールへ渡し、モジュールが `requireGame` に渡す（core が modules を読み込まず、モジュールも一覧を読み込まない）。表にある知らない名前は捨てる。
 - **呼ぶ所はモジュールの handle の中で、入力の形を確かめた後・DB を読み書きする前**（§6 の決めること 5）。検査の順は次のとおり。いまの順の後ろに 1 段足すだけなので、ほかの 400・403 の試験の結果は変わらない。
 
 | 操作 | 検査の順（太字が足す段） |
@@ -177,7 +178,7 @@ M3 の実装の Issue で、同じコミットで直す所:
 
 ## 4. 試験の名前の表
 
-L2 の試験の作り方（`src/worker.ts` の `default` を直に呼ぶ・書き込みだけ `APP_ENV: 'local'`・偽の DB・試験ごとにデータを消す）は `docs/guides/working/failure-case-test-plan.md` §2 と同じ。ゲームの登録は試験の手伝い `test/support/games.ts` の `registerGame(db, gameId, modules = ['announcements', 'rankings'])` で入れ、`registerGame` は `INSERT OR IGNORE` で入れる（`beforeEach` で何度呼んでも主キーで落ちない）。新しい試験のファイルは `beforeEach` で `demo-rpg` 以外の `game_modules`・`games` の行を**この順で**消す（`game_modules` が `games` を外部キーで指すので、先に `games` を消すと D1 が断る。`demo-rpg` はマイグレーションのまま残す）。
+L2 の試験の作り方（`src/worker.ts` の `default` を直に呼ぶ・書き込みだけ `APP_ENV: 'local'`・偽の DB・試験ごとにデータを消す）は `docs/guides/working/failure-case-test-plan.md` §2 と同じ。ゲームの登録は試験の手伝い `test/support/games.ts` の `registerGame(db, gameId, modules = ['announcements', 'rankings'])` で入れ、`registerGame` は `INSERT OR IGNORE` で入れる（`beforeEach` で何度呼んでも主キーで落ちない）。試験のファイルは `beforeEach` で `demo-rpg` 以外のゲームの行を消す（`demo-rpg` はマイグレーションのまま残す）。`game_modules` の外部キーは `ON DELETE CASCADE` なので、`games` の行を消せば機能の設定の行も消える（M2 の `test/games.test.ts` は `games` だけを消す）。`test/game-modules.test.ts` のように `game_modules` を先に消してもよい。
 
 | 束 | テストの名前 | 確かめること | 層 |
 | --- | --- | --- | --- |
