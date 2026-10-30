@@ -137,6 +137,7 @@ CREATE TABLE IF NOT EXISTS game_players (
 
 - `docs/api-contract.md` に `## POST /v1/accounts/guest` の節を足す（上の要求・応答・`APP_ENV=local` のときだけ通ること）。
 - `openapi/rpg-online.v1.json` に操作 `issueGuest`（`POST /v1/accounts/guest`）・`GuestRequest`・`GuestIssued` を足す。応答は 200・400（`INVALID_ARGUMENT`・`INVALID_JSON`）・403（`NOT_READY_FOR_PRODUCTION`）・404（`NOT_FOUND`）・500（`INTERNAL_ERROR`）。エラーコードは足さない。
+- `docs/guides/working/api-schema-design.md` §4 の S1 の表と確認コマンドの案の `スキーマのファイルはOpenAPI 3.1で4つの操作を持つ` を、§6 の `スキーマのファイルはOpenAPI 3.1で5つの操作を持つ` に置き換える（試験の名前の正の文書を、試験と同じ束で直す）。
 - `docs/guides/working/architecture.md` の「4. データ境界」に `accounts`・`game_players` を足す（作っている表の一覧を置き換える）。
 
 ## 4. トークンの形と確かめ方（A1）
@@ -215,6 +216,7 @@ CREATE TABLE IF NOT EXISTS game_players (
 
 - `docs/api-contract.md`: `POST /v1/rankings/{boardId}` の節に `Authorization: Bearer <token>` が要ること・本文の `playerId` がトークンと違えば 403 を書き、「`npm run dev` で…`APP_ENV=local` を与えた時のみ書込み可能」の行を「`APP_ENV=local` の時だけ・トークンがある時だけ」に置き換える。「現PoCの代表コード」の一覧を 8 つに置き換える。末尾の「※ HTTP認証方式と詳細スキーマはPhase 1で確定させる。」をこの設計書を指す 1 行に置き換える。
 - `openapi/rpg-online.v1.json`: `ErrorCode` の列挙に 3 つを足す。`components.securitySchemes` に `bearerToken`（`type: http`・`scheme: bearer`）を足し、`submitScore` に `security` を付ける。`submitScore` に 401（`x-error-codes`: `UNAUTHENTICATED`・`TOKEN_EXPIRED`）を足し、403 の `x-error-codes` に `PERMISSION_DENIED` を足す。
+- `docs/guides/working/api-schema-design.md` §4 の S1 の表と確認コマンドの案の `スキーマのErrorCodeの列挙は5つのエラーコードと一致する` を、§6 の `スキーマのErrorCodeの列挙は8つのエラーコードと一致する` に置き換える。
 - `docs/guides/working/failure-case-test-plan.md`: §3 の `他のプレイヤーになりすました書き込みを弾く`・`トークンが無い書き込みは401を返す`・`期限切れのトークンは401を返す` の期待する結果の「コード（名）は認証の設計で決める」を、上のコードに置き換える。§4 の K3 の確認コマンドの案を、この設計書の A2 と範囲の外の 2 本（§6）に分けた形に置き換える。名前は変えない。
 
 ### CLI モック（`scripts/cli-mock.mjs`）の変え方（A2）
@@ -227,14 +229,14 @@ API を変えたら CLI モックも合わせる決まり（CLAUDE.md）なの�
 
 ## 6. 試験の名前の表
 
-置き場は束ごとに 1 ファイル（A1 は `test/accounts.test.ts`、A2 は `test/auth.test.ts`）。ただし §7 で置き換える試験の後を継ぐ 2 本（`スキーマのファイルはOpenAPI 3.1で5つの操作を持つ`・`スキーマのErrorCodeの列挙は8つのエラーコードと一致する`）は、置き換える試験と同じ `test/schema-conformance.test.ts` に置く。試験の手伝いは `test/support/auth.ts`（A2）。テストの名前は表の文そのまま `it('…')` に書く。名前を変えるときは、この表も同じコミットで直す（`docs/guides/procedures/node-test-procedure.md`）。
+置き場は束ごとに 1 ファイル（A1 は `test/accounts.test.ts`、A2 は `test/auth.test.ts`）。ただし §7 で置き換える試験の後を継ぐ 2 本（`スキーマのファイルはOpenAPI 3.1で5つの操作を持つ`・`スキーマのErrorCodeの列挙は8つのエラーコードと一致する`）と、スキーマに合うかを見る 2 本（`ゲストの発行の応答はスキーマに合う`・`認証のエラーの応答はスキーマに合う`）は、手伝いの `expectConforms` がある `test/schema-conformance.test.ts` に置く。試験の手伝いは `test/support/auth.ts`（A2）。テストの名前は表の文そのまま `it('…')` に書く。名前を変えるときは、この表も同じコミットで直す（`docs/guides/procedures/node-test-procedure.md`）。
 
 | 束 | テストの名前 | 入力 | 期待する結果 | 層 |
 | --- | --- | --- | --- | --- |
 | A1 | `トークンを作って確かめると同じゲームとプレイヤーと期限が戻る` | `signToken({gameId:'demo-rpg',playerId:'p1',exp:now+60}, key)` を `verifyToken(…, key, now)` | `ok: true`・`claims` が同じ 3 つ。トークンが `v1.` で始まり 3 つに分かれる | L1 |
 | A1 | `トークンの本文か署名を1文字でも変えると署名の誤りとして弾く` | 本文の 1 文字・署名の 1 文字を変えたもの・別の鍵で作ったもの | どれも `bad_signature` | L1 |
 | A1 | `期限の時刻を過ぎたトークンは期限切れとして弾く` | `exp = now` と `exp = now - 1` と `exp = now + 1` | 前の 2 つは `expired`・最後は `ok: true` | L1 |
-| A1 | `形の崩れたトークンは形の誤りとして弾く` | 空文字・`.` が 1 つ・`v2.` で始まる・正しい署名で本文が JSON でない・`g` が `idPattern` に合わない | どれも `malformed`（署名の正しくないものは `bad_signature` が先） | L1 |
+| A1 | `形の崩れたトークンは形の誤りとして弾く` | 空文字・`.` が 1 つ・`v2.` で始まる・正しい署名で本文が JSON でない・`g` が `idPattern` に合わない | どれも `malformed`（署名の正しくないものは `bad_signature` が先）。「正しい署名で本文が崩れた」ものは `signToken` で作れないので、試験の中で Web Crypto の HMAC で直に署名して作る | L1 |
 | A1 | `Authorizationの値からBearerのトークンだけを取り出す` | `Bearer abc`・`bearer  abc`・`Basic abc`・`Bearer`・`abc`・`null` | `abc`・`abc`・`null`・`null`・`null`・`null` | L1 |
 | A1 | `鍵はAUTH_TOKEN_SECRETを使いローカルでだけ既定の鍵に戻る` | §4 の `tokenSecret` の表の 4 行 | 表のとおり（`local` でない環境で既定の鍵を返さない） | L1 |
 | A1 | `ゲストの発行はアカウントとゲーム別のプレイヤーを1つずつ作りトークンを返す` | `APP_ENV=local`・`{"gameId":"demo-rpg"}` で POST | 200・`playerId` が `idPattern` に合う・`token` が `verifyToken` を通り `p` が `playerId`・`expiresAt` が `exp`。`accounts`・`game_players` が 1 行ずつ増え、`game_players` の `account_id` が `accounts` の行を指す | L2 |
@@ -243,7 +245,7 @@ API を変えたら CLI モックも合わせる決まり（CLAUDE.md）なの�
 | A1 | `登録の無いゲームへのゲストの発行はNOT_FOUNDの404を返し何も作らない` | `{"gameId":"no-such-game"}` | 404・`NOT_FOUND`・`accounts`・`game_players` の行が増えない | L2 |
 | A1 | `本番の設定ではゲストの発行もNOT_READY_FOR_PRODUCTIONの403を返す` | `APP_ENV` が `local` でない env で POST | 403・`NOT_READY_FOR_PRODUCTION`・行が増えない | L2 |
 | A1 | `ゲストの発行の本文が正しくなければ400を返す` | 途中で切れた JSON・配列・`gameId` 無し・`gameId=demo.rpg` | 1 つ目は `INVALID_JSON`、ほかは `INVALID_ARGUMENT`・行が増えない | L2 |
-| A1 | `ゲストの発行の応答はスキーマに合う` | 200・400・403・404 を起こす | 本文が `issueGuest` の応答のスキーマに合い、`x-error-codes` にコードがある（`test/support/schema-check.ts` を使う） | L2 |
+| A1 | `ゲストの発行の応答はスキーマに合う` | 200・400・403・404 を起こす | 本文が `issueGuest` の応答のスキーマに合い、`x-error-codes` にコードがある（`test/schema-conformance.test.ts` の `expectConforms` を使う） | L2 |
 | A1 | `スキーマのファイルはOpenAPI 3.1で5つの操作を持つ` | `openapi/rpg-online.v1.json` | 操作が `getHealth`・`getRanking`・`issueGuest`・`listAnnouncements`・`submitScore`・`$ref` が全部解ける（§7 で置き換える試験の後を継ぐ） | L1 |
 | A2 | `トークンのゲームが違うスコアの投稿はPERMISSION_DENIEDの403を返す` | `other-rpg` を登録し、`other-rpg` のトークンで本文の `gameId` が `demo-rpg` の POST | 403・`PERMISSION_DENIED`・行が増えない | L2 |
 | A2 | `認証の失敗は本文を読む前に返す` | トークン無しで本文 `{"gameId":`（切れた JSON） | 401・`UNAUTHENTICATED`（400 `INVALID_JSON` でない） | L2 |
@@ -274,7 +276,7 @@ API を変えたら CLI モックも合わせる決まり（CLAUDE.md）なの�
 | 既存の試験（`test/`） | 束 | 何が変わるか | 直し方 |
 | --- | --- | --- | --- |
 | `スキーマのファイルはOpenAPI 3.1で4つの操作を持つ` | A1 | 操作が 5 つになり、名前の「4つ」が嘘になる | 消して、§6 の `スキーマのファイルはOpenAPI 3.1で5つの操作を持つ` に置き換える（見る範囲は増える） |
-| `test/failure-input.test.ts`・`test/failure-server.test.ts`・`test/games.test.ts`・`test/game-modules.test.ts`・`test/schema-conformance.test.ts` の POST の試験（`post`・`postRaw` の手伝いと、`スコアが10億を超えると400を返す` の直書きの 1 か所） | A2 | トークンが無いと 401 で落ちる | **開始状態（要求の見出し）だけ**を直す: 手伝いが `test/support/auth.ts` の `bearer(gameId, playerId)` で本文の `gameId`・`playerId` のトークンを `Authorization` に付ける（本文がオブジェクトでない・欄が無いときは `demo-rpg`・`p1`）。本文・env・期待する結果は 1 文字も変えない。`本番の設定では…403を返す` の試験も見出しが付くだけで、期待は 403 のまま |
+| `test/failure-input.test.ts`・`test/failure-server.test.ts`・`test/games.test.ts`・`test/game-modules.test.ts`・`test/schema-conformance.test.ts` の POST の試験（`post`・`postRaw` の手伝いと、`スコアが10億を超えると400を返す` の直書きの 1 か所） | A2 | トークンが無いと 401 で落ちる | **開始状態（要求の見出し）だけ**を直す: 手伝いが `test/support/auth.ts` の `bearer(gameId, playerId)` で本文の `gameId`・`playerId` のトークンを `Authorization` に付ける（本文がオブジェクトでない・`gameId` か `playerId` が `validId` に合わないときは `demo-rpg`・`p1`。形の正しくない ID でトークンを作ると §4 の確かめの 3 で `malformed` の 401 になり、`SQLを混ぜたgameIdはINVALID_ARGUMENTの400を返す`・`形の正しくないgameIdはゲームの登録を引く前にINVALID_ARGUMENTの400を返す` の 400 に届かないため。代わりの値のトークンでも、本文の検証（§5 の順の 5）がなりすましの確かめ（6）より先なので 400 のまま）。本文・env・期待する結果は 1 文字も変えない。`本番の設定では…403を返す` の試験も見出しが付くだけで、期待は 403 のまま |
 | `今のCLIモックと同じ形の要求を受け付ける` | A2 | いまの CLI モックの要求（トークン無し）は 401 になる | **名前を変えず、中身を A2 の CLI モックに合わせる**: `scripts/cli-requests.mjs` の `guestRequest()` でゲストを発行し、`scoreSubmission(発行された playerId)` を `authHeaders(発行された token)` で POST、GET で載ることを見る。期待する結果（200・`ok: true`・GET の行がその本文と同じ）は変えない。CLI モックと試験が同じ関数を読むので、これからも「API を変えたら CLI モックも直す合図」のまま |
 | `スキーマのErrorCodeの列挙は5つのエラーコードと一致する` | A2 | コードが 8 つになり、名前の「5つ」が嘘になる | 消して、§6 の `スキーマのErrorCodeの列挙は8つのエラーコードと一致する` に置き換える |
 | `エラーの応答はスキーマに書いた状態とエラーコードの組で返る` | A2 | 試験の中の `errorCodes`（いまの 5 つ）と、起こしたコードの集合が一致するかを見ているので、8 つにすると足りなくなる | `errorCodes` に 3 つを足し、`submitScore` の 3 つのコードを起こす行を足す。いまの行と期待は変えない（見る範囲は増える） |
@@ -283,7 +285,7 @@ API を変えたら CLI モックも合わせる決まり（CLAUDE.md）なの�
 
 手続き（`docs/guides/decisions/test-plan.md` §11 は「テストを緑に合わせて弱めない・消さない。期待値を実装に合わせて書き換えない（直すのは実装か、設計を直してからテスト）」。上の置き換えは緑に合わせるためでなく**設計（契約）を先に変えたため**で、§11 の「設計を直してからテスト」の道を通る。互換の試験を黙って弱めないため、名前を残し、期待する結果を変えない）:
 
-1. 先に設計を直す: 束の実装の Issue の最初のコミットで、§3（A1）・§5（A2）の「契約の変わる所」を `docs/api-contract.md`・`openapi/rpg-online.v1.json`・`docs/guides/working/failure-case-test-plan.md` に写す（旧文を置き換える。CLAUDE.md 原則 5）。
+1. 先に設計を直す: 束の実装の Issue の最初のコミットで、§3（A1）・§5（A2）の「契約の変わる所」を `docs/api-contract.md`・`openapi/rpg-online.v1.json`・`docs/guides/working/api-schema-design.md`・`docs/guides/working/failure-case-test-plan.md` に写す（旧文を置き換える。CLAUDE.md 原則 5）。
 2. 同じ束の中で試験を置き換える。消す 2 本（A1 で 1 本・A2 で 1 本）は、名前の数を直した、より広く見る試験に置き換わるので、確かめる範囲は減らない。
 3. 確認コマンドで、消した名前が `test/` に残っていないこと・置き換えの名前が通ることを見る（§9）。
 4. ほかの試験が落ちたら、期待する結果を直さず `docs/guides/decisions/test-plan.md` §8 の欠陥レポートの形で報告し、設計か実装かを振り分ける（design-cycle §5）。
