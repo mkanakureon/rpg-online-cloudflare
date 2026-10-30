@@ -210,7 +210,7 @@ done();
 
 ## 元の文書
 .claude/skills/design-cycle/SKILL.md（設計書の形）
-docs/03-roadmap.md の「優先的にテストする失敗ケース」
+docs/guides/decisions/roadmap.md の「優先的にテストする失敗ケース」
 
 ## 合格の条件
 - 設計書が docs/guides/working/score-validation-design.md にある

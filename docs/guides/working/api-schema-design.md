@@ -1,6 +1,6 @@
 # API スキーマを機械検証可能にする（設計書）
 
-`docs/03-roadmap.md` Phase 1 の「APIスキーマをOpenAPI等で機械検証可能にする」の設計書。
+`docs/guides/decisions/roadmap.md` Phase 1 の「APIスキーマをOpenAPI等で機械検証可能にする」の設計書。
 いまの 4 つのエンドポイントとエラーの形を、機械で読めるスキーマのファイルにする方式・置き場・確かめ方（試験の名前）・実装の束を決める。**この設計書では実装しない**（スキーマのファイル・テスト・`src/` は次の Issue）。
 用語・テストレベル（L1／L2／L3）・合格基準は `docs/guides/decisions/test-plan.md` が正で、ここには写さない。いまの契約の正は `docs/api-contract.md`、いまの挙動の正は `src/worker.ts`。
 
@@ -43,7 +43,7 @@
 | どのエンドポイントでも | — | — | 例外は 500 `INTERNAL_ERROR` `Internal server error`（中身を返さない） |
 
 - 応答はどれも `content-type: application/json; charset=utf-8`・`cache-control: no-store`。
-- エラーはどれも `{"error":{"code","message"}}`（`docs/02-architecture.md` の「3. APIの基本契約」・`docs/api-contract.md` の「エラーレスポンス」）。
+- エラーはどれも `{"error":{"code","message"}}`（`docs/guides/working/architecture.md` の「3. APIの基本契約」・`docs/api-contract.md` の「エラーレスポンス」）。
 - `docs/api-contract.md` の例は `boss-score` の具体的なパスで書かれている（`/v1/rankings/boss-score`）。スキーマではパスの引数 `{boardId}` にする。
 - `docs/api-contract.md` に無い挙動: `items` の最大 50 件（お知らせ）、エラーの `message` の文、ヘッダー。スキーマにどこまで書くかは §5。
 - 外へ出したふつうの関数・ルートの表は `src/worker.ts` に無い（ルートは `route` の中の `if` の並び）。スキーマとルートの一致は、HTTP で外から確かめる（§4 の S2）。
@@ -70,7 +70,7 @@
 | 形（`components.schemas`） | 中身 |
 | --- | --- |
 | `AnnouncementList`・`RankingList`・`ScoreAccepted` | `gameId`・`boardId`・`playerId` は `Id`。欄は全部必須 |
-| `Id` | `type: string`・`pattern: "^[a-zA-Z0-9_-]{1,64}$"`（`gameId`・`playerId`・`boardId` で共通。`docs/02-architecture.md` の「識別」） |
+| `Id` | `type: string`・`pattern: "^[a-zA-Z0-9_-]{1,64}$"`（`gameId`・`playerId`・`boardId` で共通。`docs/guides/working/architecture.md` の「識別」） |
 | `Announcement` | `id`・`title`・`body`（どれも `string`・必須） |
 | `RankingEntry` | `playerId`（`Id`）・`displayName`（`string`・1〜40）・`score`（`integer`・0〜1000000000） |
 | `ScoreSubmission` | `gameId`・`playerId`（`Id`）・`displayName`（`string`・1〜40）・`score`（`integer`・0〜1000000000）。全部必須。`additionalProperties: true`（知らない欄は無視する決まり） |
@@ -134,7 +134,7 @@
 | 2 | 検証の道具 | A: **パッケージを足さず、自前の小さな検証関数**（§2。使う語だけ）。B: `ajv`（JSON Schema の検証）を devDependencies に足す。C: B に加えて `@redocly/cli` などで OpenAPI のファイル自体を lint する | **A**（S1・S2 はこれで作る。`package.json` を変えない）。自前の関数の誤りが心配になったら B・C を S3 として足す（足すかどうかはユーザーが決める） |
 | 3 | 契約の正をどちらにするか | A: **形の正はスキーマ・挙動の説明の正は `docs/api-contract.md`。例が合うことを試験で確かめる**（S2）。B: `docs/api-contract.md` を正のままにし、スキーマはその写し。C: スキーマを正にし、`docs/api-contract.md` の例をスキーマから作る（作る道具が要る） | **A**。CLAUDE.md 原則 5（一つの契約は一か所）のとおり、形と説明で正を分け、重なる例は機械で食い違いを見つける。S1 の実装の Issue で `docs/api-contract.md` に「形の正はスキーマ」の 1 行を足す |
 | 4 | 応答の知らない欄 | A: **応答のスキーマは `additionalProperties: false`**（サーバーが欄を足したらスキーマも足す合図。S1 が落ちる）。B: `true`（足しても落ちない） | **A**。互換の決まり「欄は足すだけ」はクライアント側の受け方の決まりで、スキーマを最新に保つのはサーバー側の仕事。要求（`ScoreSubmission`）は知らない欄を無視する決まりなので `true` |
-| 5 | エラーの `message` の文 | A: **`string` だけ。文は決めない**。B: 操作ごとに `enum` で決める | **A**。クライアントは `code` で分ける（`docs/02-architecture.md` の「エラー」）。文は人が読むためで、変えても互換を壊さない |
+| 5 | エラーの `message` の文 | A: **`string` だけ。文は決めない**。B: 操作ごとに `enum` で決める | **A**。クライアントは `code` で分ける（`docs/guides/working/architecture.md` の「エラー」）。文は人が読むためで、変えても互換を壊さない |
 | 6 | スキーマのファイルの置き場 | A: **リポジトリ直下の `openapi/`**。B: `docs/` の下。C: `src/` の下 | **A**。`docs/` の置き場の決まり（CLAUDE.md）は文書のためで、機械が読むファイルを混ぜない。`src/` は Worker のコードだけにする（`src/` に置くと Worker に入る） |
 
 ## 6. 実装の束
@@ -208,7 +208,7 @@ done();
 
 ## 7. UE の C++ クライアントでの使い方
 
-Phase 3 の C++ の HTTP/JSON クライアント層（`docs/03-roadmap.md`）は、このスキーマから要求・応答の構造体と JSON の読み書きを作れる（OpenAPI Generator の `cpp-ue4` の生成など。生成の道具を足すかは Phase 3 で決める）。生成しない場合でも、エラーの `ErrorCode` の列挙と各操作の状態コードの組（§3）を C++ の `enum` と分岐の手本にでき、サーバーが欄を足しても `additionalProperties` を無視して読む（互換の決まり）ことをクライアントの試験で確かめられる。CLI モック（`scripts/cli-mock.mjs`）は UE のクライアントの代わりなので、S2 の `CLIモックの要求の本文はスキーマの入力に合う` が UE 側の形の先回りの確かめになる。
+Phase 3 の C++ の HTTP/JSON クライアント層（`docs/guides/decisions/roadmap.md`）は、このスキーマから要求・応答の構造体と JSON の読み書きを作れる（OpenAPI Generator の `cpp-ue4` の生成など。生成の道具を足すかは Phase 3 で決める）。生成しない場合でも、エラーの `ErrorCode` の列挙と各操作の状態コードの組（§3）を C++ の `enum` と分岐の手本にでき、サーバーが欄を足しても `additionalProperties` を無視して読む（互換の決まり）ことをクライアントの試験で確かめられる。CLI モック（`scripts/cli-mock.mjs`）は UE のクライアントの代わりなので、S2 の `CLIモックの要求の本文はスキーマの入力に合う` が UE 側の形の先回りの確かめになる。
 
 ## 8. 指示の表
 

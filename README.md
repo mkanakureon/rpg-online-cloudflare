@@ -8,10 +8,10 @@ UE製RPG制作ツールに追加するオンライン機能の検討・試作リ
 
 ## 設計資料
 
-- [機能検討書](docs/01-feature-study.md)：優先機能・利用場面・取捨選択
-- [技術設計](docs/02-architecture.md)：API・Cloudflareサービス・データ境界・UE接続
-- [開発計画](docs/03-roadmap.md)：Mac先行／CLIモックの段階的検証
-- [運用とセキュリティ](docs/04-operations-security.md)：公開前に必須の対策
+- [機能検討書](docs/guides/decisions/feature-study.md)：優先機能・利用場面・取捨選択
+- [技術設計](docs/guides/working/architecture.md)：API・Cloudflareサービス・データ境界・UE接続
+- [開発計画](docs/guides/decisions/roadmap.md)：Mac先行／CLIモックの段階的検証
+- [運用とセキュリティ](docs/guides/decisions/operations-security.md)：公開前に必須の対策
 - [ADR 0001](docs/adr/0001-mac-first-cli.md)：3台構成とCLI先行の意思決定
 - [API仕様（案）](docs/api-contract.md)：HTTP/JSONの契約
 
@@ -73,7 +73,7 @@ npm run dev
 
 ## 将来の接続
 
-UE側にオンラインイベントコマンド（`online.ranking.get` など）を追加し、C++のHTTPクライアントがこのAPIを呼び出す。APIの型・レスポンス形式は初期に確定し、CLIモックをUEクライアントの代替として使う。詳細は[技術設計](docs/02-architecture.md)。
+UE側にオンラインイベントコマンド（`online.ranking.get` など）を追加し、C++のHTTPクライアントがこのAPIを呼び出す。APIの型・レスポンス形式は初期に確定し、CLIモックをUEクライアントの代替として使う。詳細は[技術設計](docs/guides/working/architecture.md)。
 
 ## 公式ドキュメント
 
