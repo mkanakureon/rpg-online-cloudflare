@@ -36,3 +36,7 @@ export declare function saveWrite(data: string, checksum: string, baseRevision?:
 export declare const CLI_CLIENT_VERSION: string;
 
 export declare function configPath(gameId?: string, clientVersion?: string): string;
+
+export declare function masterDataPath(key: string, gameId?: string): string;
+
+export declare function utf8Bytes(text: string): number;

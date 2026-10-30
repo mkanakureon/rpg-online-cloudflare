@@ -7,6 +7,8 @@
 // 一覧に出たスロットを消す（テスト「CLIモックと同じ流れでセーブの一覧に出たスロットを消せる」）。
 // 設定はトークンの要らない読み取りで、ゲストの発行より前に読み、ETag を If-None-Match に付けて 304 を受け取る
 // （CLI_CLIENT_VERSION・configPath。テスト「CLIモックと同じ流れで設定を読み変わっていなければ304を受け取る」）。
+// 設定の masterData に載った最初のキーのマスターデータを読み、data のバイト数が一覧の size と同じことを見る
+// （masterDataPath・utf8Bytes。テスト「CLIモックと同じ流れで設定に載ったマスターデータを読める」）。
 // Node.js と Workers のランタイムの両方で読めるよう、Node.js の API を使わない（チェックサムは crypto.subtle）。型は cli-requests.d.mts。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
@@ -54,4 +56,14 @@ export const CLI_CLIENT_VERSION = '1.0.0';
 /** 設定を読むパス（GET /v1/config）。 */
 export function configPath(gameId = 'demo-rpg', clientVersion = CLI_CLIENT_VERSION) {
   return `/v1/config?gameId=${encodeURIComponent(gameId)}&clientVersion=${encodeURIComponent(clientVersion)}`;
+}
+
+/** マスターデータを 1 キー読むパス（GET /v1/config/master/{key}。key は設定の masterData に載ったもの）。 */
+export function masterDataPath(key, gameId = 'demo-rpg') {
+  return `/v1/config/master/${encodeURIComponent(key)}?gameId=${encodeURIComponent(gameId)}`;
+}
+
+/** text の UTF-8 のバイト数（マスターデータの data を設定の masterData の size と比べる）。 */
+export function utf8Bytes(text) {
+  return new TextEncoder().encode(text).length;
 }

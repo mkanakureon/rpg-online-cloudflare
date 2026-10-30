@@ -1,7 +1,7 @@
 /**
  * API スキーマの試験 S1: スキーマのファイル（openapi/rpg-online.v1.json）の形と、実際の応答がスキーマに合うこと。
  * 名前と確かめることの正は docs/guides/working/api-schema-design.md §4（`セーブの読み書きの応答はスキーマに合う`・`セーブの一覧と削除の応答はスキーマに合う` とエラーコードの数の試験は docs/guides/working/save-design.md §7、
- * `設定の応答はスキーマに合う` と操作の数の試験は設定配信の C1 で置き換えたもので docs/guides/working/config-design.md §7）。挙動（状態コード・データ）は
+ * `設定の応答はスキーマに合う`・`マスターデータの応答はスキーマに合う` と操作の数の試験は設定配信の C1・C2 で足し・置き換えたもので docs/guides/working/config-design.md §7）。挙動（状態コード・データ）は
  * test/failure-*.test.ts が見る。ここはスキーマの側から見る。
  * L2 の試験は src/worker.ts の default.fetch を直に呼ぶ（docs/guides/working/failure-case-test-plan.md §2）。
  *
@@ -15,6 +15,7 @@ import { sha256Hex } from '../src/modules/saves/checksum';
 import { MAX_SAVE_BYTES, MAX_SLOTS } from '../src/modules/saves/limits';
 import specJson from '../openapi/rpg-online.v1.json';
 import { resolveRef, validate, type Schema, type SchemaRoot } from './support/schema-check';
+import { registerGame } from './support/games';
 
 type TestEnv = { DB: D1Database; APP_ENV: string };
 const baseEnv = env as unknown as TestEnv;
@@ -161,10 +162,11 @@ beforeEach(async () => {
 });
 
 describe('S1: スキーマのファイル', () => {
-  it('スキーマのファイルはOpenAPI 3.1で10個の操作を持つ', () => {
+  it('スキーマのファイルはOpenAPI 3.1で11個の操作を持つ', () => {
     expect(spec.openapi).toMatch(/^3\.1\.\d+$/);
     expect(operations().map((o) => o.operationId).sort())
-      .toEqual(['deleteSave', 'getConfig', 'getHealth', 'getRanking', 'getSave', 'issueGuest', 'listAnnouncements', 'listSaves', 'putSave', 'submitScore']);
+      .toEqual(['deleteSave', 'getConfig', 'getHealth', 'getMasterData', 'getRanking', 'getSave', 'issueGuest', 'listAnnouncements', 'listSaves',
+        'putSave', 'submitScore']);
     const refs = collectRefs(spec);
     expect(refs.length).toBeGreaterThan(0);
     for (const ref of refs) expect(() => resolveRef(ref, spec), ref).not.toThrow();
@@ -427,5 +429,61 @@ describe('S1: 応答がスキーマに合う', () => {
       if (value !== null) expect(validate(value, h.schema, spec), `304 の見出し ${name}`).toEqual([]);
     }
     expect(notModified.headers.get('etag')).toBe(etag);
+  });
+
+  it('マスターデータの応答はスキーマに合う', async () => {
+    // 専用のゲームにマスターデータを入れる（demo-rpg の設定の応答は変えない）。終わったらゲームの行ごと消す
+    await registerGame(baseEnv.DB, 'schema-master', ['config']);
+    await baseEnv.DB.prepare('INSERT OR REPLACE INTO config_master_data (game_id, key, data) VALUES (?, ?, ?)')
+      .bind('schema-master', 'items', '{"potion":{"price":50}}').run();
+    try {
+      const config = await get('/v1/config?gameId=schema-master&clientVersion=1.0.0');
+      expect(config.status).toBe(200);
+      const { body: configBody } = await expectConforms(config, 'getConfig');
+      expect((configBody as { masterData?: unknown }).masterData).toEqual([{ key: 'items', size: 23 }]);
+
+      const ok = await get('/v1/config/master/items?gameId=schema-master');
+      expect(ok.status).toBe(200);
+      const { spec: r200 } = await expectConforms(ok, 'getMasterData');
+      expect(r200.headers?.ETag?.required, '200 のスキーマに ETag の見出しがある').toBe(true);
+      const etag = ok.headers.get('etag');
+      expect(etag).not.toBeNull();
+
+      const cases: Array<[number, string, () => Promise<Response>]> = [
+        [400, 'INVALID_ARGUMENT', () => get('/v1/config/master/items?gameId=demo.rpg')],
+        [404, 'NOT_FOUND', () => get('/v1/config/master/no-such-key?gameId=schema-master')],
+        [404, 'NOT_FOUND', () => get('/v1/config/master/items?gameId=no-such-game')],
+        [500, 'INTERNAL_ERROR', () => get('/v1/config/master/items?gameId=schema-master', { ...baseEnv, DB: brokenDB })],
+      ];
+      for (const [status, code, send] of cases) {
+        const res = await send();
+        expect(res.status, code).toBe(status);
+        const { spec: r, body } = await expectConforms(res, 'getMasterData');
+        const actual = (body as { error: { code: string } }).error.code;
+        expect(actual).toBe(code);
+        expect(r['x-error-codes'], `getMasterData の ${status} の x-error-codes`).toContain(actual);
+      }
+
+      // 304 は本文が無いので expectConforms に通さず、ここで直に見る
+      const notModified = await worker.fetch(new Request(`${base}/v1/config/master/items?gameId=schema-master`, {
+        headers: { 'if-none-match': etag! },
+      }), baseEnv as never);
+      expect(notModified.status).toBe(304);
+      expect(await notModified.text()).toBe('');
+      const r304 = operation('getMasterData').responses['304'];
+      expect(r304, 'スキーマに getMasterData の 304 がある').toBeDefined();
+      expect(r304.content, '304 は本文を持たない').toBeUndefined();
+      for (const [name, h] of Object.entries(r304.headers ?? {})) {
+        const value = notModified.headers.get(name);
+        if (h.required) expect(value, `304 の見出し ${name} がある`).not.toBeNull();
+        if (value !== null) expect(validate(value, h.schema, spec), `304 の見出し ${name}`).toEqual([]);
+      }
+      expect(notModified.headers.get('etag')).toBe(etag);
+    } finally {
+      await baseEnv.DB.batch([
+        baseEnv.DB.prepare("DELETE FROM game_modules WHERE game_id = 'schema-master'"),
+        baseEnv.DB.prepare("DELETE FROM games WHERE game_id = 'schema-master'"),
+      ]);
+    }
   });
 });

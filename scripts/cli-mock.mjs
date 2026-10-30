@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-/** Mac-side CLI replacement for a future UE HTTP client. Local testing only. */
+/** CLI モック（将来の UE・Unity・ブラウザの HTTP クライアントの代わり。ローカル専用）: 設定とマスターデータ → スコア → セーブの流れを通す。 */
 import {
-  SMOKE_BOARD_ID, SMOKE_SLOT_ID, authHeaders, configPath, guestRequest, saveData, saveWrite, scoreSubmission, sha256Hex
+  SMOKE_BOARD_ID, SMOKE_SLOT_ID, authHeaders, configPath, guestRequest, masterDataPath, saveData, saveWrite, scoreSubmission, sha256Hex,
+  utf8Bytes
 } from './cli-requests.mjs';
 
 const base = process.env.API_BASE_URL || 'http://127.0.0.1:8787';
@@ -34,6 +35,19 @@ try {
   const again = await fetch(`${base}${configUrl}`, { headers: { 'If-None-Match': etag } });
   console.log(`GET ${configUrl}:`, again.status, '(If-None-Match)');
   if (again.status !== 304) throw new Error('Unchanged config was sent again (expected 304)');
+  // 設定の masterData に載った最初のキーを読み、data のバイト数が一覧の size と同じことを見る。
+  // data は大きくなりうるので画面に出さず size だけ出す（docs/guides/working/config-design.md §6 の C2）
+  const [firstMaster] = settings.masterData ?? [];
+  if (firstMaster) {
+    const masterUrl = masterDataPath(firstMaster.key);
+    const masterRes = await fetch(`${base}${masterUrl}`);
+    const master = await masterRes.json();
+    const size = typeof master.data === 'string' ? utf8Bytes(master.data) : null;
+    console.log(`GET ${masterUrl}:`, masterRes.status, JSON.stringify({ key: master.key, size }));
+    if (masterRes.status !== 200 || size !== firstMaster.size) throw new Error('Master data does not match the size in the config');
+  } else {
+    console.log('masterData: none (this game has no master data; skipped)');
+  }
   await call('/v1/announcements?gameId=demo-rpg');
 
   const guest = await call('/v1/accounts/guest', {

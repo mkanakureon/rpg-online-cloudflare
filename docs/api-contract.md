@@ -160,7 +160,7 @@
 マスターデータのあるゲームの例（200。`my-rpg`は説明のための名前）:
 
 ```json
-{"gameId":"my-rpg","clientVersion":{"minimum":"1.0.0","latest":"1.0.0","update":"none"},"flags":{"demo-flag":true},"masterData":[{"key":"items","size":24}]}
+{"gameId":"my-rpg","clientVersion":{"minimum":"1.0.0","latest":"1.0.0","update":"none"},"flags":{"demo-flag":true},"masterData":[{"key":"items","size":23}]}
 ```
 
 - `clientVersion`（問い合わせ）はクライアントのビルドの版。形は`1`・`1.2`・`1.2.3`（数字の区切りが 1〜3 つ。各区切り 1〜9 桁）。英字の付いた版（`1.2.3-beta`）・空の`clientVersion=`は**400 `INVALID_ARGUMENT`**（`message`は`Invalid clientVersion`）。版はドットの区切りごとに数として比べ（`1.10`は`1.9`より新しい）、足りない区切りは 0 とみなす（`1`と`1.0.0`は同じ）。

@@ -2,16 +2,18 @@
  * 失敗ケースの試験 K2: サーバー側の失敗と互換（ケース 1・5・6・7 の「いま」）。
  * 名前と期待する結果の正は docs/guides/working/failure-case-test-plan.md §3。ただし `CLIモックと同じ流れでゲストのセーブを書いて読み直せる`・
  * `CLIモックと同じ流れでセーブの一覧に出たスロットを消せる` は
- * docs/guides/working/save-design.md §7 が正、`CLIモックと同じ流れで設定を読み変わっていなければ304を受け取る` は
- * docs/guides/working/config-design.md §7 が正（互換の試験の隣に置く）。
+ * docs/guides/working/save-design.md §7 が正、`CLIモックと同じ流れで設定を読み変わっていなければ304を受け取る`・
+ * `CLIモックと同じ流れで設定に載ったマスターデータを読める` は docs/guides/working/config-design.md §7 が正（互換の試験の隣に置く）。
  * src/worker.ts の default.fetch を直に呼ぶ L2 の試験。DB の失敗は prepare が投げる偽の DB で起こす。
  */
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
 import { bearerForBody } from './support/auth';
+import { registerGame } from './support/games';
 import {
-  CLI_CLIENT_VERSION, SMOKE_BOARD_ID, SMOKE_SLOT_ID, authHeaders, configPath, guestRequest, saveData, saveWrite, scoreSubmission, sha256Hex,
+  CLI_CLIENT_VERSION, SMOKE_BOARD_ID, SMOKE_SLOT_ID, authHeaders, configPath, guestRequest, masterDataPath, saveData, saveWrite, scoreSubmission,
+  sha256Hex, utf8Bytes,
 } from '../scripts/cli-requests.mjs';
 
 type Migration = { name: string; queries: string[] };
@@ -245,6 +247,37 @@ describe('ケース 7: マイグレーションと互換', () => {
     const again = await worker.fetch(new Request(base + path, { headers: { 'If-None-Match': etag! } }), baseEnv as never);
     expect(again.status).toBe(304);
     expect(await again.text()).toBe('');
+  });
+
+  it('CLIモックと同じ流れで設定に載ったマスターデータを読める', async () => {
+    // scripts/cli-mock.mjs の C2 の流れ: 設定の masterData の最初のキーを読み、data のバイト数が一覧の size と同じ。
+    // demo-rpg はマスターデータを持たないので、専用のゲームに入れて同じ関数で読む。落ちたら API か CLI モックを直す合図
+    await registerGame(baseEnv.DB, 'cli-master', ['config']);
+    await baseEnv.DB.batch([
+      baseEnv.DB.prepare('INSERT OR REPLACE INTO config_master_data (game_id, key, data) VALUES (?, ?, ?)')
+        .bind('cli-master', 'items', '{"potion":{"price":50},"name":"ポーション"}'),
+      baseEnv.DB.prepare('INSERT OR REPLACE INTO config_master_data (game_id, key, data) VALUES (?, ?, ?)')
+        .bind('cli-master', 'weapons', '{"sword":{"price":300}}'),
+    ]);
+    try {
+      const settings = await worker.fetch(new Request(base + configPath('cli-master')), baseEnv as never);
+      expect(settings.status).toBe(200);
+      const { masterData } = await settings.json<{ masterData?: Array<{ key: string; size: number }> }>();
+      expect(masterData?.map((m) => m.key)).toEqual(['items', 'weapons']);
+      const [first] = masterData!;
+      const path = masterDataPath(first.key, 'cli-master');
+      expect(path).toContain('/v1/config/master/items');
+      const res = await worker.fetch(new Request(base + path), baseEnv as never);
+      expect(res.status).toBe(200);
+      const master = await res.json<{ key: string; data: string }>();
+      expect(master.key).toBe(first.key);
+      expect(utf8Bytes(master.data)).toBe(first.size);
+    } finally {
+      await baseEnv.DB.batch([
+        baseEnv.DB.prepare("DELETE FROM game_modules WHERE game_id = 'cli-master'"),
+        baseEnv.DB.prepare("DELETE FROM games WHERE game_id = 'cli-master'"),
+      ]);
+    }
   });
 
   it('知らない欄が付いた要求も受け付ける', async () => {
