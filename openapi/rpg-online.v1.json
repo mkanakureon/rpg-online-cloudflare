@@ -3,7 +3,7 @@
   "info": {
     "title": "RPG Online Backend (local PoC)",
     "version": "1.0.0",
-    "description": "ローカル専用の PoC。認証はゲストのトークン（POST /v1/accounts/guest が返す Bearer）だけで、ログインは未実装。ゲストの発行・スコアの投稿・セーブの操作・所持品の読み取りに回数の制限（429 RATE_LIMITED と Retry-After の秒）があり、スコアは値の範囲と回数までしか確かめない。形（欄・型・範囲・状態コードとエラーコードの組）の正はこのファイル、挙動の説明の正は docs/api-contract.md。本文のある応答はどれも content-type: application/json; charset=utf-8（本文の無い 304 は除く）。状態ごとに返りうるエラーコードは各応答の x-error-codes に書く。スキーマに無いパスとメソッドは 404 NOT_FOUND。"
+    "description": "ローカル専用の PoC。認証はゲストのトークン（POST /v1/accounts/guest が返す Bearer）だけで、ログインは未実装。ゲストの発行・スコアの投稿・セーブの操作・所持品の読み取り・イベントの一覧と報酬の受け取りに回数の制限（429 RATE_LIMITED と Retry-After の秒）があり、スコアは値の範囲と回数までしか確かめない。形（欄・型・範囲・状態コードとエラーコードの組）の正はこのファイル、挙動の説明の正は docs/api-contract.md。本文のある応答はどれも content-type: application/json; charset=utf-8（本文の無い 304 は除く）。状態ごとに返りうるエラーコードは各応答の x-error-codes に書く。スキーマに無いパスとメソッドは 404 NOT_FOUND。"
   },
   "servers": [
     {
@@ -1962,7 +1962,7 @@
             }
           },
           "429": {
-            "description": "利用制限を超えた（同じプレイヤーの報酬の操作〔所持品・受領の履歴〕が合わせて窓の中で上限を超えた）。どの鍵で断ったか・上限の数は返さない。",
+            "description": "利用制限を超えた（同じプレイヤーの報酬の操作〔所持品・受領の履歴・イベントの一覧・受け取り〕が合わせて窓の中で上限を超えた）。どの鍵で断ったか・上限の数は返さない。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -2176,7 +2176,424 @@
             }
           },
           "429": {
-            "description": "利用制限を超えた（同じプレイヤーの報酬の操作〔所持品・受領の履歴〕が合わせて窓の中で上限を超えた）。どの鍵で断ったか・上限の数は返さない。",
+            "description": "利用制限を超えた（同じプレイヤーの報酬の操作〔所持品・受領の履歴・イベントの一覧・受け取り〕が合わせて窓の中で上限を超えた）。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。クライアントはこの秒だけ待ってから送り直す。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・署名の鍵が無いなど）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "operationId": "listEvents",
+        "summary": "いま開いているイベントの一覧と、トークンのプレイヤーがいまの区切りで受け取り済みか。APP_ENV=local のときだけ受け付ける",
+        "security": [
+          {
+            "bearerToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": true,
+            "description": "トークンのゲーム（g）と同じでなければ 403 PERMISSION_DENIED。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "いま開いているイベント（サーバーの時刻で決める。eventId の昇順）とサーバーの時刻。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "gameId の形が外れている。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization が無い・Bearer でない・トークンの形か署名が正しくない（UNAUTHENTICATED）か、トークンの期限が過ぎた（TOKEN_EXPIRED）。本文を読む前に断る。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED",
+              "TOKEN_EXPIRED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION",
+              "PERMISSION_DENIED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "登録の無いゲーム（Unknown game）か、イベントの機能を使わない設定のゲーム（Feature not enabled for this game）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "利用制限を超えた（同じプレイヤーの報酬の操作〔所持品・受領の履歴・イベントの一覧・受け取り〕が合わせて窓の中で上限を超えた）。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。クライアントはこの秒だけ待ってから送り直す。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・署名の鍵が無いなど）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/events/{eventId}/claim": {
+      "post": {
+        "operationId": "claimEventReward",
+        "summary": "イベントの報酬をいまの区切りの分だけ受け取る（本文は要らない・読まない）。同じ区切りの 2 回目は 200 で 1 回目と同じ本文を返す。APP_ENV=local のときだけ受け付ける",
+        "security": [
+          {
+            "bearerToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "required": true,
+            "description": "イベントの ID。形が外れていればどのルートにも当たらず 404 NOT_FOUND。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": true,
+            "description": "トークンのゲーム（g）と同じでなければ 403 PERMISSION_DENIED。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "受け取った（または同じ区切りで受け取り済みの）結果。2 回目以降も 1 回目と同じ claimId・claimedAt・grants。残高は入れない（GET /v1/inventory で読む）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventClaim"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "gameId の形が外れている。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization が無い・Bearer でない・トークンの形か署名が正しくない（UNAUTHENTICATED）か、トークンの期限が過ぎた（TOKEN_EXPIRED）。本文を読む前に断る。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED",
+              "TOKEN_EXPIRED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION",
+              "PERMISSION_DENIED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "eventId の形が外れている（Endpoint not found）か、登録の無いゲーム（Unknown game）か、イベントの機能を使わない設定のゲーム（Feature not enabled for this game）か、そのゲームに無いイベント（Unknown event）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "サーバーの時刻でイベントの期間の外（EVENT_NOT_ACTIVE。終わった後の送り直しも同じ）か、付与すると残高が 1,000,000,000 を超える品目がある（INVENTORY_LIMIT_EXCEEDED）。どちらも何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "EVENT_NOT_ACTIVE",
+              "INVENTORY_LIMIT_EXCEEDED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "利用制限を超えた（同じプレイヤーの報酬の操作〔所持品・受領の履歴・イベントの一覧・受け取り〕が合わせて窓の中で上限を超えた）。断ったときは何も書かない。どの鍵で断ったか・上限の数は返さない。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -2883,6 +3300,156 @@
           }
         }
       },
+      "EventReward": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "itemId",
+          "amount"
+        ],
+        "description": "報酬の 1 行（品目と数）。品目の名前・効果はマスターデータ（サーバーは解釈しない）。",
+        "properties": {
+          "itemId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "amount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000,
+            "description": "付与する数（1〜1,000,000,000）。"
+          }
+        }
+      },
+      "Event": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "eventId",
+          "kind",
+          "startsAt",
+          "endsAt",
+          "periodKey",
+          "rewards",
+          "claimed"
+        ],
+        "description": "開いているイベントの 1 つ。",
+        "properties": {
+          "eventId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "once",
+              "daily",
+              "weekly"
+            ],
+            "description": "区切り（一度きり・デイリー・週間）。"
+          },
+          "startsAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+            "description": "期間の始まり（含む。ISO 8601・UTC）。"
+          },
+          "endsAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+            "description": "期間の終わり（含まない。ISO 8601・UTC）。"
+          },
+          "periodKey": {
+            "type": "string",
+            "pattern": "^(once|\\d{4}-\\d{2}-\\d{2})$",
+            "description": "いまの区切り（'once'・デイリーはその日・週間はその週の月曜の日付。イベントの時差で決める）。"
+          },
+          "nextResetAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+            "description": "次の区切りの時刻（イベントの終わりを越えない）。一度きりのイベントでは載せない。"
+          },
+          "rewards": {
+            "type": "array",
+            "maxItems": 10,
+            "description": "報酬（品目の ID の昇順）。",
+            "items": {
+              "$ref": "#/components/schemas/EventReward"
+            }
+          },
+          "claimed": {
+            "type": "boolean",
+            "description": "トークンのプレイヤーがいまの区切りで受け取ったか。"
+          }
+        }
+      },
+      "EventList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "serverTime",
+          "items"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "serverTime": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+            "description": "サーバーの時刻。クライアントは残り時間の表示にこれと nextResetAt・endsAt を使い、端末の時刻で期間を決めない。"
+          },
+          "items": {
+            "type": "array",
+            "description": "いま開いているイベント（eventId の昇順）。",
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            }
+          }
+        }
+      },
+      "EventClaim": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "eventId",
+          "periodKey",
+          "claimId",
+          "claimedAt",
+          "grants"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "eventId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "periodKey": {
+            "type": "string",
+            "pattern": "^(once|\\d{4}-\\d{2}-\\d{2})$",
+            "description": "受け取った区切り。"
+          },
+          "claimId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "サーバーが作った受け取りの ID（受領の履歴の sourceId）。2 回目以降も同じ。"
+          },
+          "claimedAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+            "description": "受け取った時刻（サーバーの時刻。ISO 8601・UTC）。"
+          },
+          "grants": {
+            "type": "array",
+            "maxItems": 10,
+            "description": "付与した品目と数（品目の ID の昇順）。",
+            "items": {
+              "$ref": "#/components/schemas/EventReward"
+            }
+          }
+        }
+      },
       "Error": {
         "type": "object",
         "additionalProperties": false,
@@ -2923,7 +3490,9 @@
           "SAVE_CONFLICT",
           "PAYLOAD_TOO_LARGE",
           "SLOT_LIMIT_EXCEEDED",
-          "RATE_LIMITED"
+          "RATE_LIMITED",
+          "EVENT_NOT_ACTIVE",
+          "INVENTORY_LIMIT_EXCEEDED"
         ]
       }
     },

@@ -37,9 +37,9 @@ CLIモック（Node.js）                Unreal（C++）・Unity（C#）・ブ�
 - 識別：`gameId`、`playerId`、`boardId`は仕様化された文字種・長さのみを受け付ける。
 - 日時：サーバー上はUTCのISO 8601、画面表示のみクライアントローカルに変換。
 - エラー：`{ "error": { "code": "...", "message": "..." } }`。
-- 冪等性：報酬受取や購入など状態更新には`Idempotency-Key`を導入する。
+- 冪等性：イベントの報酬の受け取りは一意の鍵（プレイヤー・イベント・区切り）で冪等にする（同じ区切りの 2 回目は 200 で 1 回目と同じ本文。見出しは要らない）。自然な鍵の無い状態の更新（消費・購入）に`Idempotency-Key`を使う（`docs/guides/working/event-reward-design.md` §5・§6）。
 - 一覧：ページング／件数上限を必須とする。PoCは最大50件。
-- 利用制限：ゲストの発行（IP ごと・ゲームごと）とスコアの投稿・セーブの操作・所持品の読み取り（プレイヤーごと）を D1 の固定窓で数え、上限を超えたら 429 `RATE_LIMITED` と`Retry-After`（秒）。数え方は`src/core/rate-limit.ts`（窓の関数と`consume`）、回数と窓は`src/core/rate-limit-policy.ts`の 1 か所、数は表`rate_limit_counters`（`migrations/0008_rate_limits.sql`）。設計の正は`docs/guides/working/abuse-protection-design.md`。
+- 利用制限：ゲストの発行（IP ごと・ゲームごと）とスコアの投稿・セーブの操作・所持品の読み取りとイベントの一覧・報酬の受け取り（プレイヤーごと）を D1 の固定窓で数え、上限を超えたら 429 `RATE_LIMITED` と`Retry-After`（秒）。数え方は`src/core/rate-limit.ts`（窓の関数と`consume`）、回数と窓は`src/core/rate-limit-policy.ts`の 1 か所、数は表`rate_limit_counters`（`migrations/0008_rate_limits.sql`）。設計の正は`docs/guides/working/abuse-protection-design.md`。
 - セキュリティ：本番はBearer認証やプラットフォーム認証の検証を導入。ゲーム内に管理用APIキーを埋め込まない。
 
 詳細は[API仕様（案）](../../api-contract.md)。
@@ -63,11 +63,11 @@ CLIモック（Node.js）                Unreal（C++）・Unity（C#）・ブ�
 - `inventory_items`・`inventory_balances`・`inventory_ledger`: ゲームごとの品目（ID と種類〔通貨か所持品か〕だけ。名前・効果・値段はマスターデータ）・プレイヤーと品目ごとの残高・受領の履歴（増減 1 回で 1 行。`migrations/0009_inventory.sql`。置き場は`src/core/inventory.ts`〔残高の上限〕と`src/modules/inventory/`〔所持品と受領の履歴の 2 つの`GET`〕。設計の正は`docs/guides/working/event-reward-design.md`）
 - `rate_limit_counters`: 利用制限の数（単位の名前・鍵・窓の始まりごとに 1 行。IP はハッシュにして持つ。`docs/guides/working/abuse-protection-design.md` §3）
 - `messages`: 酒場投稿、削除・通報状態
-- `events`: 期間限定イベント定義
-- `event_progress`: プレイヤーごとの達成度と報酬取得状況
+- `events`・`event_rewards`・`event_claims`: ゲームごとのイベント（区切り〔一度きり・デイリー・週間〕・期間・区切りの時差）・イベントごとの報酬（品目と数）・プレイヤー・イベント・区切りごとの受け取り（二重を止める一意の鍵。`migrations/0010_events.sql`。置き場は`src/modules/events/`〔一覧の`GET`と受け取りの`POST`。期間と区切りの関数は`period.ts`〕。期間はサーバーの時刻だけで決め、Cron Triggers は使わない。設計の正は`docs/guides/working/event-reward-design.md`）
+- `event_progress`: プレイヤーごとの達成度（クエスト。Phase 2 の残り）
 - `adventurer_profiles`: 公開可能なゴースト用プロフィール
 
-PoCで実際に作るのは`games`（登録だけ。公開状態の欄はまだ無い）と`game_modules`と`accounts`と`game_players`と`ranking_entries`と`saves`と`announcements`と`rate_limit_counters`と`inventory_items`・`inventory_balances`・`inventory_ledger`のみ。`accounts`と`game_players`の境目は`docs/guides/working/account-design.md` §2。
+PoCで実際に作るのは`games`（登録だけ。公開状態の欄はまだ無い）と`game_modules`と`accounts`と`game_players`と`ranking_entries`と`saves`と`announcements`と`rate_limit_counters`と`inventory_items`・`inventory_balances`・`inventory_ledger`と`events`・`event_rewards`・`event_claims`のみ。`accounts`と`game_players`の境目は`docs/guides/working/account-design.md` §2。
 
 ## 5. クライアントとの将来の境界
 

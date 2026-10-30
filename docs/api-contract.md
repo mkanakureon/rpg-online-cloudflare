@@ -1,6 +1,6 @@
 # 初期API仕様（検討版）
 
-この仕様はMacでの**ローカルPoC**向け。ログインは未実装（認証はゲストのトークンだけ）。書き込みの口（ゲストの発行・スコアの投稿）とセーブの操作と所持品の読み取りに回数の制限（**429 `RATE_LIMITED`**と`Retry-After`。下の「利用制限」）がある。スコアは値の範囲と回数までしか確かめない（ゲームの中で取れるスコアかは見ない）。書込み系APIは公開用に使用しない。
+この仕様はMacでの**ローカルPoC**向け。ログインは未実装（認証はゲストのトークンだけ）。書き込みの口（ゲストの発行・スコアの投稿）とセーブの操作と所持品の読み取りとイベントの一覧・報酬の受け取りに回数の制限（**429 `RATE_LIMITED`**と`Retry-After`。下の「利用制限」）がある。スコアは値の範囲と回数までしか確かめない（ゲームの中で取れるスコアかは見ない）。書込み系APIは公開用に使用しない。
 
 形（欄・型・範囲・状態コードとエラーコードの組）の正はスキーマ（`openapi/rpg-online.v1.json`）、挙動の説明の正はこの文書。
 
@@ -165,7 +165,7 @@
 - 品目の ID と種類（通貨か所持品か）はサーバーの表`inventory_items`（`migrations/0009_inventory.sql`。`demo-rpg`は`gold`〔通貨〕と`potion`〔所持品〕）にある。品目の名前・絵・効果・値段はマスターデータに置き、サーバーは解釈しない。
 - 残高は 0〜1,000,000,000（`MAX_ITEM_AMOUNT`）。クライアントが残高を増やす・減らす口は無い（増やすのはサーバーだけ）。
 - 自分（トークンのプレイヤー）の残高だけが出る。プレイヤーはトークンだけで決まり、問い合わせの`playerId`は読まない。
-- 読むのも`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順は`APP_ENV`の守り → トークン（401）→ プレイヤーの利用制限（429 `RATE_LIMITED`。受領の履歴と合わせて数える）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録と機能の設定（404 `NOT_FOUND`。所持品の機能`inventory`を使わない設定のゲームは`Feature not enabled for this game`）→ 読む。
+- 読むのも`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順は`APP_ENV`の守り → トークン（401）→ プレイヤーの利用制限（429 `RATE_LIMITED`。受領の履歴・イベントの一覧と受け取りと合わせて数える）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録と機能の設定（404 `NOT_FOUND`。所持品の機能`inventory`を使わない設定のゲームは`Feature not enabled for this game`）→ 読む。
 
 ## GET /v1/inventory/history?gameId=demo-rpg&limit=20&before=42
 
@@ -181,6 +181,42 @@
 - 続きがあれば`nextBefore`（最後の行の`entryId`）が載る。次はそれを`before`に付けて読む。続きが無ければ`nextBefore`の欄ごと載らない。
 - `delta`は増減の数（いまは付与だけで正の数）。`sourceType`・`sourceId`は増減の元（イベントの報酬の受け取りは`event-claim`と受け取りの`claimId`）。`createdAt`はサーバーが書いた時刻（ISO 8601・UTC・秒まで）。履歴は API から書き換えも消しもしない。
 - 確かめの順は`GET /v1/inventory`と同じで、ゲームの登録と機能の設定（404）の後に`limit`・`before`の形を見る（400）。
+
+## GET /v1/events?gameId=demo-rpg
+
+いま開いているイベントの一覧と、トークンのプレイヤーがいまの区切りで報酬を受け取り済みかを読む。見出しは`Authorization: Bearer <token>`。設計の正は`docs/guides/working/event-reward-design.md`。
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","serverTime":"2026-10-30T15:30:00Z","items":[{"eventId":"daily-login","kind":"daily","startsAt":"2026-01-01T00:00:00Z","endsAt":"2100-01-01T00:00:00Z","periodKey":"2026-10-30","nextResetAt":"2026-10-31T00:00:00Z","rewards":[{"itemId":"gold","amount":100}],"claimed":false}]}
+```
+
+- 載るのは**サーバーの時刻でいま開いているイベントだけ**（`startsAt`以上・`endsAt`未満）。並びは`eventId`の昇順。終わったイベント・まだ始まらないイベントは載らない。
+- `serverTime`はサーバーの時刻。クライアントは残り時間の表示にこれと`nextResetAt`・`endsAt`を使い、**端末の時刻で期間を決めない**。サーバーはクライアントの時刻（本文・問い合わせ・`Date`の見出し）を読まない。
+- `kind`は区切り: `once`（期間の全体で 1 回）・`daily`（イベントの時差の 0 時で変わる）・`weekly`（イベントの時差の月曜 0 時で変わる）。時差はイベントごとの固定の分（既定 0 = UTC。夏時間は持たない）。
+- `periodKey`はいまの区切り（`once`・デイリーはその日`YYYY-MM-DD`・週間はその週の月曜の日付）。`nextResetAt`は次の区切りの時刻で、`endsAt`を越えない。一度きりのイベントには載らない。時刻はどれも ISO 8601 の UTC（秒まで）。
+- `rewards`は受け取ると付与される品目と数（品目の ID の昇順）。`claimed`はトークンのプレイヤーがいまの区切りで受け取ったか（ほかのプレイヤーの受け取りは数えない）。
+- イベントの定義はマイグレーションで入れる（`migrations/0010_events.sql`。`demo-rpg`はデイリーの`daily-login`・金貨`gold` 100）。イベントを書き換える API は無い。
+- 読むのも`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順は`GET /v1/inventory`と同じ: `APP_ENV`の守り → トークン（401）→ プレイヤーの利用制限（429 `RATE_LIMITED`。所持品・受領の履歴・受け取りと合わせて数える）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録と機能の設定（404 `NOT_FOUND`。イベントの機能`events`を使わない設定のゲームは`Feature not enabled for this game`）→ 読む。
+
+## POST /v1/events/{eventId}/claim?gameId=demo-rpg
+
+イベントの報酬を、いまの区切りの分だけ受け取る。見出しは`Authorization: Bearer <token>`。本文は要らない（送っても読まない）。
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","eventId":"daily-login","periodKey":"2026-10-30","claimId":"<claimId>","claimedAt":"2026-10-30T15:30:00Z","grants":[{"itemId":"gold","amount":100}]}
+```
+
+- 受け取ると、`grants`の品目がトークンのプレイヤーの所持品に足され、受領の履歴（`GET /v1/inventory/history`）に品目ごとに 1 行（`sourceType: "event-claim"`・`sourceId`が`claimId`）残る。受け取りの行・履歴・残高は 1 つのまとまり（D1 の`batch`）で書くので、片方だけ残らない。応答に残高は入らない（`GET /v1/inventory`で読む）。
+- **同じ区切りの 2 回目以降は 200 で 1 回目と同じ本文**（同じ`claimId`・`claimedAt`・`grants`）を返し、残高も履歴も増えない。並べて送っても付与は 1 回分（プレイヤー・イベント・区切りの一意の鍵で止める）。届かなかった要求は同じ要求を送り直すだけでよい。2 回目かを知りたいクライアントは`claimId`を比べる。`Idempotency-Key`の見出しは読まない（無くても冪等）。
+- デイリー・週間は区切りが変わればもう一度受け取れる（新しい`claimId`）。区切りをまたいだ送り直しは新しい区切りの受け取りになる。
+- 期間はサーバーの時刻だけで決める。期間の外（終わった・まだ始まらない）は**409 `EVENT_NOT_ACTIVE`**で、何も書かない。終わる直前に送って届かず、終わった後に送り直したときも 409 になる（同じ本文の 200 にはならない）。受け取れていたかは`GET /v1/inventory/history`の`sourceType: "event-claim"`の行で確かめる。
+- 付与すると残高が 1,000,000,000（`MAX_ITEM_AMOUNT`）を超える品目があれば**409 `INVENTORY_LIMIT_EXCEEDED`**で、何も書かない（どの品目も足さない）。
+- そのゲームに無いイベントは**404 `NOT_FOUND`**（`message`は`Unknown event`）。`eventId`の形（`^[a-zA-Z0-9_-]{1,64}$`）が外れていればどのルートにも当たらず**404 `NOT_FOUND`**（`Endpoint not found`）。
+- 書込み系 API なので`APP_ENV=local`の時だけ・トークンがある時だけ通る（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順: `APP_ENV`の守り → トークン（401。数えない）→ プレイヤーの利用制限（429 `RATE_LIMITED`。一覧・所持品・受領の履歴と合わせて数え、断ったときは何も書かない）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403）→ ゲームの登録と機能の設定（404）→ イベントがあるか（404）→ 期間（409 `EVENT_NOT_ACTIVE`）→ 書く（409 `INVENTORY_LIMIT_EXCEEDED`）。
 
 ## GET /v1/config?gameId=demo-rpg&clientVersion=…
 
@@ -230,11 +266,11 @@
 {"error":{"code":"INVALID_ARGUMENT","message":"Invalid parameters"}}
 ```
 
-現PoCの代表コード: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）、`UNAUTHENTICATED`（401）、`TOKEN_EXPIRED`（401）、`PERMISSION_DENIED`（403）、`SAVE_CONFLICT`（409）、`PAYLOAD_TOO_LARGE`（413）、`SLOT_LIMIT_EXCEEDED`（409）、`RATE_LIMITED`（429）。
+現PoCの代表コード: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）、`UNAUTHENTICATED`（401）、`TOKEN_EXPIRED`（401）、`PERMISSION_DENIED`（403）、`SAVE_CONFLICT`（409）、`PAYLOAD_TOO_LARGE`（413）、`SLOT_LIMIT_EXCEEDED`（409）、`RATE_LIMITED`（429）、`EVENT_NOT_ACTIVE`（409）、`INVENTORY_LIMIT_EXCEEDED`（409）。
 
 ## 利用制限
 
-ゲストの発行・スコアの投稿・セーブの操作・所持品の読み取りは、決めた秒の窓（固定。窓の始まりは UNIX 秒を窓の長さで割り切った時刻）の中の回数を数え、上限を超えると断る。設計の正は`docs/guides/working/abuse-protection-design.md`。
+ゲストの発行・スコアの投稿・セーブの操作・所持品の読み取り・イベントの一覧と報酬の受け取りは、決めた秒の窓（固定。窓の始まりは UNIX 秒を窓の長さで割り切った時刻）の中の回数を数え、上限を超えると断る。設計の正は`docs/guides/working/abuse-protection-design.md`。
 
 | 口 | 数える単位 | 上限 |
 | --- | --- | --- |
@@ -242,7 +278,7 @@
 | `POST /v1/accounts/guest` | ゲーム（本文の`gameId`） | 60 秒に 300 回 |
 | `POST /v1/rankings/{boardId}` | プレイヤー（トークンのゲームとプレイヤー） | 60 秒に 30 回 |
 | `PUT`・`GET`・`DELETE /v1/saves/{slotId}`と`GET /v1/saves` | プレイヤー（トークンのゲームとプレイヤー。4 つの操作を合わせて数え、スコアの投稿とは別に数える） | 60 秒に 60 回 |
-| `GET /v1/inventory`と`GET /v1/inventory/history` | プレイヤー（トークンのゲームとプレイヤー。報酬の操作として合わせて数え、セーブの操作とは別に数える） | 60 秒に 60 回 |
+| `GET /v1/inventory`・`GET /v1/inventory/history`・`GET /v1/events`・`POST /v1/events/{eventId}/claim` | プレイヤー（トークンのゲームとプレイヤー。報酬の操作として 4 つを合わせて数え、セーブの操作とは別に数える） | 60 秒に 60 回 |
 
 レスポンス例（429。見出し`Retry-After: 37`）:
 
@@ -264,8 +300,6 @@
 
 | HTTP | パス案 | 用途 |
 | --- | --- | --- |
-| GET | `/v1/events` | 期間限定クエスト一覧 |
-| POST | `/v1/events/{id}/progress` | 進捗・報酬判定 |
 | GET/POST | `/v1/messages` | 酒場掲示板 |
 | GET/POST | `/v1/adventurers` | ゴースト冒険者登録・取得 |
 
