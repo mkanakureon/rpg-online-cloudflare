@@ -43,13 +43,13 @@
 | --- | --- |
 | `src/worker.ts` | 1 ファイルに全部。型（`Env`・`Database`）・応答の手伝い（`json`・`error`）・ID の検証（`validId`）・ルート（`route` の中の `if` の並び）・SQL・入口（`default.fetch` の `try/catch` で 500 `INTERNAL_ERROR`）。外へ出したふつうの関数は無い |
 | ルート | `GET /health`・`GET /v1/announcements`・`GET /v1/rankings/{boardId}`・`POST /v1/rankings/{boardId}`。どれにも当たらなければ 404 `NOT_FOUND` `Endpoint not found` |
-| 検査の順（POST） | `APP_ENV !== 'local'` なら 403（本文を読む前）→ JSON の読み取り（400 `INVALID_JSON`）→ 形の検証（400 `INVALID_ARGUMENT`）→ 書き込み |
+| 検査の順（POST） | パスがルートに当たらなければ 404（ボードの形の外れ）→ `APP_ENV !== 'local'` なら 403（本文を読む前）→ JSON の読み取り（400 `INVALID_JSON`）→ 形の検証（400 `INVALID_ARGUMENT`）→ 書き込み |
 | 検査の順（GET） | `gameId` の形（400）→（ランキングは `limit`（400））→ 読み取り |
 | 表 | `announcements`・`ranking_entries` の 2 つ。どちらも `game_id` を持つ。ゲームの一覧の表は無い。初期データは `demo-rpg` のお知らせ `welcome` だけ |
 | 存在しないゲーム | 形の正しい `gameId` なら 200 と空の `items`（`docs/api-contract.md`。`docs/guides/working/failure-case-test-plan.md` §5 の決めること 1 で A に決め、「登録の仕組みを入れるときに B を決め直す」と書いてある） |
 | 試験が使うゲーム | `demo-rpg`（ほぼ全部）・`other-rpg`（他ゲームの分離の 4 本。うち 3 本は `other-rpg` へ POST する）・`no-such-game`（存在しないゲームの 2 本） |
 | CLI モック | `scripts/cli-mock.mjs` と `scripts/cli-requests.mjs` は `demo-rpg` だけを使う |
-| 試験の入口 | どの試験も `import worker from '../src/worker'` で `default.fetch` を直に呼ぶ。`wrangler.jsonc` の `main` も `src/worker.ts` |
+| 試験の入口 | `test/health.test.ts` 以外の試験は `import worker from '../src/worker'` で `default.fetch` を直に呼ぶ。`test/health.test.ts` は `cloudflare:workers` の `exports.default.fetch` で `wrangler.jsonc` の `main`（`src/worker.ts`）を通す。どちらもこのパスと `default` の書き出しに頼る |
 | 試験の D1 | `vitest.config.ts` が `migrations/` を全部読み、`test/apply-migrations.ts` が当てる。新しい番号のマイグレーションは置くだけで試験の D1 に入る |
 
 `docs/guides/working/architecture.md` の「4. データ境界」は、`games` を「ゲームの設定と公開状態」として想定エンティティに挙げ、「PoC で実際に作るのは `ranking_entries` と `announcements` のみ」と書いている。`gameId` を認証・認可の境界とみなさない、とも書いている（この設計の機能の設定も、ADR 0002 のとおり認可の代わりにしない）。
@@ -164,12 +164,20 @@ export async function requireGame(env: Env, gameId: string, module: string): Pro
 | --- | --- |
 | `docs/api-contract.md` | 「形の正しい `gameId`・`boardId` なら、データが無くても（存在しないゲーム・ボードでも）200 と空の `items`」の行を**置き換える**: 「登録の無い `gameId` は 404 `NOT_FOUND`。登録済みのゲームなら、ボードにデータが無くても 200 と空の `items`」。エラーコードの一覧は変えない（`NOT_FOUND` を使い回す） |
 | `openapi/rpg-online.v1.json` | `listAnnouncements` に 404 の応答（`Error`・`x-error-codes: ["NOT_FOUND"]`）を足す。`getRanking`・`submitScore` は 404 `NOT_FOUND` がもうあるので、説明の文に「登録の無いゲーム」を足すだけ。`ErrorCode` の列挙は 5 つのまま |
-| `docs/guides/working/failure-case-test-plan.md` | §5 の決めること 1 を B に決め直し、§3 の 2 行（§5 の表）を新しい名前の行に置き換え、§4 の K1 の確認コマンドの案の名前も置き換える |
-| `docs/guides/working/architecture.md` | §4 の「PoC で実際に作るのは…のみ」に `games`（M3 で `game_modules`）を足す |
+| `docs/guides/working/failure-case-test-plan.md` | §5 の決めること 1 を「**ゲームだけ B**（登録の無いゲームは 404。ボードは表を作らず A のまま 200 と空）」に決め直し、§3 の 2 行（§5 の表）を新しい名前の行に置き換え、§4 の K1 の確認コマンドの案の名前も置き換える |
+| `docs/guides/working/architecture.md` | §4 の「PoC で実際に作るのは…のみ」に `games` を足す |
+
+M3 の実装の Issue で、同じコミットで直す所:
+
+| ファイル | 直す所 |
+| --- | --- |
+| `docs/api-contract.md` | 「登録の無い `gameId` は 404」の行に「その機能を使わない設定のゲームも 404 `NOT_FOUND`」を足して 1 行に置き換える |
+| `openapi/rpg-online.v1.json` | 3 つの操作の 404 の説明の文に「機能を使わない設定のゲーム」を足す。`ErrorCode` の列挙と `x-error-codes` は変えない |
+| `docs/guides/working/architecture.md` | §4 に `game_modules` を足す |
 
 ## 4. 試験の名前の表
 
-L2 の試験の作り方（`src/worker.ts` の `default` を直に呼ぶ・書き込みだけ `APP_ENV: 'local'`・偽の DB・試験ごとにデータを消す）は `docs/guides/working/failure-case-test-plan.md` §2 と同じ。ゲームの登録は試験の手伝い `test/support/games.ts` の `registerGame(db, gameId, modules = ['announcements', 'rankings'])` で入れ、`beforeEach` で `demo-rpg` 以外の `games`・`game_modules` の行を消す（`demo-rpg` はマイグレーションのまま残す）。
+L2 の試験の作り方（`src/worker.ts` の `default` を直に呼ぶ・書き込みだけ `APP_ENV: 'local'`・偽の DB・試験ごとにデータを消す）は `docs/guides/working/failure-case-test-plan.md` §2 と同じ。ゲームの登録は試験の手伝い `test/support/games.ts` の `registerGame(db, gameId, modules = ['announcements', 'rankings'])` で入れ、`registerGame` は `INSERT OR IGNORE` で入れる（`beforeEach` で何度呼んでも主キーで落ちない）。新しい試験のファイルは `beforeEach` で `demo-rpg` 以外の `game_modules`・`games` の行を**この順で**消す（`game_modules` が `games` を外部キーで指すので、先に `games` を消すと D1 が断る。`demo-rpg` はマイグレーションのまま残す）。
 
 | 束 | テストの名前 | 確かめること | 層 |
 | --- | --- | --- | --- |
@@ -212,9 +220,9 @@ M1 では既存の試験を 1 本も変えない。M2・M3 で変わるのは次
 | `マイグレーションを2回当ててもデータは壊れない` | M2・M3 | 変わらない（新しいマイグレーションも `IF NOT EXISTS`・`INSERT OR IGNORE`） | 変えない |
 | `エラーの応答はスキーマに書いた状態とエラーコードの組で返る`・`スキーマのErrorCodeの列挙は5つのエラーコードと一致する` | M2 | 変わらない（新しいエラーコードを足さない） | 変えない。404 の組は `登録の無いゲームのNOT_FOUNDの応答はスキーマに合う` で見る |
 
-手続き（`docs/guides/decisions/test-plan.md` §11「期待値を実装に合わせて書き換えない。直すのは実装か、設計を直してからテスト」のとおり、テストを黙って弱めない）:
+手続き（`docs/guides/decisions/test-plan.md` §11 は「テストを緑に合わせて弱めない・消さない。期待値を実装に合わせて書き換えない（直すのは実装か、設計を直してからテスト）」。2 本を消すのは、緑に合わせるためでなく**設計（契約）を先に変えたため**で、§11 の「設計を直してからテスト」の道を通る。その証拠は、手順 1 の設計を直すコミットが、試験を置き換えるコミットより先にあること）:
 
-1. 先に設計を直す: この設計書の決めること 1（§6）で B に決めたことを、M2 の実装の Issue の最初のコミットで `docs/guides/working/failure-case-test-plan.md` §5 の決めること 1 に写し（A から B へ決め直し）、§3 の 2 行と §4 の K1 の名前を置き換え、`docs/api-contract.md` の該当の行を置き換える（§3 の「契約の変わる所」。CLAUDE.md 原則 5。例外を追記しない）。
+1. 先に設計を直す: この設計書の決めること 1（§6）で B に決めたことを、M2 の実装の Issue の最初のコミットで `docs/guides/working/failure-case-test-plan.md` §5 の決めること 1 に写し（A から「ゲームだけ B・ボードは A」へ決め直し。`存在しないボードのランキングは200と空の一覧を返す` は変えずに残る）、§3 の 2 行と §4 の K1 の名前を置き換え、`docs/api-contract.md` の該当の行を置き換える（§3 の「契約の変わる所」。CLAUDE.md 原則 5。例外を追記しない）。
 2. 同じ束の中で試験を置き換える。消す 2 本は、より強い期待（404 で断る）の 2 本と「登録済みなら 200 と空」の 2 本に置き換わるので、確かめる範囲は減らない。
 3. 確認コマンドで、消した 2 本の名前が `test/` に残っていないこと・置き換えの名前が通ることを見る（§7 の M2）。
 4. ほかの試験が落ちたら、期待する結果を直さず `docs/guides/decisions/test-plan.md` §8 の欠陥レポートの形で報告し、設計か実装かを振り分ける（design-cycle §5）。
@@ -240,7 +248,7 @@ M1 では既存の試験を 1 本も変えない。M2・M3 で変わるのは次
 | --- | --- | --- | --- | --- |
 | M1 | §2 の分割（`src/core/`・`src/modules/announcements`・`src/modules/rankings`・`src/modules/index.ts`）・§4 の M1 の L1 の試験。挙動を変えない | — | 変えない（34 本がそのまま通る） | 足さない |
 | M2 | `migrations/0002_games.sql`・`src/core/games.ts` の `loadGame`・`requireGame`（登録だけ）・各モジュールから呼ぶ・`test/support/games.ts`・§3 の「契約の変わる所」・§4 の M2 の試験 | M1 | §5 の手続きで 2 本を置き換え・3 本の開始状態を直す | 足さない |
-| M3 | `migrations/0003_game_modules.sql`・`enabledModules`・`requireGame` で機能の設定も見る・`registerGame` に機能の引数・§4 の M3 の試験・`docs/guides/working/architecture.md` §4 に `game_modules` | M2 | 変えない | 足さない |
+| M3 | `migrations/0003_game_modules.sql`・`enabledModules`・`requireGame` で機能の設定も見る・`registerGame` に機能の引数・§4 の M3 の試験・§3 の M3 の「直す所」 | M2 | 変えない | 足さない |
 
 範囲の外（後の設計書）: アカウント・セーブ・設定配信（ロードマップ Phase 1 の次の項目）。これらは §2 の `GameModule` として `src/modules/<機能>/` に足し、§3 の `game_modules` の行でゲームごとに使う・使わないを決める。
 
@@ -248,11 +256,14 @@ M1 では既存の試験を 1 本も変えない。M2・M3 で変わるのは次
 
 実装の Issue の本文の ```js に入れる。`runTests()` で全部回したあとの結果（JUnit の XML）を `requireTests` が読む（`scripts/issue-run/check-lib.mjs`）。守るファイルの名前は、書かせる側のファイルと重ならないように組み立てる。
 
+`gitClean` は `base` を渡さないと作業ツリーしか見ず、無人の回がコミットした後は変えていても通ってしまう。どの案も先頭の `base` に、**実装の Issue を作るときの main のコミットの SHA** を書き入れ、`gitClean(…, { base })` で比べる（`docs/guides/procedures/issue-goal-setting.md`）。
+
 M1:
 
 ```js
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { runTests, requireTests, mustExist, gitTracked, gitClean, check, done } from './scripts/issue-run/check-lib.mjs';
+const base = 'MAIN_SHA'; // 実装の Issue を作るときの main の SHA に書き換える
 const core = ['src', 'core'].join('/');
 const files = ['env.ts', 'http.ts', 'ids.ts', 'guards.ts', 'module.ts', 'router.ts'].map((f) => core + '/' + f)
   .concat(['src/modules/index.ts', 'src/modules/announcements/index.ts', 'src/modules/rankings/index.ts', 'src/modules/rankings/validate.ts']);
@@ -274,7 +285,7 @@ requireTests([
 ]);
 // 挙動を変えない: いまの試験・契約・データを変えない
 gitClean(['test/failure-input.test.ts', 'test/failure-server.test.ts', 'test/health.test.ts', 'test/schema-conformance.test.ts', 'test/support/',
-  'migrations/', 'openapi/', 'docs/api-contract.md', ['package', 'json'].join('.'), 'wrangler.jsonc']);
+  'migrations/', 'openapi/', 'docs/api-contract.md', ['package', 'json'].join('.'), 'wrangler.jsonc'], { base });
 done();
 ```
 
@@ -283,6 +294,7 @@ M2:
 ```js
 import { readFileSync, readdirSync } from 'node:fs';
 import { runTests, requireTests, mustExist, gitTracked, gitClean, check, done } from './scripts/issue-run/check-lib.mjs';
+const base = 'MAIN_SHA'; // 実装の Issue を作るときの main の SHA に書き換える
 const files = ['migrations/0002_games.sql', 'src/core/games.ts', 'test/support/games.ts', 'test/games.test.ts'];
 mustExist(files);
 gitTracked(files);
@@ -291,7 +303,9 @@ const all = readdirSync('test').filter((f) => f.endsWith('.ts')).map((f) => read
 for (const old of ['存在しないゲームのランキングは200と空の一覧を返す', '存在しないゲームのお知らせは200と空の一覧を返す']) {
   check(!all.includes(old), '置き換えた試験が残っていない: ' + old);
 }
-check(readFileSync('openapi/rpg-online.v1.json', 'utf8').includes('NOT_FOUND'), 'スキーマに NOT_FOUND がある');
+const spec = JSON.parse(readFileSync('openapi/rpg-online.v1.json', 'utf8'));
+const r404 = spec.paths['/v1/announcements']?.get?.responses?.['404'];
+check(Boolean(r404) && (r404['x-error-codes'] ?? []).includes('NOT_FOUND'), 'スキーマの listAnnouncements に 404 NOT_FOUND がある');
 runTests();
 requireTests([
   '登録の無いゲームのランキングはNOT_FOUNDの404を返す',
@@ -309,7 +323,9 @@ requireTests([
   'マイグレーションを2回当ててもデータは壊れない',
   '今のCLIモックと同じ形の要求を受け付ける',
 ]);
-gitClean(['migrations/0001_initial.sql', 'scripts/', ['package', 'json'].join('.'), 'wrangler.jsonc']);
+// §5 に挙げた failure-input 以外の既存の試験は変えない（failure-input は §5 の 2 本の置き換えと開始状態だけ。判定役が差分で見る）
+gitClean(['test/failure-server.test.ts', 'test/schema-conformance.test.ts', 'test/health.test.ts', 'test/apply-migrations.ts',
+  'migrations/0001_initial.sql', 'scripts/', ['package', 'json'].join('.'), 'wrangler.jsonc'], { base });
 done();
 ```
 
@@ -317,6 +333,7 @@ M3:
 
 ```js
 import { runTests, requireTests, mustExist, gitTracked, gitClean, done } from './scripts/issue-run/check-lib.mjs';
+const base = 'MAIN_SHA'; // 実装の Issue を作るときの main の SHA に書き換える
 const files = ['migrations/0003_game_modules.sql', 'test/game-modules.test.ts'];
 mustExist(files);
 gitTracked(files);
@@ -332,13 +349,14 @@ requireTests([
   'マイグレーションを2回当ててもデータは壊れない',
   '今のCLIモックと同じ形の要求を受け付ける',
 ]);
+// openapi/ と docs/api-contract.md は M3 で直す所がある（§3）ので守らない
 gitClean(['migrations/0001_initial.sql', 'migrations/0002_games.sql', 'test/failure-input.test.ts', 'test/failure-server.test.ts',
-  'scripts/', 'openapi/', 'docs/api-contract.md', ['package', 'json'].join('.'), 'wrangler.jsonc']);
+  'test/schema-conformance.test.ts', 'test/health.test.ts', 'scripts/', ['package', 'json'].join('.'), 'wrangler.jsonc'], { base });
 done();
 ```
 
 - M2 の後は、ローカルの D1 に `npm run db:migrate:local` をもう一度当ててから `npm run dev` と `npm run cli:smoke` を回す（`0002` が入っていないと `demo-rpg` も 404 になる）。実装の Issue の報告に、その実行結果を観測記録として残す。
-- 確認コマンドの案は、実装の Issue を作る前に 1 回回し、「まだ作っていないから」落ちることを確かめる（CLAUDE.md の進め方の決まり・`docs/guides/procedures/issue-goal-setting.md`）。M1 の案は、いまの main で回すと `mustExist` と `requireTests` の新しい 4 本が NG になり、既存の 3 本は OK になる見込み。
+- 確認コマンドの案は、実装の Issue を作る前に 1 回回し、「まだ作っていないから」落ちることを確かめる（CLAUDE.md の進め方の決まり・`docs/guides/procedures/issue-goal-setting.md`）。M1 の案は、いまの main で回すと `mustExist`・`gitTracked` と `requireTests` の新しい 4 本が NG になり、既存の 3 本は OK になる見込み。
 
 ## 8. 指示の表
 
