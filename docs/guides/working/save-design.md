@@ -75,7 +75,7 @@
 
 ### サーバーが持つもの・持たないもの
 
-サーバーは本体（`data`）を**解釈しない**（ADR 0002）。JSON として読まない・欄を見ない・中身で弾かない。持つのは次だけ:
+サーバーは本体（`data`）を**解釈しない**（ADR 0002）。JSON として読まない・欄を見ない・中身で弾かない。持つのは次だけ（Issue の「識別・形式の版・本体・チェックサム・リビジョン・時刻」に、`data` から数えるだけの `size` と、消したことの印 `deleted` を足した。どちらも中身を解釈しない。`size` は大きさの上限と一覧で本体を読まずに大きさを見せるため、`deleted` は §3 の削除でリビジョンを戻さないため）:
 
 | 項目 | API の欄 | 表の列 | 意味 |
 | --- | --- | --- | --- |
@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS saves (
   data TEXT NOT NULL,
   checksum TEXT NOT NULL,
   size INTEGER NOT NULL,
+  deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),  -- 1 は消した印（墓石）。V2 の削除で使う
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   PRIMARY KEY (game_id, player_id, slot_id)
 );
@@ -110,6 +111,7 @@ INSERT OR IGNORE INTO game_modules (game_id, module) SELECT game_id, 'saves' FRO
 
 - `games(game_id)` の `ON DELETE CASCADE` は `0003`・`0004` と同じ理由（ゲームの行だけを消す `test/games.test.ts` の `beforeEach` が外部キーで断られないため）。
 - `player_id` に `game_players` への外部キーを付けない。トークンは自己完結で `requireAuth` は DB を引かない（`account-design.md` §5）ので、行の無いプレイヤーのトークン（試験の手伝い `test/support/auth.ts` の `tokenFor('demo-rpg', 'p1')` など）で書くと、外部キーの失敗が 500 になるため。`ranking_entries.player_id` と同じ扱い。
+- `deleted` は V2 の削除のための列だが、V1 の `0005` で作る（V2 でマイグレーションを足さない）。消すときは行を消さず、`deleted = 1`・`data = ''`・`checksum = ''`・`size = 0` にしてリビジョンを 1 つ進める（墓石）。行を消してリビジョンを 1 からやり直すと、消す前のリビジョンを覚えた端末の書き込みが、書き直された別の版に黙って当たる（消す → 書き直す → 同じ数のリビジョンまで進む → 古い端末の `baseRevision` が合ってしまう）ため。読む・一覧・スロットの数は `deleted = 0` の行だけを見る。墓石は使ったことのあるスロットの数だけ残る（1 プレイヤー・1 ゲームで、使ったスロットの名前の数まで。大きさは 0）。
 - 主キーが「ゲーム・プレイヤー・スロット」なので、一覧（§3）は主キーの頭で引ける。索引を足さない。
 - `INSERT OR IGNORE` と `IF NOT EXISTS` だけなので、2 回当てても壊れない（`マイグレーションを2回当ててもデータは壊れない` は変わらない）。
 
@@ -118,7 +120,7 @@ INSERT OR IGNORE INTO game_modules (game_id, module) SELECT game_id, 'saves' FRO
 | 名前 | 値 | 理由 |
 | --- | --- | --- |
 | `MAX_SAVE_BYTES` | 65,536（64 KiB） | §10 の決めること 2 |
-| `MAX_REQUEST_BYTES` | `MAX_SAVE_BYTES * 4`（256 KiB） | 本文を読む前に断る上限。JSON の文字列の逃がし（`\"`・`\uXXXX`）で `data` が膨らむ分を見込む |
+| `MAX_REQUEST_BYTES` | `MAX_SAVE_BYTES * 6 + 1024`（394,240 バイト） | 本文を読む前に断る上限。JSON の文字列の逃がしで `data` が膨らむ最悪（制御文字の 1 バイトが `\u00XX` の 6 バイト）と、ほかの欄の分を見込む。これより大きい本文の `data` は必ず `MAX_SAVE_BYTES` を超えるので、正しいセーブを 413 にしない |
 | `MAX_SLOTS` | 10（1 プレイヤー・1 ゲームあたり） | §10 の決めること 5 |
 
 ### モジュールのファイル（`src/modules/saves/`）
@@ -150,7 +152,7 @@ INSERT OR IGNORE INTO game_modules (game_id, module) SELECT game_id, 'saves' FRO
 応答（200）:
 
 ```json
-{"gameId":"demo-rpg","slotId":"auto","revision":1,"formatVersion":1,"checksum":"…","size":23,"updatedAt":"2026-10-30T12:00:00.000Z"}
+{"gameId":"demo-rpg","slotId":"auto","revision":1,"formatVersion":1,"checksum":"…","size":22,"updatedAt":"2026-10-30T12:00:00.000Z"}
 ```
 
 検査の順（上から。最初に当たったもので返す）:
@@ -176,28 +178,31 @@ INSERT OR IGNORE INTO game_modules (game_id, module) SELECT game_id, 'saves' FRO
 
 書き込みの SQL（1 つの文で、比べることと書くことを同時にする。D1 の問い合わせは 1 つずつ順に動くので、文の中は割り込まれない）:
 
-- `baseRevision = 0`（初めて）:
+- `baseRevision = 0`（初めて。行が無いか、墓石の行）:
 
   ```sql
   INSERT INTO saves (game_id, player_id, slot_id, revision, format_version, data, checksum, size)
   SELECT ?, ?, ?, 1, ?, ?, ?, ?
-  WHERE (SELECT COUNT(*) FROM saves WHERE game_id = ? AND player_id = ?) < ?   -- MAX_SLOTS（V2。V1 は WHERE true）
-  ON CONFLICT (game_id, player_id, slot_id) DO NOTHING
+  WHERE (SELECT COUNT(*) FROM saves WHERE game_id = ? AND player_id = ? AND deleted = 0) < ?   -- MAX_SLOTS（V2。V1 は WHERE true）
+  ON CONFLICT (game_id, player_id, slot_id) DO UPDATE SET
+    revision = saves.revision + 1, deleted = 0, format_version = excluded.format_version, data = excluded.data,
+    checksum = excluded.checksum, size = excluded.size, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+  WHERE saves.deleted = 1
   RETURNING revision, updated_at
   ```
 
-  行が返らなければ、そのスロットの行があるかを引き、あれば 409 `SAVE_CONFLICT`、無ければ 409 `SLOT_LIMIT_EXCEEDED`（V2）。
+  墓石の行に書き直すときはリビジョンを墓石の次へ進める（1 に戻さない。§2）。生きている行があれば `DO UPDATE` の `WHERE` で何もしない。行が返らなければ、そのスロットに `deleted = 0` の行があるかを引き、あれば 409 `SAVE_CONFLICT`、無ければ 409 `SLOT_LIMIT_EXCEEDED`（V2）。V1 には墓石が無い（消す API が無い）ので、`DO UPDATE` に当たることは無いが、V2 で SQL を変えずに済むよう V1 から同じ文にする。
 
 - `baseRevision >= 1`:
 
   ```sql
   UPDATE saves SET revision = revision + 1, format_version = ?, data = ?, checksum = ?, size = ?,
     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-  WHERE game_id = ? AND player_id = ? AND slot_id = ? AND revision = ?
+  WHERE game_id = ? AND player_id = ? AND slot_id = ? AND revision = ? AND deleted = 0
   RETURNING revision, updated_at
   ```
 
-  行が返らなければ 409 `SAVE_CONFLICT`（リビジョンが違う・スロットに行が無い、のどちらも）。
+  行が返らなければ 409 `SAVE_CONFLICT`（リビジョンが違う・スロットに行が無い・消されている、のどれも）。
 
 - `RETURNING` を `.all()` で受けるので、`src/core/env.ts` の `Statement` の型を変えない。D1 が `RETURNING` を通すかは V1 の L2 の試験（Miniflare の D1）で確かめる。通らなければ `run()` の後に `SELECT` で引く形に設計を直してから実装する（design-cycle §3）。
 
@@ -206,26 +211,26 @@ INSERT OR IGNORE INTO game_modules (game_id, module) SELECT game_id, 'saves' FRO
 応答（200）: `PUT` の応答の欄に `data` を足したもの。
 
 ```json
-{"gameId":"demo-rpg","slotId":"auto","revision":1,"formatVersion":1,"data":"{\"hp\":30,\"map\":\"town\"}","checksum":"…","size":23,"updatedAt":"2026-10-30T12:00:00.000Z"}
+{"gameId":"demo-rpg","slotId":"auto","revision":1,"formatVersion":1,"data":"{\"hp\":30,\"map\":\"town\"}","checksum":"…","size":22,"updatedAt":"2026-10-30T12:00:00.000Z"}
 ```
 
-検査の順: 1 ルート（404）→ 2 `requireLocalWrite`（403。§10 の決めること 8）→ 3 `requireAuth`（401）→ 4 `gameId`（400）→ 5 トークンの `g`（403）→ 6 `requireGame(…, 'saves', …)`（404）→ 7 `SELECT … WHERE game_id = ? AND player_id = ? AND slot_id = ?`。行が無ければ 404 `NOT_FOUND`（`Save not found`）。
+検査の順: 1 ルート（404）→ 2 `requireLocalWrite`（403。§10 の決めること 8）→ 3 `requireAuth`（401）→ 4 `gameId`（400）→ 5 トークンの `g`（403）→ 6 `requireGame(…, 'saves', …)`（404）→ 7 `SELECT … WHERE game_id = ? AND player_id = ? AND slot_id = ? AND deleted = 0`。行が無ければ 404 `NOT_FOUND`（`Save not found`）。
 
 ### `GET /v1/saves?gameId=demo-rpg`（V2）
 
-自分（トークンの `p`）のスロットのメタデータの一覧。`data` は入れない（一覧を軽くする）。並びは `slot_id` の昇順。最大 `MAX_SLOTS` 件なのでページングしない。
+自分（トークンの `p`）のスロットのメタデータの一覧。`data` は入れない（一覧を軽くする）。`deleted = 0` の行だけ。並びは `slot_id` の昇順。最大 `MAX_SLOTS` 件なのでページングしない。
 
 ```json
-{"gameId":"demo-rpg","items":[{"slotId":"auto","revision":3,"formatVersion":1,"checksum":"…","size":23,"updatedAt":"…"}]}
+{"gameId":"demo-rpg","items":[{"slotId":"auto","revision":3,"formatVersion":1,"checksum":"…","size":22,"updatedAt":"…"}]}
 ```
 
 検査の順は `GET /v1/saves/{slotId}` の 1〜6 と同じ。セーブが 1 つも無ければ 200 と空の `items`。
 
 ### `DELETE /v1/saves/{slotId}?gameId=demo-rpg&baseRevision=3`（V2）
 
-- 検査の順: 1 ルート → 2 `requireLocalWrite` → 3 `requireAuth` → 4 `gameId` → 5 トークンの `g` → 6 `parseRevision(baseRevision)` が 1 以上の整数（400 `INVALID_ARGUMENT`）→ 7 `requireGame` → 8 `DELETE FROM saves WHERE game_id = ? AND player_id = ? AND slot_id = ? AND revision = ? RETURNING slot_id`。
-- 行が返らなければ、そのスロットの行があれば 409 `SAVE_CONFLICT`、無ければ 404 `NOT_FOUND`（`Save not found`）。
-- 応答（200）: `{"ok":true,"gameId":"demo-rpg","slotId":"auto"}`。消した後は、同じスロットに `baseRevision: 0` で書き直せる（リビジョンは 1 からやり直す）。
+- 検査の順: 1 ルート → 2 `requireLocalWrite` → 3 `requireAuth` → 4 `gameId` → 5 トークンの `g` → 6 `parseRevision(baseRevision)` が 1 以上の整数（400 `INVALID_ARGUMENT`）→ 7 `requireGame` → 8 墓石にする `UPDATE saves SET deleted = 1, data = '', checksum = '', size = 0, revision = revision + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE game_id = ? AND player_id = ? AND slot_id = ? AND revision = ? AND deleted = 0 RETURNING slot_id`（行は消さない。§2）。
+- 行が返らなければ、そのスロットに `deleted = 0` の行があれば 409 `SAVE_CONFLICT`、無ければ（行が無い・墓石）404 `NOT_FOUND`（`Save not found`）。
+- 応答（200）: `{"ok":true,"gameId":"demo-rpg","slotId":"auto"}`。消した後は、`GET` が 404・一覧に出ない・スロットの数に数えない。同じスロットに `baseRevision: 0` で書き直せ、リビジョンは墓石の次へ進む（1 に戻さない）。だから消す前のリビジョンを覚えた古い端末の書き込みは 409 になる。
 
 ### 新しいエラーコード（§10 の決めること 6）
 
@@ -243,7 +248,7 @@ V1:
 
 - `docs/api-contract.md`: `## PUT /v1/saves/{slotId}?gameId=demo-rpg` と `## GET /v1/saves/{slotId}?gameId=demo-rpg` の節を足す（上の要求・応答・トークンが要ること・`APP_ENV=local` の時だけ通ること・409 のときは読み直すこと）。「現PoCの代表コード」の一覧を 10 個に置き換える。「将来予定」の表の `PUT/GET` `/v1/saves/{slot}` の行を消す（実装した行を将来予定に残さない）。
 - `openapi/rpg-online.v1.json`: 操作 `putSave`・`getSave`・`SaveWrite`・`SaveMeta`・`Save` を足す。`security` は `bearerToken`。`ErrorCode` に `SAVE_CONFLICT`・`PAYLOAD_TOO_LARGE` を足す。
-- `docs/guides/working/api-schema-design.md` §4 の試験の名前 `スキーマのファイルはOpenAPI 3.1で5つの操作を持つ`・`スキーマのErrorCodeの列挙は8つのエラーコードと一致する` を、§7 の V1 の名前に置き換える。`docs/guides/working/core-foundation-design.md`・`docs/guides/working/account-design.md` が同じ名前を挙げている所は、その文書の束の記録（いつの名前か）なので変えない。
+- `docs/guides/working/api-schema-design.md` §4 の試験の名前 `スキーマのファイルはOpenAPI 3.1で5つの操作を持つ`・`スキーマのErrorCodeの列挙は8つのエラーコードと一致する` を、§7 の V1 の名前に置き換える。`docs/guides/working/core-foundation-design.md` §4 の M1・M3 の行が挙げる `モジュールの一覧はannouncementsとrankingsでルートが重ならない`・`demo-rpgはannouncementsとrankingsの両方を使う設定で登録される` を、§7 の V1 の後を継ぐ名前に置き換え、`test/modules.test.ts`・`test/game-modules.test.ts` の頭書きの「名前の正」に、置き換えた試験はこの設計書 §7 が正だと書き足す（試験と正の文書を食い違わせない。CLAUDE.md 原則 5）。`docs/guides/working/account-design.md` の §6・§9 の名前（`…5つの操作を持つ`・`…8つのエラーコードと一致する`）は、A1・A2 の確認コマンドの記録なので変えない。
 - `docs/guides/working/architecture.md` の「4. データ境界」に `saves` を足す（作っている表の一覧を置き換える）。
 
 V2:
@@ -285,17 +290,24 @@ V2:
 - 自分の版より**新しい**ものを読んだクライアント（古い版のゲーム）は、書かずに更新を促す（古い形で上書きしない）。サーバーが返すのはそのための `formatVersion` だけ。
 - 一覧（V2）に `formatVersion` を入れるので、本体を読まずに移し替えの要否が分かる。
 
-## 6. CLI モック（`scripts/cli-mock.mjs`）の変え方（V2）
+## 6. CLI モック（`scripts/cli-mock.mjs`）の変え方（V1・V2）
 
-API を変えたら CLI モックも合わせる決まり（CLAUDE.md）。V1 で書く・読むを足し、V2 で一覧・消すを足して API が揃ってから、V2 で 1 回だけ変える（V1 で足した API を CLI モックが使わなくても、いまの通しの確かめは通る）。
+API を変えたら CLI モックも合わせる決まり（CLAUDE.md）なので、**API を足す束ごとに、その束で足した API を CLI モックに足す**。
 
-1. `scripts/cli-requests.mjs` に `SMOKE_SLOT_ID = 'cli-smoke'` と `saveWrite(data, checksum, baseRevision)`（`{ formatVersion: 1, data, checksum, baseRevision }` を返す）と `saveData()`（`JSON.stringify({ hp: 30, map: 'town' })`）を足し、`scripts/cli-requests.d.mts` に型を足す。チェックサムは Node.js と Workers のランタイムの両方で動く `crypto.subtle` で、`async function sha256Hex(text)` として同じファイルに置く（Node.js の API を使わない決まりのまま）。いまの `scoreSubmission`・`guestRequest`・`authHeaders` は変えない。
-2. `scripts/cli-mock.mjs` は、いまのスコアの流れの後に、同じゲストのトークンで **`PUT /v1/saves/cli-smoke?gameId=demo-rpg`（`baseRevision: 0`）→ `GET /v1/saves/cli-smoke?gameId=demo-rpg` で `data`・`checksum` が同じことを確かめる → `GET /v1/saves?gameId=demo-rpg` に `cli-smoke` があることを確かめる** を足す。ゲストは毎回新しく発行するので、`baseRevision: 0` が毎回通る。`data` は画面に出さない（`size` と `revision` だけ出す）。
-3. `npm run cli:smoke` は `npm run dev`（`APP_ENV=local`・既定の鍵）に対して通る。`npm run db:migrate:local` で `0005` が当たっていることが前提。
+V1（書く・読む）:
+
+1. `scripts/cli-requests.mjs` に `SMOKE_SLOT_ID = 'cli-smoke'` と `saveData()`（`JSON.stringify({ hp: 30, map: 'town' })`）と `saveWrite(data, checksum, baseRevision)`（`{ formatVersion: 1, data, checksum, baseRevision }` を返す）を足し、`scripts/cli-requests.d.mts` に型を足す。チェックサムは Node.js と Workers のランタイムの両方で動く `crypto.subtle` で、`async function sha256Hex(text)` として同じファイルに置く（Node.js の API を使わない決まりのまま）。いまの `scoreSubmission`・`guestRequest`・`authHeaders` は変えない。
+2. `scripts/cli-mock.mjs` は、いまのスコアの流れの後に、同じゲストのトークンで **`PUT /v1/saves/cli-smoke?gameId=demo-rpg`（`baseRevision: 0`）→ `GET /v1/saves/cli-smoke?gameId=demo-rpg` で `data`・`checksum`・`revision` が同じことを確かめる** を足す。ゲストは毎回新しく発行するので、`baseRevision: 0` が毎回通る。`data` は画面に出さない（`size` と `revision` だけ出す）。
+
+V2（一覧・消す）:
+
+3. `scripts/cli-mock.mjs` の V1 の流れの後に、**`GET /v1/saves?gameId=demo-rpg` に `cli-smoke` があることを確かめる → `DELETE /v1/saves/cli-smoke?gameId=demo-rpg&baseRevision=<読んだ revision>` → `GET /v1/saves/cli-smoke` が 404** を足す。
+
+どちらの束も、`npm run cli:smoke` は `npm run dev`（`APP_ENV=local`・既定の鍵）に対して通る。`npm run db:migrate:local` で `0005` が当たっていることが前提。
 
 ## 7. 試験の名前の表
 
-置き場は V1 が `test/saves.test.ts`、V2 が `test/saves-manage.test.ts`。ただし §8 で置き換える試験の後を継ぐものは、置き換える試験と同じファイルに置く（スキーマは手伝いの `expectConforms` がある `test/schema-conformance.test.ts`、機能の一覧は `test/modules.test.ts`、機能の設定は `test/game-modules.test.ts`）。トークンは `test/support/auth.ts` の `bearer`・`tokenFor` で作る（変えない）。テストの名前は表の文そのまま `it('…')` に書く。名前を変えるときは、この表も同じコミットで直す（`docs/guides/procedures/node-test-procedure.md`）。
+置き場は V1 が `test/saves.test.ts`、V2 が `test/saves-manage.test.ts`。ただし、§8 で置き換える試験の後を継ぐものは置き換える試験と同じファイルに置く（機能の一覧は `test/modules.test.ts`、機能の設定は `test/game-modules.test.ts`）。スキーマに合うかを見る試験（`セーブの読み書きの応答はスキーマに合う`・`セーブの一覧と削除の応答はスキーマに合う` と、操作とエラーコードの数の試験）は、手伝いの `expectConforms` がある `test/schema-conformance.test.ts` に置く。CLI モックの流れの試験（`CLIモックと同じ流れで…`）は、互換の試験と並べて `test/failure-server.test.ts` に置く。トークンは `test/support/auth.ts` の `bearer`・`tokenFor` で作る（変えない）。テストの名前は表の文そのまま `it('…')` に書く。名前を変えるときは、この表も同じコミットで直す（`docs/guides/procedures/node-test-procedure.md`）。
 
 | 束 | テストの名前 | 入力 | 期待する結果 | 層 |
 | --- | --- | --- | --- | --- |
@@ -318,16 +330,18 @@ API を変えたら CLI モックも合わせる決まり（CLAUDE.md）。V1 �
 | V1 | `本番の設定ではセーブの読み書きもNOT_READY_FOR_PRODUCTIONの403を返す` | `APP_ENV` が `local` でない env で、正しいトークンの `PUT`・`GET` | どちらも 403・`NOT_READY_FOR_PRODUCTION`（401 でも 200 でもない）・行が増えない | L2 |
 | V1 | `savesを使わない設定のゲームのセーブはNOT_FOUNDの404を返し書かない` | `registerGame(db, 'no-saves', ['rankings'])` と、そのゲームのトークンで `PUT`・`GET` | 404・`NOT_FOUND`（`Feature not enabled for this game`）・行が増えない | L2 |
 | V1 | `形の版はサーバーが解釈せず書いた値をそのまま返す` | `formatVersion: 7` で書き、`formatVersion: 3` で書き直す（リビジョンは合わせる） | どちらも 200。`GET` の `formatVersion` が 3 | L2 |
-| V1 | `ゲームの行を消すとそのゲームのセーブも消える` | `other-rpg` にセーブを書き、`games` から `other-rpg` を消す | `saves` に `other-rpg` の行が残らない。`demo-rpg` の行は残る | L2 |
+| V1 | `ゲームの行を消すとそのゲームのセーブも消える` | `registerGame(db, 'other-rpg', ['saves'])` で登録し（既定の機能は `saves` を含まない）、`other-rpg` のトークンでセーブを書き、`games` から `other-rpg` を消す | `saves` に `other-rpg` の行が残らない。`demo-rpg` の行は残る | L2 |
 | V1 | `セーブの書き込みでDBが失敗するとINTERNAL_ERRORの500を返し中身を漏らさない` | `prepare` が投げる偽の DB の env で、正しいトークンの `PUT` | 500・`INTERNAL_ERROR`・本文に SQL・`data`・トークンが入らない | L2 |
 | V1 | `セーブの読み書きの応答はスキーマに合う` | 200（`PUT`・`GET`）・400・401・403・404・409・413 を起こす | 本文が `putSave`・`getSave` の応答のスキーマに合い、`x-error-codes` にコードがある | L2 |
 | V1 | `スキーマのファイルはOpenAPI 3.1で7つの操作を持つ` | `openapi/rpg-online.v1.json` | 操作が `getHealth`・`getRanking`・`getSave`・`issueGuest`・`listAnnouncements`・`putSave`・`submitScore`・`$ref` が全部解ける（§8 で置き換える試験の後を継ぐ） | L1 |
 | V1 | `スキーマのErrorCodeの列挙は10個のエラーコードと一致する` | `ErrorCode` | いまの 8 つと `SAVE_CONFLICT`・`PAYLOAD_TOO_LARGE`（§8 で置き換える試験の後を継ぐ） | L1 |
 | V1 | `demo-rpgはannouncementsとrankingsとsavesを使う設定で登録される` | `game_modules` の `demo-rpg` の行 | `['announcements', 'rankings', 'saves']`（§8 で置き換える試験の後を継ぐ） | L2 |
 | V1 | `モジュールの一覧はannouncementsとrankingsとsavesでルートが重ならない` | `modules` | 名前が 3 つ・`メソッド パターン` が重ならない・どれも `/health` に当たらない（§8 で置き換える試験の後を継ぐ） | L1 |
+| V1 | `CLIモックと同じ流れでゲストのセーブを書いて読み直せる` | `scripts/cli-requests.mjs` の `guestRequest`・`saveData`・`sha256Hex`・`saveWrite`・`SMOKE_SLOT_ID` でゲストを発行し、`PUT`→`GET`（`scripts/cli-mock.mjs` の V1 の流れ。§6） | 200・`revision: 1`・`GET` の `data`・`checksum`・`revision` が送ったもの | L2 |
 | V2 | `セーブの一覧は自分のスロットのメタデータだけをdata無しで返す` | `p1` が `a`・`b`、`p2` が `c` に書き、`p1` のトークンで `GET /v1/saves?gameId=demo-rpg` | 200・`items` が `a`・`b` の順で、`p2` の `c` が無い。各行に `data` が無く、`revision`・`formatVersion`・`checksum`・`size`・`updatedAt` がある | L2 |
 | V2 | `セーブの一覧は書いたことの無いプレイヤーには空の一覧を返す` | 何も書かずに一覧 | 200・`items: []` | L2 |
-| V2 | `リビジョンが合う削除はスロットを消して同じスロットに前のリビジョン0で書き直せる` | リビジョン 2 のスロットを `baseRevision=2` で `DELETE`、続けて `baseRevision: 0` で `PUT` | 200・`ok: true`。その後の `PUT` が 200・`revision: 1` | L2 |
+| V2 | `リビジョンが合う削除はスロットを消して同じスロットに前のリビジョン0で書き直せる` | リビジョン 2 のスロットを `baseRevision=2` で `DELETE`、続けて `baseRevision: 0` で `PUT` | 200・`ok: true`。消した後の `GET` が 404・一覧に出ない。その後の `PUT` が 200 で `revision` が 4（墓石の 3 の次。1 に戻らない） | L2 |
+| V2 | `消してから書き直したスロットへの消す前のリビジョンからの書き込みはSAVE_CONFLICTの409を返す` | リビジョン 2 のスロットを `baseRevision=2` で消し、`baseRevision: 0` で書き直して、さらに 1 回書く（リビジョン 5）。そのあと消す前に覚えた `baseRevision: 2`・`3` で `PUT` | どちらも 409・`SAVE_CONFLICT`・`GET` の `data` と `revision` が変わらない（消して書き直してもリビジョンが戻らないので、古い端末の上書きが黙って通らない） | L2 |
 | V2 | `リビジョンが古い削除はSAVE_CONFLICTの409を返し消さない` | リビジョン 2 のスロットを `baseRevision=1` で `DELETE` | 409・`SAVE_CONFLICT`・`GET` が 200 のまま | L2 |
 | V2 | `書いていないスロットの削除はNOT_FOUNDの404を返す` | 空のスロットを `baseRevision=1` で `DELETE`・`baseRevision` 無し・`baseRevision=0` | 404・`NOT_FOUND`・400・400（`INVALID_ARGUMENT`） | L2 |
 | V2 | `スロットの数の上限を超える新しいスロットへの書き込みはSLOT_LIMIT_EXCEEDEDの409を返す` | `MAX_SLOTS` 個のスロットを書いた後、新しいスロットに `baseRevision: 0` | 409・`SLOT_LIMIT_EXCEEDED`・行が増えない。別のプレイヤーは同じゲームで書ける | L2 |
@@ -337,9 +351,9 @@ API を変えたら CLI モックも合わせる決まり（CLAUDE.md）。V1 �
 | V2 | `セーブの一覧と削除の応答はスキーマに合う` | 200（一覧・削除）・400・404・409（`SAVE_CONFLICT`・`SLOT_LIMIT_EXCEEDED`）を起こす | 本文が `listSaves`・`deleteSave`・`putSave` の応答のスキーマに合い、`x-error-codes` にコードがある | L2 |
 | V2 | `スキーマのファイルはOpenAPI 3.1で9つの操作を持つ` | `openapi/rpg-online.v1.json` | V1 の 7 つと `deleteSave`・`listSaves`（V1 の 7 つの操作の試験の後を継ぐ） | L1 |
 | V2 | `スキーマのErrorCodeの列挙は11個のエラーコードと一致する` | `ErrorCode` | V1 の 10 個と `SLOT_LIMIT_EXCEEDED`（V1 の 10 個の試験の後を継ぐ） | L1 |
-| V2 | `CLIモックと同じ流れでゲストのセーブを書いて読み直せる` | `scripts/cli-requests.mjs` の `guestRequest`・`saveData`・`sha256Hex`・`saveWrite`・`SMOKE_SLOT_ID` でゲストを発行し、`PUT`→`GET`→一覧 | 200・`revision: 1`・`GET` の `data`・`checksum` が送ったもの・一覧に `cli-smoke` がある（`test/failure-server.test.ts` に置く） | L2 |
+| V2 | `CLIモックと同じ流れでセーブの一覧に出たスロットを消せる` | 同じ関数でゲストを発行して `PUT` した後、一覧→`DELETE`→`GET`（`scripts/cli-mock.mjs` の V2 の流れ。§6） | 一覧に `cli-smoke` がある・`DELETE` が 200・その後の `GET` が 404 | L2 |
 
-数（行）: V1 が 26・V2 が 13。どれも、いまの `test/` の名前と重ならない（2026-10-30 に `test/*.ts` の `it('…')` と突き合わせた）。
+数（行）: V1 が 27・V2 が 14。どれも、いまの `test/` の名前と重ならない（2026-10-30 に `test/*.ts` の `it('…')` と突き合わせた）。
 
 ## 8. 挙動が変わる既存の試験と、直す手続き
 
@@ -350,7 +364,7 @@ API を変えたら CLI モックも合わせる決まり（CLAUDE.md）。V1 �
 | `スキーマのファイルはOpenAPI 3.1で5つの操作を持つ`（`test/schema-conformance.test.ts`） | V1 | 操作が 7 つになる | 消して、§7 の `スキーマのファイルはOpenAPI 3.1で7つの操作を持つ` に置き換える。V2 で同じ手続きで `…9つの操作を持つ` に置き換える |
 | `スキーマのErrorCodeの列挙は8つのエラーコードと一致する`（同上） | V1 | コードが 10 個になる | 消して、§7 の `…10個のエラーコードと一致する` に置き換える。V2 で `…11個のエラーコードと一致する` に置き換える |
 | `エラーの応答はスキーマに書いた状態とエラーコードの組で返る`（同上） | V1・V2 | 試験の中の `errorCodes` と、起こしたコードの集合が一致するかを見ているので、コードを足すと足りなくなる | 名前を変えず、`errorCodes` に足したコードを足し、`putSave`（・`deleteSave`）でそのコードを起こす行を足す。いまの行と期待は変えない（見る範囲は増える） |
-| `今のCLIモックと同じ形の要求を受け付ける`（`test/failure-server.test.ts`） | V1・V2 | **変わらない**。スコアの流れ（ゲストの発行 → トークン付きの投稿 → `GET`）は V1・V2 で変えない。`scripts/cli-requests.mjs` の `guestRequest`・`authHeaders`・`scoreSubmission` も変えない | 名前も中身も変えない。CLI モックに足すセーブの流れは、§7 の V2 の新しい試験 `CLIモックと同じ流れでゲストのセーブを書いて読み直せる` で見る（互換の試験を広げて中身を変えるより、黙って弱める道を作らない） |
+| `今のCLIモックと同じ形の要求を受け付ける`（`test/failure-server.test.ts`） | V1・V2 | **変わらない**。スコアの流れ（ゲストの発行 → トークン付きの投稿 → `GET`）は V1・V2 で変えない。`scripts/cli-requests.mjs` の `guestRequest`・`authHeaders`・`scoreSubmission` も変えない | 名前も中身も変えない。CLI モックに足すセーブの流れは、§7 の新しい試験 `CLIモックと同じ流れでゲストのセーブを書いて読み直せる`（V1）・`CLIモックと同じ流れでセーブの一覧に出たスロットを消せる`（V2）で見る（互換の試験を広げて中身を変えるより、黙って弱める道を作らない） |
 | `マイグレーションを2回当ててもデータは壊れない` | V1 | 変わらない（`0005` は `IF NOT EXISTS` と `INSERT OR IGNORE` だけ） | 変えない |
 | `機能の設定はゲームごとで他のゲームの設定に引きずられない` ほか、`registerGame` で登録するゲームの試験 | V1 | 変わらない（`test/support/games.ts` の既定の機能は `announcements`・`rankings` のままで、試験のゲームは `saves` を使わない） | 変えない（`test/support/games.ts` も変えない） |
 
@@ -379,7 +393,7 @@ API を変えたら CLI モックも合わせる決まり（CLAUDE.md）。V1 �
 
 | # | 決めること | 案 | 推し |
 | --- | --- | --- | --- |
-| 1 | 置き場 | A: **D1 の `saves` の行に本体（`data`）とメタデータを両方持つ**。B: 本体を R2 に置き、D1 にはメタデータ（リビジョン・チェックサム・R2 の鍵）だけ。`wrangler.jsonc` に `"r2_buckets": [{ "binding": "SAVES", "bucket_name": "rpg-online-saves" }]`、`Env` に `SAVES: R2Bucket` を足す（この Issue では変えない）。C: R2 だけ（メタデータは R2 のオブジェクトの `customMetadata`・競合は `onlyIf` の条件つきの PUT） | **A**。リビジョンの比べと書き込みを 1 つの SQL の文でできる（§3）。B は R2 に置いてから D1 を書く 2 段になり、途中で落ちると R2 に孤児が残る（掃除の仕組みが要る）。`wrangler.jsonc` を変え、試験の環境に R2 のバインドを足す必要がある。C は一覧に全オブジェクトの列挙が要り、リビジョンを整数で持てない。A の弱みは D1 の大きさ（Paid で 10 GB）で、64 KiB × 10 スロット × 15,000 人ほどで埋まる。そこに近づいたら B に移す（§9。API は変えない） |
+| 1 | 置き場 | A: **D1 の `saves` の行に本体（`data`）とメタデータを両方持つ**。B: 本体を R2 に置き、D1 にはメタデータ（リビジョン・チェックサム・R2 の鍵）だけ。`wrangler.jsonc` に `"r2_buckets": [{ "binding": "SAVES", "bucket_name": "rpg-online-saves" }]`、`Env` に `SAVES: R2Bucket` を足し、`npm run cf-typegen` で `worker-configuration.d.ts` を作り直す（この Issue では変えない）。C: R2 だけ（メタデータは R2 のオブジェクトの `customMetadata`・競合は `onlyIf` の条件つきの PUT） | **A**。リビジョンの比べと書き込みを 1 つの SQL の文でできる（§3）。B は R2 に置いてから D1 を書く 2 段になり、途中で落ちると R2 に孤児が残る（掃除の仕組みが要る）。`wrangler.jsonc` を変え、試験の環境に R2 のバインドを足す必要がある。C は一覧に全オブジェクトの列挙が要り、リビジョンを整数で持てない。A の弱みは D1 の大きさ（Paid で 10 GB）で、64 KiB × 10 スロット × 15,000 人ほどで埋まる。そこに近づいたら B に移す（§9。API は変えない） |
 | 2 | 大きさの上限 | A: **`data` を 64 KiB（65,536 バイト）まで**。B: 1 MB（D1 の 1 行 2,000,000 バイトの半分）。C: 上限を決めず D1 に任せる | **A**。D1 の「SQL の文の長さ 100,000 バイト」に `bind` の値が数えられるかが要確認（§1）で、数えられても 64 KiB なら収まる。上限を**上げる**のは互換を壊さない（通っていた要求は通る）が、下げると壊すので、小さく始める。いまのクライアントは CLI モックだけで、RPG の進行の状態は 64 KiB に収まる見込み（要確認: 実際のゲームの大きさ。Phase 3 で測る）。B は要確認が外れると本番でだけ落ちる。C は 2 MB 近い本体で Worker のメモリと D1 の容量を圧迫する |
 | 3 | 本体の形 | A: JSON の値（オブジェクトなど）をそのまま `data` に入れる。B: base64 の文字列だけ（何でも入る）。C: **文字列（UTF-8）。中身はゲームが決める（JSON の文字列でも、ゲームが base64 にしたバイナリでもよい）** | **C**。サーバーは中身を解釈しない（ADR 0002）。A はサーバーが JSON として読み直して書き出すので、エンジンごとに JSON の書き出し方（欄の順・数の書き方）が違うと、送った物と返る物のバイト列が変わり、チェックサムが合わなくなる。B は JSON のセーブまで base64 にして 1.33 倍に膨らみ、試験と CLI で中身が読めない。C は「送った文字列がそのまま返る」ので、チェックサムが端から端まで同じになる |
 | 4 | チェックサムの算法と、誰が計算するか | A: **SHA-256。クライアントが計算して送り、サーバーが `crypto.subtle.digest`（Workers の Web Crypto。パッケージを足さない）で計算し直して違えば 400**。読むときは保存した値を返す。B: サーバーだけが計算して返す（送らなくてよい）。C: CRC32 などの軽い算法（パッケージか自作の表が要る）。D: パッケージ（例: `hash-wasm`）で xxHash など | **A**。途中で切れた・壊れた本体を保存しない（B は壊れた物をそのまま保存して、正しいチェックサムを付けてしまう）。SHA-256 は Web Crypto・Unity・ブラウザに標準で入っている（UE は要確認。§5）。C・D はパッケージか自作が要り、改ざんの検出にもならない。A のチェックサムは「壊れていないか」の確かめで、改ざんの防止ではない（本人のトークンがあれば中身は自由に書ける） |
@@ -388,8 +402,8 @@ API を変えたら CLI モックも合わせる決まり（CLAUDE.md）。V1 �
 | 7 | プレイヤーの指し方 | A: **トークンの `p` だけで決め、要求に `playerId` の欄を作らない**。B: スコアの投稿と同じく `playerId` を本文か問い合わせに書き、トークンと違えば 403 | **A**。他のプレイヤーのセーブを指す方法そのものが無くなる（読む API で問い合わせに `playerId` を書くと、試し打ちで存在を探れる）。スコアの投稿は本文の形を変えないために `playerId` を残した（`account-design.md` の決めること 6）が、セーブは新しい API なので残す理由が無い。ゲームは他の API と同じく `gameId` で受けてトークンと比べる（`requireGame` に渡す名前を揃える） |
 | 8 | 読む API（`GET`・一覧）にも `APP_ENV` の守りを掛けるか | A: **掛ける**（`local` でなければ 403 `NOT_READY_FOR_PRODUCTION`）。B: 読むのはトークンだけで通す | **A**。セーブはプレイヤーの非公開のデータで、トークンを出すゲストの発行も `local` だけ（`account-design.md` §3）。守りを外す条件（`account-design.md` §10）を満たすまで、セーブの全部を「本番では使えない」にそろえるほうが、どこに穴があるかを考えずに済む。外すときは書き込みと一緒に外す。B は `local` でない環境で鍵（`AUTH_TOKEN_SECRET`）が設定されると、読む口だけが先に開く |
 | 9 | 形式の版の扱い | A: **サーバーは比べない・弾かない。保存して返すだけ。移し替えと「新しすぎる版を読んだら書かない」はクライアントの仕事**（§5）。B: いまより小さい `formatVersion` の書き込みを 409 で弾く | **A**。版の意味（どこから互換か）はゲームが決めることで、サーバーが数の大小で決めると、版を戻したいゲーム（不具合のあった版の取り消し）が書けなくなる。古い端末の上書きは、まずリビジョン（読んでから書くまでに別の端末が書けば 409）で防げる。B は後から足せる（§9） |
-| 10 | 消す API | A: **作る（V2。`DELETE` に `baseRevision` を付け、合わなければ 409）**。B: 作らない | **A**。スロットに上限（決めること 5）を付けるので、消せないと埋まったスロットを空けられない。リビジョンを付けるので、別の端末が書いたばかりのセーブを古い画面から消す事故を防げる |
-| 11 | 束の分け方 | A: **V1 で書く・読む（とスキーマ・機能の設定）、V2 で一覧・消す・スロットの上限・CLI モック**。B: 1 つの束で全部。C: V1 で CLI モックも変える | **A**。V1 だけで「書いて読める・競合が 409・他人に触れない」のゴールの芯が確かめられ、1 つの Issue の差分が小さい。スロットの上限は消す API と一緒でないと使えない（決めること 10）ので V2 に寄せる。CLI モックは API が揃った V2 で 1 回だけ変える（`account-design.md` の A1・A2 と同じ考え）。B は 1 回の無人の回で 39 本の試験と 2 回の契約の変更になる |
+| 10 | 消す API | A: **作る（V2。`DELETE` に `baseRevision` を付け、合わなければ 409。行は消さず墓石にしてリビジョンを進める）**。B: 作る・行を消してリビジョンを 1 からやり直す。C: 作らない | **A**。スロットに上限（決めること 5）を付けるので、消せないと埋まったスロットを空けられない。リビジョンを付けるので、別の端末が書いたばかりのセーブを古い画面から消す事故を防げる。B は、消す → 書き直す → 同じ数のリビジョンまで進む、の後に、消す前のリビジョンを覚えた端末の書き込みが合ってしまい、黙って上書きする（§2）。墓石は大きさ 0 で、使ったスロットの名前の数しか残らない |
+| 11 | 束の分け方 | A: **V1 で書く・読む（とスキーマ・機能の設定・CLI モックの書いて読む流れ）、V2 で一覧・消す・スロットの上限（と CLI モックの一覧と消す流れ）**。B: 1 つの束で全部。C: CLI モックは V2 でまとめて変える | **A**。V1 だけで「書いて読める・競合が 409・他人に触れない」のゴールの芯が確かめられ、1 つの Issue の差分が小さい。スロットの上限は消す API と一緒でないと使えない（決めること 10）ので V2 に寄せる。CLI モックは CLAUDE.md の「API を変えたらここも合わせる」のとおり、API を足した束で合わせる。B は 1 回の無人の回で 41 本の試験と 2 回の契約の変更になる。C は V1 の間、足した API を CLI モックが使わず、決まりとずれる |
 | 12 | `saves` を `src/modules/` に置き、`game_modules` で切るか | A: **`src/modules/saves/` のモジュールにし、`game_modules` の `saves` の行で使う・使わないを切る。`0005` で既存のゲーム（`demo-rpg` を含む）を使う設定にする**。B: `src/core/` に置き、全部のゲームで使う。C: モジュールにするが `demo-rpg` には行を足さない | **A**。セーブを使わないゲーム（ランキングだけのブラウザゲームなど）があり得るので切れるほうがよい。トークンを確かめる側（`requireAuth`）は core にあるので、モジュールに置いても困らない。`demo-rpg` を使う設定にするので、`demo-rpgはannouncementsとrankingsの両方を使う設定で登録される` と `モジュールの一覧はannouncementsとrankingsでルートが重ならない` を §8 の手続きで置き換える。C は CLI モックの通しの確かめ（ロードマップの完了条件）が `demo-rpg` で通らない |
 
 ## 11. 実装の束
@@ -398,8 +412,8 @@ API を変えたら CLI モックも合わせる決まり（CLAUDE.md）。V1 �
 
 | 束 | 中身 | 前の束 | 既存の試験 | パッケージ |
 | --- | --- | --- | --- | --- |
-| V1 | `migrations/` の新しい `0005_saves.sql`・`src/modules/saves/`（`limits.ts`・`validate.ts`・`checksum.ts`・`index.ts` の `PUT`・`GET /v1/saves/{slotId}`）・`src/modules/index.ts` に `saves`・`src/core/module.ts` の `Route.method` に `PUT`・`DELETE`・§3 の V1 の「契約の変わる所」・§7 の V1 の試験 | A2（`account-design.md`） | §8 の手続きで 4 本を置き換え・1 本の中身を広げる | 足さない |
-| V2 | `GET /v1/saves`・`DELETE /v1/saves/{slotId}`・スロットの上限（`MAX_SLOTS`・`SLOT_LIMIT_EXCEEDED`）・§3 の V2 の「契約の変わる所」・CLI モック（`scripts/cli-mock.mjs`・`scripts/cli-requests.mjs`・`scripts/cli-requests.d.mts`。§6）・§7 の V2 の試験 | V1 | §8 の手続きで 2 本を置き換え・1 本の中身を広げる | 足さない |
+| V1 | `migrations/` の新しい `0005_saves.sql`・`src/modules/saves/`（`limits.ts`・`validate.ts`・`checksum.ts`・`index.ts` の `PUT`・`GET /v1/saves/{slotId}`）・`src/modules/index.ts` に `saves`・`src/core/module.ts` の `Route.method` に `PUT`・`DELETE`・§3 の V1 の「契約の変わる所」・CLI モックの書いて読む流れ（`scripts/cli-mock.mjs`・`scripts/cli-requests.mjs`・`scripts/cli-requests.d.mts`。§6）・§7 の V1 の試験 | A2（`account-design.md`） | §8 の手続きで 4 本を置き換え・1 本の中身を広げる | 足さない |
+| V2 | `GET /v1/saves`・`DELETE /v1/saves/{slotId}`（墓石）・スロットの上限（`MAX_SLOTS`・`SLOT_LIMIT_EXCEEDED`）・§3 の V2 の「契約の変わる所」・CLI モックの一覧と消す流れ（§6）・§7 の V2 の試験 | V1 | §8 の手続きで 2 本を置き換え・1 本の中身を広げる | 足さない |
 
 範囲の外（後の設計書）: §9 の表。
 
@@ -409,29 +423,42 @@ API を変えたら CLI モックも合わせる決まり（CLAUDE.md）。V1 �
 
 `gitClean` は `base` を渡さないと作業ツリーしか見ず、無人の回がコミットした後は変えていても通ってしまう。どの案も先頭の `base` に、**実装の Issue を作るときの main のコミットの SHA** を書き入れ、`gitClean(…, { base })` で比べる（`docs/guides/procedures/issue-goal-setting.md`）。
 
+束は既存のテストのファイル（`test/schema-conformance.test.ts`・`test/modules.test.ts`・`test/game-modules.test.ts`・`test/failure-server.test.ts`）に手を入れるので、そのファイルを `gitClean` で守れない。代わりに、**`base` の `test/*.ts` にあった試験の名前を全部、§8 で置き換える名前を除いて `requireTests` に渡す**（消した・名前を変えた・落ちる試験があれば止まる。`runTests()` は試験を消しても PASS になるため）。中身を広げる `エラーの応答はスキーマに書いた状態とエラーコードの組で返る` は、起こしたコードの集合と `errorCodes` を比べる行が残っているかも見る。
+
 V1:
 
 ```js
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { runTests, requireTests, mustExist, gitTracked, gitClean, check, done } from './scripts/issue-run/check-lib.mjs';
 const base = 'MAIN_SHA'; // 実装の Issue を作るときの main の SHA に書き換える
 const pkg = ['package', 'json'].join('.');
 const read = (p) => (existsSync(p) ? readFileSync(p, 'utf8') : '');
+const namesIn = (src) => [...src.matchAll(/\bit\('([^']+)'/g)].map((m) => m[1]);
 const files = ['migrations/0005_saves.sql', 'src/modules/saves/index.ts', 'src/modules/saves/validate.ts',
   'src/modules/saves/checksum.ts', 'src/modules/saves/limits.ts', 'test/saves.test.ts'];
 mustExist(files);
 gitTracked(files);
 // パッケージを足さない・Web Crypto で SHA-256 を計算する
 check(/crypto\.subtle\.digest/.test(read('src/modules/saves/checksum.ts')), 'チェックサムは Web Crypto の digest で計算する');
-// 守りと認証を通す
+// 守りと認証を通す・消した印の列を V1 で作る
 const mod = read('src/modules/saves/index.ts');
 check(mod.includes('requireLocalWrite') && mod.includes('requireAuth'), 'セーブのルートが APP_ENV の守りとトークンを通す');
 check(/APP_ENV\s*!==\s*'local'/.test(read('src/core/guards.ts')), 'APP_ENV=local の守りが残っている');
-// 置き換えた 4 本が残っていない（§8）・契約を先に直した（§3）
+check(/deleted/.test(read('migrations/0005_saves.sql')), 'saves の表に消した印の列がある（§2）');
+// CLI モックがセーブを書いて読む（§6）
+const mock = read('scripts/cli-mock.mjs') + read('scripts/cli-requests.mjs');
+check(mock.includes('/v1/saves/') && /crypto\.subtle/.test(read('scripts/cli-requests.mjs')), 'CLI モックがセーブを書いて読み、チェックサムを crypto.subtle で計算する');
+// 置き換えた 4 本が残っていない（§8）・残りの既存の試験は全部ある（下の requireTests）
+const replaced = ['demo-rpgはannouncementsとrankingsの両方を使う設定で登録される', 'モジュールの一覧はannouncementsとrankingsでルートが重ならない',
+  'スキーマのファイルはOpenAPI 3.1で5つの操作を持つ', 'スキーマのErrorCodeの列挙は8つのエラーコードと一致する'];
 const all = readdirSync('test').filter((f) => f.endsWith('.ts')).map((f) => readFileSync('test/' + f, 'utf8')).join('\n');
-for (const n of ['demo-rpgはannouncementsとrankingsの両方を使う設定で登録される', 'モジュールの一覧はannouncementsとrankingsでルートが重ならない',
-  'スキーマのファイルはOpenAPI 3.1で5つの操作を持つ', 'スキーマのErrorCodeの列挙は8つのエラーコードと一致する'])
-  check(!all.includes(n), '置き換えた試験が残っていない: ' + n);
+for (const n of replaced) check(!all.includes(n), '置き換えた試験が残っていない: ' + n);
+const baseTests = execSync(`git ls-tree --name-only ${base} test/`, { encoding: 'utf8' }).split('\n').filter((f) => f.endsWith('.ts'))
+  .flatMap((f) => namesIn(execSync(`git show ${base}:${f}`, { encoding: 'utf8' })));
+check(baseTests.length > 0, 'base の試験の名前を読めた');
+check(/expect\(\[\.\.\.seen\]\.sort\(\)\)\.toEqual\(\[\.\.\.errorCodes\]\.sort\(\)\)/.test(read('test/schema-conformance.test.ts')), '起こしたコードとエラーコードの一覧を比べる行が残っている');
+// 契約を先に直した（§3）
 const spec = JSON.parse(read('openapi/rpg-online.v1.json') || '{}');
 check(Boolean(spec.paths?.['/v1/saves/{slotId}']?.put && spec.paths?.['/v1/saves/{slotId}']?.get), 'スキーマに PUT・GET /v1/saves/{slotId} がある');
 const codes = spec.components?.schemas?.ErrorCode?.enum ?? [];
@@ -465,17 +492,15 @@ requireTests([
   'スキーマのErrorCodeの列挙は10個のエラーコードと一致する',
   'demo-rpgはannouncementsとrankingsとsavesを使う設定で登録される',
   'モジュールの一覧はannouncementsとrankingsとsavesでルートが重ならない',
-  // 変えない既存の試験（互換・マイグレーション・中身を広げる 1 本）
-  '今のCLIモックと同じ形の要求を受け付ける',
-  'マイグレーションを2回当ててもデータは壊れない',
-  'エラーの応答はスキーマに書いた状態とエラーコードの組で返る',
-  '機能の設定はゲームごとで他のゲームの設定に引きずられない',
+  'CLIモックと同じ流れでゲストのセーブを書いて読み直せる',
+  // base にあった既存の試験の全部（置き換えた 4 本を除く。互換の `今のCLIモックと同じ形の要求を受け付ける` を含む）
+  ...baseTests.filter((n) => !replaced.includes(n)),
 ]);
-// スコア・お知らせ・認証・CLI モック・既存のマイグレーションと試験を変えない
+// スコア・お知らせ・認証・既存のマイグレーションと、手を入れない試験のファイルを変えない
 gitClean(['src/modules/rankings/', 'src/modules/announcements/', 'src/core/auth.ts', 'src/core/token.ts', 'src/core/guards.ts',
-  'src/core/accounts.ts', 'scripts/', 'migrations/0001_initial.sql', 'migrations/0002_games.sql', 'migrations/0003_game_modules.sql',
-  'migrations/0004_accounts.sql', 'test/failure-input.test.ts', 'test/failure-server.test.ts', 'test/auth.test.ts',
-  'test/accounts.test.ts', 'test/games.test.ts', 'test/support/', 'wrangler.jsonc', pkg], { base });
+  'src/core/accounts.ts', 'scripts/issue-run/', 'scripts/test.mjs', 'migrations/0001_initial.sql', 'migrations/0002_games.sql',
+  'migrations/0003_game_modules.sql', 'migrations/0004_accounts.sql', 'test/failure-input.test.ts', 'test/auth.test.ts',
+  'test/accounts.test.ts', 'test/games.test.ts', 'test/health.test.ts', 'test/support/', 'wrangler.jsonc', pkg], { base });
 done();
 ```
 
@@ -483,22 +508,28 @@ V2:
 
 ```js
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { runTests, requireTests, mustExist, gitTracked, gitClean, check, done } from './scripts/issue-run/check-lib.mjs';
 const base = 'MAIN_SHA'; // 実装の Issue を作るときの main の SHA に書き換える
 const pkg = ['package', 'json'].join('.');
 const read = (p) => (existsSync(p) ? readFileSync(p, 'utf8') : '');
+const namesIn = (src) => [...src.matchAll(/\bit\('([^']+)'/g)].map((m) => m[1]);
 const files = ['test/saves-manage.test.ts'];
 mustExist(files);
 gitTracked(files);
-// CLI モックがゲストを発行し、セーブを書いて読む（§6）
-const mock = read('scripts/cli-mock.mjs') + read('scripts/cli-requests.mjs');
-check(mock.includes('/v1/accounts/guest') && mock.includes('/v1/saves') && mock.includes('Authorization'), 'CLI モックがセーブを書いて読む');
-check(/crypto\.subtle/.test(read('scripts/cli-requests.mjs')), 'CLI モックのチェックサムは crypto.subtle で計算する');
+// CLI モックが一覧と消す流れを持つ（§6）
+const mock = read('scripts/cli-mock.mjs');
+check(mock.includes('/v1/saves?') && mock.includes('DELETE'), 'CLI モックがセーブの一覧を見て消す');
 check(/APP_ENV\s*!==\s*'local'/.test(read('src/core/guards.ts')), 'APP_ENV=local の守りが残っている');
-// 置き換えた 2 本が残っていない（§8）・契約を先に直した（§3）
+// 置き換えた 2 本が残っていない（§8）・残りの既存の試験は全部ある（下の requireTests）
+const replaced = ['スキーマのファイルはOpenAPI 3.1で7つの操作を持つ', 'スキーマのErrorCodeの列挙は10個のエラーコードと一致する'];
 const all = readdirSync('test').filter((f) => f.endsWith('.ts')).map((f) => readFileSync('test/' + f, 'utf8')).join('\n');
-for (const n of ['スキーマのファイルはOpenAPI 3.1で7つの操作を持つ', 'スキーマのErrorCodeの列挙は10個のエラーコードと一致する'])
-  check(!all.includes(n), '置き換えた試験が残っていない: ' + n);
+for (const n of replaced) check(!all.includes(n), '置き換えた試験が残っていない: ' + n);
+const baseTests = execSync(`git ls-tree --name-only ${base} test/`, { encoding: 'utf8' }).split('\n').filter((f) => f.endsWith('.ts'))
+  .flatMap((f) => namesIn(execSync(`git show ${base}:${f}`, { encoding: 'utf8' })));
+check(baseTests.length > 0, 'base の試験の名前を読めた');
+check(/expect\(\[\.\.\.seen\]\.sort\(\)\)\.toEqual\(\[\.\.\.errorCodes\]\.sort\(\)\)/.test(read('test/schema-conformance.test.ts')), '起こしたコードとエラーコードの一覧を比べる行が残っている');
+// 契約を先に直した（§3）
 const spec = JSON.parse(read('openapi/rpg-online.v1.json') || '{}');
 check(Boolean(spec.paths?.['/v1/saves']?.get && spec.paths?.['/v1/saves/{slotId}']?.delete), 'スキーマに一覧と削除がある');
 check((spec.components?.schemas?.ErrorCode?.enum ?? []).includes('SLOT_LIMIT_EXCEEDED'), 'スキーマの ErrorCode に SLOT_LIMIT_EXCEEDED がある');
@@ -507,6 +538,7 @@ requireTests([
   'セーブの一覧は自分のスロットのメタデータだけをdata無しで返す',
   'セーブの一覧は書いたことの無いプレイヤーには空の一覧を返す',
   'リビジョンが合う削除はスロットを消して同じスロットに前のリビジョン0で書き直せる',
+  '消してから書き直したスロットへの消す前のリビジョンからの書き込みはSAVE_CONFLICTの409を返す',
   'リビジョンが古い削除はSAVE_CONFLICTの409を返し消さない',
   '書いていないスロットの削除はNOT_FOUNDの404を返す',
   'スロットの数の上限を超える新しいスロットへの書き込みはSLOT_LIMIT_EXCEEDEDの409を返す',
@@ -516,22 +548,20 @@ requireTests([
   'セーブの一覧と削除の応答はスキーマに合う',
   'スキーマのファイルはOpenAPI 3.1で9つの操作を持つ',
   'スキーマのErrorCodeの列挙は11個のエラーコードと一致する',
-  'CLIモックと同じ流れでゲストのセーブを書いて読み直せる',
-  // V1 の試験と、変えない既存の試験
-  '前のリビジョンが古い書き込みはSAVE_CONFLICTの409を返し上書きしない',
-  '他のプレイヤーのセーブは読めず上書きもできない',
-  'demo-rpgはannouncementsとrankingsとsavesを使う設定で登録される',
-  '今のCLIモックと同じ形の要求を受け付ける',
-  'エラーの応答はスキーマに書いた状態とエラーコードの組で返る',
+  'CLIモックと同じ流れでセーブの一覧に出たスロットを消せる',
+  // base（V1 の後の main）にあった試験の全部（置き換えた 2 本を除く。V1 の試験と互換の試験を含む）
+  ...baseTests.filter((n) => !replaced.includes(n)),
 ]);
-// マイグレーション・スコア・お知らせ・認証・V1 の試験を変えない（V2 は表を足さない）
-gitClean(['migrations/', 'src/modules/rankings/', 'src/modules/announcements/', 'src/core/', 'test/saves.test.ts',
-  'test/auth.test.ts', 'test/accounts.test.ts', 'test/support/', 'wrangler.jsonc', pkg], { base });
+// マイグレーション（V2 は表を足さない）・スコア・お知らせ・認証・手を入れない試験のファイルを変えない
+gitClean(['migrations/', 'src/modules/rankings/', 'src/modules/announcements/', 'src/core/', 'scripts/issue-run/', 'scripts/test.mjs',
+  'test/failure-input.test.ts', 'test/auth.test.ts', 'test/accounts.test.ts', 'test/games.test.ts', 'test/health.test.ts',
+  'test/modules.test.ts', 'test/game-modules.test.ts', 'test/support/', 'wrangler.jsonc', pkg], { base });
 done();
 ```
 
 - 確認コマンドの案は、実装の Issue を作る前に 1 回回し、「まだ作っていないから」落ちることを確かめる（CLAUDE.md の進め方の決まり）。
-- V2 は `test/failure-server.test.ts` に `CLIモックと同じ流れでゲストのセーブを書いて読み直せる` を足すので、そのファイルを `gitClean` で守らない。`今のCLIモックと同じ形の要求を受け付ける` の中身が変わっていないかは、確認コマンドでは見きれない。判定役が差分で見る（§8）。
+- V1 の `base` の試験の名前は、2026-10-30 の main `8ac12cf` で 75 本（上の `namesIn` で数えた）。V2 の `base` は V1 が入った後の main なので、V1 の試験も自動で入る。
+- `今のCLIモックと同じ形の要求を受け付ける` と `エラーの応答はスキーマに書いた状態とエラーコードの組で返る` の**期待する結果の行**が変わっていないか（§8 の「名前も中身も変えない」「行を足すだけ」）は、名前と比べの 1 行までしか確認コマンドで見きれない。判定役が差分で見る。
 
 ## 12. 指示の表
 
