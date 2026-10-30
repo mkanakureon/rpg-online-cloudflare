@@ -9,6 +9,7 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
+import { bearer, bearerForBody } from './support/auth';
 import specJson from '../openapi/rpg-online.v1.json';
 import { resolveRef, validate, type Schema, type SchemaRoot } from './support/schema-check';
 
@@ -30,7 +31,8 @@ type Spec = SchemaRoot & {
 };
 const spec = specJson as unknown as Spec;
 const methods = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'];
-const errorCodes = ['INVALID_ARGUMENT', 'NOT_FOUND', 'NOT_READY_FOR_PRODUCTION', 'INVALID_JSON', 'INTERNAL_ERROR'];
+const errorCodes = ['INVALID_ARGUMENT', 'NOT_FOUND', 'NOT_READY_FOR_PRODUCTION', 'INVALID_JSON', 'INTERNAL_ERROR',
+  'UNAUTHENTICATED', 'TOKEN_EXPIRED', 'PERMISSION_DENIED'];
 
 // prepare が D1 のエラーに似た例外を投げる偽の DB（本物の D1 を壊さない）
 const brokenDB = {
@@ -60,15 +62,25 @@ function collectRefs(node: unknown, out: string[] = []): string[] {
 function get(path: string, e: unknown = baseEnv): Promise<Response> {
   return worker.fetch(new Request(base + path), e as never);
 }
-function postRaw(boardId: string, body: string, e: unknown = localEnv): Promise<Response> {
+async function postRaw(boardId: string, body: string, e: unknown = localEnv): Promise<Response> {
   return worker.fetch(new Request(`${base}/v1/rankings/${boardId}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', authorization: await bearerForBody(body) },
     body,
   }), e as never);
 }
 function post(boardId: string, body: unknown, e: unknown = localEnv): Promise<Response> {
   return postRaw(boardId, JSON.stringify(body), e);
+}
+/** Authorization を指定して（null なら付けずに）スコアを送る。認証のエラーを起こすため。 */
+function postWith(boardId: string, body: unknown, authorization: string | null): Promise<Response> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (authorization !== null) headers.authorization = authorization;
+  return worker.fetch(new Request(`${base}/v1/rankings/${boardId}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  }), localEnv as never);
 }
 function postGuestRaw(body: string, e: unknown = localEnv): Promise<Response> {
   return worker.fetch(new Request(`${base}/v1/accounts/guest`, {
@@ -152,7 +164,7 @@ describe('S1: スキーマのファイル', () => {
     expect(() => validate(1, { $ref: 'other.json#/X' }, root)).toThrow();
   });
 
-  it('スキーマのErrorCodeの列挙は5つのエラーコードと一致する', () => {
+  it('スキーマのErrorCodeの列挙は8つのエラーコードと一致する', () => {
     const codes = spec.components.schemas.ErrorCode.enum as string[];
     expect([...codes].sort()).toEqual([...errorCodes].sort());
   });
@@ -214,6 +226,24 @@ describe('S1: 応答がスキーマに合う', () => {
     }
   });
 
+  it('認証のエラーの応答はスキーマに合う', async () => {
+    const valid = { gameId: 'demo-rpg', playerId: 'p1', displayName: 'Player One', score: 1200 };
+    const cases: Array<[number, string, () => Promise<Response>]> = [
+      [401, 'UNAUTHENTICATED', () => postWith('boss-score', valid, null)],
+      [401, 'UNAUTHENTICATED', () => postWith('boss-score', valid, 'Basic abc')],
+      [401, 'TOKEN_EXPIRED', async () => postWith('boss-score', valid, await bearer('demo-rpg', 'p1', { exp: 1 }))],
+      [403, 'PERMISSION_DENIED', async () => postWith('boss-score', valid, await bearer('demo-rpg', 'p2'))],
+    ];
+    for (const [status, code, send] of cases) {
+      const res = await send();
+      expect(res.status, code).toBe(status);
+      const { spec: r, body } = await expectConforms(res, 'submitScore');
+      const actual = (body as { error: { code: string } }).error.code;
+      expect(actual).toBe(code);
+      expect(r['x-error-codes'], `submitScore の ${status} の x-error-codes`).toContain(actual);
+    }
+  });
+
   it('エラーの応答はスキーマに書いた状態とエラーコードの組で返る', async () => {
     const valid = { gameId: 'demo-rpg', playerId: 'p1', displayName: 'Player One', score: 1200 };
     const cases: Array<[string, string, () => Promise<Response>]> = [
@@ -227,6 +257,9 @@ describe('S1: 応答がスキーマに合う', () => {
       ['INTERNAL_ERROR', 'listAnnouncements', () => get('/v1/announcements?gameId=demo-rpg', { ...baseEnv, DB: brokenDB })],
       ['INTERNAL_ERROR', 'getRanking', () => get('/v1/rankings/boss-score?gameId=demo-rpg', { ...baseEnv, DB: brokenDB })],
       ['INTERNAL_ERROR', 'submitScore', () => post('boss-score', valid, { ...localEnv, DB: brokenDB })],
+      ['UNAUTHENTICATED', 'submitScore', () => postWith('boss-score', valid, null)],
+      ['TOKEN_EXPIRED', 'submitScore', async () => postWith('boss-score', valid, await bearer('demo-rpg', 'p1', { exp: 1 }))],
+      ['PERMISSION_DENIED', 'submitScore', async () => postWith('boss-score', valid, await bearer('demo-rpg', 'p2'))],
     ];
     const seen = new Set<string>();
     for (const [code, operationId, send] of cases) {

@@ -6,6 +6,7 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
+import { bearer, bearerForBody } from './support/auth';
 import { registerGame } from './support/games';
 
 type TestEnv = { DB: D1Database; APP_ENV: string };
@@ -16,10 +17,10 @@ const base = 'http://example.com';
 function get(path: string): Promise<Response> {
   return worker.fetch(new Request(base + path), baseEnv as never);
 }
-function post(boardId: string, body: unknown): Promise<Response> {
+async function post(boardId: string, body: unknown): Promise<Response> {
   return worker.fetch(new Request(`${base}/v1/rankings/${boardId}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', authorization: await bearerForBody(body) },
     body: JSON.stringify(body),
   }), localEnv as never);
 }
@@ -98,7 +99,7 @@ describe('ケース 3: スコアの範囲と型', () => {
     // 9007199254740993 は JSON.stringify では表せない（Number で丸まる）ので、本文を文字で書く
     const unsafe = await worker.fetch(new Request(`${base}/v1/rankings/boss-score`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', authorization: await bearer('demo-rpg', 'p1') },
       body: '{"gameId":"demo-rpg","playerId":"p1","displayName":"p1","score":9007199254740993}',
     }), localEnv as never);
     await expectError(unsafe, 400, 'INVALID_ARGUMENT');

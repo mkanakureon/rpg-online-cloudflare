@@ -6,7 +6,8 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
-import { SMOKE_BOARD_ID, scoreSubmission } from '../scripts/cli-requests.mjs';
+import { bearerForBody } from './support/auth';
+import { SMOKE_BOARD_ID, authHeaders, guestRequest, scoreSubmission } from '../scripts/cli-requests.mjs';
 
 type Migration = { name: string; queries: string[] };
 type TestEnv = { DB: D1Database; APP_ENV: string; TEST_MIGRATIONS: Migration[] };
@@ -22,10 +23,10 @@ const brokenDB = {
 function get(path: string, e: unknown = baseEnv): Promise<Response> {
   return worker.fetch(new Request(base + path), e as never);
 }
-function postRaw(boardId: string, body: string, e: unknown = localEnv): Promise<Response> {
+async function postRaw(boardId: string, body: string, e: unknown = localEnv): Promise<Response> {
   return worker.fetch(new Request(`${base}/v1/rankings/${boardId}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', authorization: await bearerForBody(body) },
     body,
   }), e as never);
 }
@@ -146,9 +147,21 @@ describe('ケース 7: マイグレーションと互換', () => {
   });
 
   it('今のCLIモックと同じ形の要求を受け付ける', async () => {
-    // scripts/cli-mock.mjs が送る本文そのもの（scripts/cli-requests.mjs で共有）。落ちたら API か CLI モックを直す合図
-    const body = scoreSubmission();
-    const res = await post(SMOKE_BOARD_ID, body);
+    // scripts/cli-mock.mjs と同じ流れ（scripts/cli-requests.mjs で共有）: ゲストを発行し、そのトークンを付けて送る。
+    // 落ちたら API か CLI モックを直す合図
+    const guest = await worker.fetch(new Request(`${base}/v1/accounts/guest`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(guestRequest()),
+    }), localEnv as never);
+    expect(guest.status).toBe(200);
+    const { playerId, token } = await guest.json<{ playerId: string; token: string }>();
+    const body = scoreSubmission(playerId);
+    const res = await worker.fetch(new Request(`${base}/v1/rankings/${SMOKE_BOARD_ID}`, {
+      method: 'POST',
+      headers: authHeaders(token),
+      body: JSON.stringify(body),
+    }), localEnv as never);
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true });
     const list = await items(await get(`/v1/rankings/${SMOKE_BOARD_ID}?gameId=${body.gameId}&limit=10`));

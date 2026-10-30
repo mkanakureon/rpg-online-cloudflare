@@ -8,6 +8,7 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
+import { bearerForBody } from './support/auth';
 import { enabledModules } from '../src/core/games';
 import { registerGame } from './support/games';
 
@@ -19,10 +20,10 @@ const base = 'http://example.com';
 function get(path: string): Promise<Response> {
   return worker.fetch(new Request(base + path), baseEnv as never);
 }
-function post(boardId: string, body: unknown): Promise<Response> {
+async function post(boardId: string, body: unknown): Promise<Response> {
   return worker.fetch(new Request(`${base}/v1/rankings/${boardId}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', authorization: await bearerForBody(body) },
     body: JSON.stringify(body),
   }), localEnv as never);
 }

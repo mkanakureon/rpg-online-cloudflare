@@ -8,6 +8,7 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
+import { bearerForBody } from './support/auth';
 import specJson from '../openapi/rpg-online.v1.json';
 import { registerGame } from './support/games';
 import { validate, type Schema, type SchemaRoot } from './support/schema-check';
@@ -29,10 +30,10 @@ const brokenDB = {
 function get(path: string, e: unknown = baseEnv): Promise<Response> {
   return worker.fetch(new Request(base + path), e as never);
 }
-function post(boardId: string, body: unknown, e: unknown = localEnv): Promise<Response> {
+async function post(boardId: string, body: unknown, e: unknown = localEnv): Promise<Response> {
   return worker.fetch(new Request(`${base}/v1/rankings/${boardId}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', authorization: await bearerForBody(body) },
     body: JSON.stringify(body),
   }), e as never);
 }

@@ -1,9 +1,11 @@
 // rankings/index.ts — ランキングのモジュール（GET・POST /v1/rankings/{boardId}）。
 //
 // GET は gameId → limit → ゲームの登録と機能の設定の順に確かめて上位を返す。POST は APP_ENV=local の門（本文を読む前）
-// → JSON の読み取り → 形の検証（validate.ts）→ ゲームの登録と機能の設定 → 書き込み（高いほうのスコアを残す）。
+// → トークン（本文を読む前）→ JSON の読み取り → 形の検証（validate.ts）→ トークンと本文の突き合わせ
+// → ゲームの登録と機能の設定 → 書き込み（高いほうのスコアを残す）。順の正は docs/guides/working/account-design.md §5。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
+import { requireAuth, requireSamePlayer } from '../../core/auth';
 import { requireGame } from '../../core/games';
 import { requireLocalWrite } from '../../core/guards';
 import { error, json } from '../../core/http';
@@ -47,12 +49,16 @@ export const rankings: GameModule = {
         const boardId = match[1];
         const blocked = requireLocalWrite(env);
         if (blocked) return blocked;
+        const auth = await requireAuth(req, env);
+        if (!auth.ok) return auth.response;
         let value: unknown;
         try { value = await req.json(); }
         catch { return error('INVALID_JSON', 'Request body must be JSON', 400); }
         const parsed = parseScoreSubmission(value);
         if (!parsed.ok) return error('INVALID_ARGUMENT', parsed.message, 400);
         const { gameId, playerId, displayName, score } = parsed.value;
+        const denied = requireSamePlayer(auth.claims, gameId, playerId);
+        if (denied) return denied;
         const unknown = await requireGame(env, gameId, rankings.name, known);
         if (unknown) return unknown;
         await env.DB.prepare(

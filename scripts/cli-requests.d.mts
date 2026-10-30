@@ -12,3 +12,10 @@ export declare function scoreSubmission(playerId?: string): {
   displayName: string;
   score: number;
 };
+
+export declare function guestRequest(): { gameId: string };
+
+export declare function authHeaders(token: string): {
+  'Content-Type': string;
+  Authorization: string;
+};
