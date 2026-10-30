@@ -2,7 +2,8 @@
  * API スキーマの試験 S1: スキーマのファイル（openapi/rpg-online.v1.json）の形と、実際の応答がスキーマに合うこと。
  * 名前と確かめることの正は docs/guides/working/api-schema-design.md §4（`セーブの読み書きの応答はスキーマに合う`・`セーブの一覧と削除の応答はスキーマに合う` とエラーコードの数の試験は docs/guides/working/save-design.md §7、
  * `設定の応答はスキーマに合う`・`マスターデータの応答はスキーマに合う` は設定配信の C1・C2 で足したもので docs/guides/working/config-design.md §7、
- * 操作の数の試験は所持品の E1 で置き換えたもので docs/guides/working/event-reward-design.md §8、
+ * 操作の数の試験はイベントの E2 で置き換えたもので docs/guides/working/event-reward-design.md §8（エラーコードの数の試験も E2 で置き換え、
+ * `エラーの応答はスキーマに書いた状態とエラーコードの組で返る` に E2 の 2 つの 409 の行を足した）、
  * `429の応答はスキーマに合う` とエラーコードの数の試験は利用制限の R1 で足し・置き換えたもので docs/guides/working/abuse-protection-design.md §7）。挙動（状態コード・データ）は
  * test/failure-*.test.ts が見る。ここはスキーマの側から見る。
  * L2 の試験は src/worker.ts の default.fetch を直に呼ぶ（docs/guides/working/failure-case-test-plan.md §2）。
@@ -20,6 +21,7 @@ import { resolveRef, validate, type Schema, type SchemaRoot } from './support/sc
 import { registerGame } from './support/games';
 import { fillRateLimit, resetRateLimits } from './support/rate-limits';
 import { RATE_LIMITS } from '../src/core/rate-limit-policy';
+import { MAX_ITEM_AMOUNT } from '../src/core/inventory';
 
 type TestEnv = { DB: D1Database; APP_ENV: string };
 const baseEnv = env as unknown as TestEnv;
@@ -40,7 +42,8 @@ type Spec = SchemaRoot & {
 const spec = specJson as unknown as Spec;
 const methods = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'];
 const errorCodes = ['INVALID_ARGUMENT', 'NOT_FOUND', 'NOT_READY_FOR_PRODUCTION', 'INVALID_JSON', 'INTERNAL_ERROR',
-  'UNAUTHENTICATED', 'TOKEN_EXPIRED', 'PERMISSION_DENIED', 'SAVE_CONFLICT', 'PAYLOAD_TOO_LARGE', 'SLOT_LIMIT_EXCEEDED', 'RATE_LIMITED'];
+  'UNAUTHENTICATED', 'TOKEN_EXPIRED', 'PERMISSION_DENIED', 'SAVE_CONFLICT', 'PAYLOAD_TOO_LARGE', 'SLOT_LIMIT_EXCEEDED', 'RATE_LIMITED',
+  'EVENT_NOT_ACTIVE', 'INVENTORY_LIMIT_EXCEEDED'];
 
 // prepare が D1 のエラーに似た例外を投げる偽の DB（本物の D1 を壊さない）
 const brokenDB = {
@@ -138,6 +141,26 @@ async function saveBody(data: string, baseRevision: number): Promise<Record<stri
   return { formatVersion: 1, data, checksum: await sha256Hex(data), baseRevision };
 }
 
+/** イベントの報酬を受け取る（POST /v1/events/{eventId}/claim）。demo-rpg・p1 のトークン。 */
+async function claimEvent(eventId: string): Promise<Response> {
+  return worker.fetch(new Request(`${base}/v1/events/${eventId}/claim?gameId=demo-rpg`, {
+    method: 'POST', headers: { authorization: await bearer('demo-rpg', 'p1') },
+  }), localEnv as never);
+}
+/** E2 の 2 つの 409 を起こすイベント（demo-rpg に、終わったイベントと、p1 の残高が上限に近い品目の報酬のイベント）を入れる。 */
+async function addSchemaEvents(): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const event = 'INSERT OR REPLACE INTO events (game_id, event_id, kind, starts_at, ends_at) VALUES (?, ?, ?, ?, ?)';
+  await baseEnv.DB.batch([
+    baseEnv.DB.prepare("DELETE FROM event_claims WHERE game_id = 'demo-rpg' AND player_id = 'p1'"),
+    baseEnv.DB.prepare(event).bind('demo-rpg', 'schema-ended', 'daily', now - 86400, now - 1),
+    baseEnv.DB.prepare(event).bind('demo-rpg', 'schema-big', 'daily', now - 3600, now + 86400),
+    baseEnv.DB.prepare("INSERT OR REPLACE INTO event_rewards (game_id, event_id, item_id, amount) VALUES ('demo-rpg', 'schema-big', 'gold', 100)"),
+    baseEnv.DB.prepare("INSERT OR REPLACE INTO inventory_balances (game_id, player_id, item_id, amount, updated_at) VALUES ('demo-rpg', 'p1', 'gold', ?, ?)")
+      .bind(MAX_ITEM_AMOUNT - 50, now),
+  ]);
+}
+
 /** 応答の状態・ヘッダー・本文が、スキーマの操作のその状態の応答に合うことを確かめ、その応答の定義を返す。 */
 async function expectConforms(res: Response, operationId: string): Promise<{ spec: ResponseSpec; body: unknown }> {
   const responses = operation(operationId).responses;
@@ -167,11 +190,11 @@ beforeEach(async () => {
 });
 
 describe('S1: スキーマのファイル', () => {
-  it('スキーマのファイルはOpenAPI 3.1で13個の操作を持つ', () => {
+  it('スキーマのファイルはOpenAPI 3.1で15個の操作を持つ', () => {
     expect(spec.openapi).toMatch(/^3\.1\.\d+$/);
     expect(operations().map((o) => o.operationId).sort())
-      .toEqual(['deleteSave', 'getConfig', 'getHealth', 'getInventory', 'getMasterData', 'getRanking', 'getSave', 'issueGuest',
-        'listAnnouncements', 'listInventoryHistory', 'listSaves', 'putSave', 'submitScore']);
+      .toEqual(['claimEventReward', 'deleteSave', 'getConfig', 'getHealth', 'getInventory', 'getMasterData', 'getRanking', 'getSave',
+        'issueGuest', 'listAnnouncements', 'listEvents', 'listInventoryHistory', 'listSaves', 'putSave', 'submitScore']);
     const refs = collectRefs(spec);
     expect(refs.length).toBeGreaterThan(0);
     for (const ref of refs) expect(() => resolveRef(ref, spec), ref).not.toThrow();
@@ -214,7 +237,7 @@ describe('S1: スキーマのファイル', () => {
     expect(() => validate(1, { $ref: 'other.json#/X' }, root)).toThrow();
   });
 
-  it('スキーマのErrorCodeの列挙は12個のエラーコードと一致する', () => {
+  it('スキーマのErrorCodeの列挙は14個のエラーコードと一致する', () => {
     const codes = spec.components.schemas.ErrorCode.enum as string[];
     expect([...codes].sort()).toEqual([...errorCodes].sort());
   });
@@ -313,10 +336,13 @@ describe('S1: 応答がスキーマに合う', () => {
       ['SAVE_CONFLICT', 'putSave', async () => putSave('schema-conflict', await saveBody('x', 999))],
       ['PAYLOAD_TOO_LARGE', 'putSave', async () => putSave('schema-large', await saveBody('a'.repeat(MAX_SAVE_BYTES + 1), 0))],
       ['SLOT_LIMIT_EXCEEDED', 'putSave', async () => putSave('one-more', await saveBody('x', 0), { authorization: await fillSlots('schema-slots') })],
+      ['EVENT_NOT_ACTIVE', 'claimEventReward', async () => claimEvent('schema-ended')],
+      ['INVENTORY_LIMIT_EXCEEDED', 'claimEventReward', async () => claimEvent('schema-big')],
       // p1 のスコアの数を上限まで埋めるので最後に置く（前の行の p1 の投稿を断らせない）
       ['RATE_LIMITED', 'submitScore', async () => { await fillRateLimit(baseEnv.DB, RATE_LIMITS.score, 'demo-rpg:p1'); return post('boss-score', valid); }],
     ];
     const seen = new Set<string>();
+    await addSchemaEvents();
     for (const [code, operationId, send] of cases) {
       const res = await send();
       const { spec: r, body } = await expectConforms(res, operationId);

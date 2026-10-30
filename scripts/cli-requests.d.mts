@@ -42,3 +42,13 @@ export declare function configPath(gameId?: string, clientVersion?: string): str
 export declare function masterDataPath(key: string, gameId?: string): string;
 
 export declare function utf8Bytes(text: string): number;
+
+export declare const SMOKE_EVENT_ID: string;
+
+export declare function eventsPath(gameId?: string): string;
+
+export declare function claimPath(eventId?: string, gameId?: string): string;
+
+export declare function inventoryPath(gameId?: string): string;
+
+export declare function historyPath(gameId?: string): string;

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-/** CLI モック（将来の UE・Unity・ブラウザの HTTP クライアントの代わり。ローカル専用）: 設定とマスターデータ → スコア → セーブの流れを通す。 */
+/** CLI モック（将来の UE・Unity・ブラウザの HTTP クライアントの代わり。ローカル専用）: 設定とマスターデータ → スコア → セーブ → イベントの報酬の流れを通す。 */
 import {
-  SMOKE_SLOT_ID, authHeaders, configPath, guestRequest, masterDataPath, saveData, saveWrite, scoreSubmission, sha256Hex,
-  smokeBoardId, utf8Bytes
+  SMOKE_EVENT_ID, SMOKE_SLOT_ID, authHeaders, claimPath, configPath, eventsPath, guestRequest, historyPath, inventoryPath, masterDataPath,
+  saveData, saveWrite, scoreSubmission, sha256Hex, smokeBoardId, utf8Bytes
 } from './cli-requests.mjs';
 
 const base = process.env.API_BASE_URL || 'http://127.0.0.1:8787';
@@ -93,6 +93,31 @@ try {
   const gone = await fetch(`${base}${savePath}`, { headers: authHeaders(guest.token) });
   console.log(`GET ${savePath}:`, gone.status, '(after DELETE)');
   if (gone.status !== 404) throw new Error('Deleted save is still readable');
+
+  // 同じトークンでイベントの一覧を読み、デイリーの報酬を受け取る。もう一度受け取っても同じ claimId で、金貨も履歴も増えない
+  // （docs/guides/working/event-reward-design.md §10）。一覧が空なら飛ばす。一覧の 404 は 0010 の当て忘れなので call() が止める
+  const listedEvents = await call(eventsPath(submission.gameId), { headers: authHeaders(guest.token) });
+  console.log(`serverTime=${listedEvents.serverTime}`);
+  if (listedEvents.items.length === 0) {
+    console.log('events: none (skipped)');
+  } else {
+    const event = listedEvents.items.find((item) => item.eventId === SMOKE_EVENT_ID);
+    if (!event || event.claimed !== false) throw new Error(`Event ${SMOKE_EVENT_ID} is not open and unclaimed`);
+    const claimUrl = claimPath(SMOKE_EVENT_ID, submission.gameId);
+    const claimed = await call(claimUrl, { method: 'POST', headers: authHeaders(guest.token) });
+    const goldOf = (inventory) => inventory.currencies.find((c) => c.itemId === 'gold')?.amount ?? 0;
+    const granted = claimed.grants.find((g) => g.itemId === 'gold')?.amount ?? 0;
+    const afterFirst = await call(inventoryPath(submission.gameId), { headers: authHeaders(guest.token) });
+    if (granted <= 0 || goldOf(afterFirst) !== granted) throw new Error('Claimed gold is not in the inventory');
+    const again = await call(claimUrl, { method: 'POST', headers: authHeaders(guest.token) });
+    if (again.claimId !== claimed.claimId) throw new Error('Second claim returned a different claimId');
+    const afterSecond = await call(inventoryPath(submission.gameId), { headers: authHeaders(guest.token) });
+    if (goldOf(afterSecond) !== granted) throw new Error('Second claim granted the reward twice');
+    const history = await call(historyPath(submission.gameId), { headers: authHeaders(guest.token) });
+    if (history.items.length !== claimed.grants.length || history.items.some((item) => item.sourceId !== claimed.claimId)) {
+      throw new Error('Inventory history does not have exactly the claimed rows');
+    }
+  }
   console.log('\nPASS: local CLI smoke test');
 } catch (error) {
   console.error('\nFAIL: local CLI smoke test', error);

@@ -9,6 +9,8 @@
 // （CLI_CLIENT_VERSION・configPath。テスト「CLIモックと同じ流れで設定を読み変わっていなければ304を受け取る」）。
 // 設定の masterData に載った最初のキーのマスターデータを読み、data のバイト数が一覧の size と同じことを見る
 // （masterDataPath・utf8Bytes。テスト「CLIモックと同じ流れで設定に載ったマスターデータを読める」）。
+// セーブを消した後、同じトークンでイベントの一覧を読み、デイリーの報酬を 2 回受け取って所持品と受領の履歴が 1 回分だけ増えたことを見る
+// （SMOKE_EVENT_ID・eventsPath・claimPath・inventoryPath・historyPath。テスト「CLIモックと同じ流れでイベントの報酬を受け取り二回目は二重にならない」）。
 // スコアはローカルの D1 に積み上がっても上位 10 件に入るよう、回すたびに smokeBoardId(now) の別のボードに送る
 // （テスト「CLIモックの通しは同点のスコアが上位10件を埋めていても自分の投稿を見つける」）。
 // Node.js と Workers のランタイムの両方で読めるよう、Node.js の API を使わない（チェックサムは crypto.subtle）。型は cli-requests.d.mts。
@@ -76,4 +78,27 @@ export function masterDataPath(key, gameId = 'demo-rpg') {
 /** text の UTF-8 のバイト数（マスターデータの data を設定の masterData の size と比べる）。 */
 export function utf8Bytes(text) {
   return new TextEncoder().encode(text).length;
+}
+
+/** CLI モックの通しで報酬を受け取るイベント（demo-rpg の手本のデイリー。migrations/0010_events.sql）。 */
+export const SMOKE_EVENT_ID = 'daily-login';
+
+/** 開いているイベントの一覧のパス（GET /v1/events。docs/guides/working/event-reward-design.md §10）。 */
+export function eventsPath(gameId = 'demo-rpg') {
+  return `/v1/events?gameId=${encodeURIComponent(gameId)}`;
+}
+
+/** イベントの報酬を受け取るパス（POST /v1/events/{eventId}/claim。本文は要らない）。 */
+export function claimPath(eventId = SMOKE_EVENT_ID, gameId = 'demo-rpg') {
+  return `/v1/events/${encodeURIComponent(eventId)}/claim?gameId=${encodeURIComponent(gameId)}`;
+}
+
+/** 所持品のパス（GET /v1/inventory）。 */
+export function inventoryPath(gameId = 'demo-rpg') {
+  return `/v1/inventory?gameId=${encodeURIComponent(gameId)}`;
+}
+
+/** 受領の履歴のパス（GET /v1/inventory/history）。 */
+export function historyPath(gameId = 'demo-rpg') {
+  return `/v1/inventory/history?gameId=${encodeURIComponent(gameId)}`;
 }
