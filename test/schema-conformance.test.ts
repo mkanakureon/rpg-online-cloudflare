@@ -70,6 +70,13 @@ function postRaw(boardId: string, body: string, e: unknown = localEnv): Promise<
 function post(boardId: string, body: unknown, e: unknown = localEnv): Promise<Response> {
   return postRaw(boardId, JSON.stringify(body), e);
 }
+function postGuestRaw(body: string, e: unknown = localEnv): Promise<Response> {
+  return worker.fetch(new Request(`${base}/v1/accounts/guest`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body,
+  }), e as never);
+}
 
 /** 応答の状態・ヘッダー・本文が、スキーマの操作のその状態の応答に合うことを確かめ、その応答の定義を返す。 */
 async function expectConforms(res: Response, operationId: string): Promise<{ spec: ResponseSpec; body: unknown }> {
@@ -99,10 +106,10 @@ beforeEach(async () => {
 });
 
 describe('S1: スキーマのファイル', () => {
-  it('スキーマのファイルはOpenAPI 3.1で4つの操作を持つ', () => {
+  it('スキーマのファイルはOpenAPI 3.1で5つの操作を持つ', () => {
     expect(spec.openapi).toMatch(/^3\.1\.\d+$/);
     expect(operations().map((o) => o.operationId).sort())
-      .toEqual(['getHealth', 'getRanking', 'listAnnouncements', 'submitScore']);
+      .toEqual(['getHealth', 'getRanking', 'issueGuest', 'listAnnouncements', 'submitScore']);
     const refs = collectRefs(spec);
     expect(refs.length).toBeGreaterThan(0);
     for (const ref of refs) expect(() => resolveRef(ref, spec), ref).not.toThrow();
@@ -183,6 +190,28 @@ describe('S1: 応答がスキーマに合う', () => {
     const res = await post('boss-score', submission);
     expect(res.status).toBe(200);
     await expectConforms(res, 'submitScore');
+  });
+
+  it('ゲストの発行の応答はスキーマに合う', async () => {
+    const request = { gameId: 'demo-rpg' };
+    expect(validate(request, spec.components.schemas.GuestRequest, spec)).toEqual([]);
+    const ok = await postGuestRaw(JSON.stringify(request));
+    expect(ok.status).toBe(200);
+    await expectConforms(ok, 'issueGuest');
+    const cases: Array<[number, string, () => Promise<Response>]> = [
+      [400, 'INVALID_JSON', () => postGuestRaw('{"gameId":')],
+      [400, 'INVALID_ARGUMENT', () => postGuestRaw(JSON.stringify({ gameId: 'demo.rpg' }))],
+      [403, 'NOT_READY_FOR_PRODUCTION', () => postGuestRaw(JSON.stringify(request), baseEnv)],
+      [404, 'NOT_FOUND', () => postGuestRaw(JSON.stringify({ gameId: 'no-such-game' }))],
+    ];
+    for (const [status, code, send] of cases) {
+      const res = await send();
+      expect(res.status, code).toBe(status);
+      const { spec: r, body } = await expectConforms(res, 'issueGuest');
+      const actual = (body as { error: { code: string } }).error.code;
+      expect(actual).toBe(code);
+      expect(r['x-error-codes'], `issueGuest の ${status} の x-error-codes`).toContain(actual);
+    }
   });
 
   it('エラーの応答はスキーマに書いた状態とエラーコードの組で返る', async () => {

@@ -2,6 +2,7 @@
 //
 // 型だけで中身は無い。D1 そのものの型でなく prepare().bind() の形だけを書くので、
 // 試験は偽の DB（prepare が投げる等）を渡せる。core とモジュールの全部がここを読む。
+// AUTH_TOKEN_SECRET はトークンの署名の鍵（本番は wrangler secret put で渡す。src/core/token.ts の tokenSecret）。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
 
@@ -10,5 +11,8 @@ export type Statement = {
   all<T = Record<string, unknown>>(): Promise<{ results: T[] }>;
   run(): Promise<unknown>;
 };
-export type Database = { prepare(sql: string): Statement };
-export type Env = { DB: Database; APP_ENV: string };
+export type Database = {
+  prepare(sql: string): Statement;
+  batch(statements: Statement[]): Promise<unknown[]>;  // 全部が通るか、どれも入らない
+};
+export type Env = { DB: Database; APP_ENV: string; AUTH_TOKEN_SECRET?: string };
