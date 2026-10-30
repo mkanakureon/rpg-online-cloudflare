@@ -1,6 +1,7 @@
 /**
  * 共通 API の土台 M3: ゲームごとの機能の設定（game_modules）と、使わない機能への要求を 404 NOT_FOUND で断ること。
- * 名前と確かめることの正は docs/guides/working/core-foundation-design.md §4 の M3。
+ * 名前と確かめることの正は docs/guides/working/core-foundation-design.md §4 の M3。ただしセーブの V1 で置き換えた
+ * `demo-rpgはannouncementsとrankingsとsavesを使う設定で登録される` は docs/guides/working/save-design.md §7 が正。
  * L2 の試験は src/worker.ts の default.fetch を直に呼ぶ。書き込みだけ APP_ENV=local を渡す。
  *
  * 概要記述: Claude Opus 5.5 — 2026-10-30
@@ -54,10 +55,10 @@ describe('M3 ゲームごとの機能の設定', () => {
     expect([...set]).toEqual(['rankings']);
   });
 
-  it('demo-rpgはannouncementsとrankingsの両方を使う設定で登録される', async () => {
+  it('demo-rpgはannouncementsとrankingsとsavesを使う設定で登録される', async () => {
     const rows = await baseEnv.DB.prepare("SELECT module FROM game_modules WHERE game_id = 'demo-rpg' ORDER BY module")
       .all<{ module: string }>();
-    expect(rows.results.map((r) => r.module)).toEqual(['announcements', 'rankings']);
+    expect(rows.results.map((r) => r.module)).toEqual(['announcements', 'rankings', 'saves']);
   });
 
   it('rankingsを使わない設定のゲームのランキングはNOT_FOUNDの404を返す', async () => {

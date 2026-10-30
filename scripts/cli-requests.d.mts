@@ -19,3 +19,16 @@ export declare function authHeaders(token: string): {
   'Content-Type': string;
   Authorization: string;
 };
+
+export declare const SMOKE_SLOT_ID: string;
+
+export declare function saveData(): string;
+
+export declare function sha256Hex(text: string): Promise<string>;
+
+export declare function saveWrite(data: string, checksum: string, baseRevision?: number): {
+  formatVersion: number;
+  data: string;
+  checksum: string;
+  baseRevision: number;
+};

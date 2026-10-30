@@ -1,13 +1,16 @@
 /**
  * 失敗ケースの試験 K2: サーバー側の失敗と互換（ケース 1・5・6・7 の「いま」）。
- * 名前と期待する結果の正は docs/guides/working/failure-case-test-plan.md §3。
+ * 名前と期待する結果の正は docs/guides/working/failure-case-test-plan.md §3。ただし `CLIモックと同じ流れでゲストのセーブを書いて読み直せる` は
+ * docs/guides/working/save-design.md §7 が正（互換の試験の隣に置く）。
  * src/worker.ts の default.fetch を直に呼ぶ L2 の試験。DB の失敗は prepare が投げる偽の DB で起こす。
  */
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
 import { bearerForBody } from './support/auth';
-import { SMOKE_BOARD_ID, authHeaders, guestRequest, scoreSubmission } from '../scripts/cli-requests.mjs';
+import {
+  SMOKE_BOARD_ID, SMOKE_SLOT_ID, authHeaders, guestRequest, saveData, saveWrite, scoreSubmission, sha256Hex,
+} from '../scripts/cli-requests.mjs';
 
 type Migration = { name: string; queries: string[] };
 type TestEnv = { DB: D1Database; APP_ENV: string; TEST_MIGRATIONS: Migration[] };
@@ -166,6 +169,31 @@ describe('ケース 7: マイグレーションと互換', () => {
     expect(await res.json()).toMatchObject({ ok: true });
     const list = await items(await get(`/v1/rankings/${SMOKE_BOARD_ID}?gameId=${body.gameId}&limit=10`));
     expect(list).toEqual([{ playerId: body.playerId, displayName: body.displayName, score: body.score }]);
+  });
+
+  it('CLIモックと同じ流れでゲストのセーブを書いて読み直せる', async () => {
+    // scripts/cli-mock.mjs のセーブの流れ（scripts/cli-requests.mjs で共有）: ゲストを発行し、そのトークンで PUT → GET。
+    // 落ちたら API か CLI モックを直す合図
+    const guest = await worker.fetch(new Request(`${base}/v1/accounts/guest`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(guestRequest()),
+    }), localEnv as never);
+    expect(guest.status).toBe(200);
+    const { gameId, token } = await guest.json<{ gameId: string; token: string }>();
+    const data = saveData();
+    const checksum = await sha256Hex(data);
+    const path = `${base}/v1/saves/${SMOKE_SLOT_ID}?gameId=${gameId}`;
+    const put = await worker.fetch(new Request(path, {
+      method: 'PUT',
+      headers: authHeaders(token),
+      body: JSON.stringify(saveWrite(data, checksum, 0)),
+    }), localEnv as never);
+    expect(put.status).toBe(200);
+    expect(await put.json()).toMatchObject({ gameId, slotId: SMOKE_SLOT_ID, revision: 1, checksum });
+    const got = await worker.fetch(new Request(path, { headers: authHeaders(token) }), localEnv as never);
+    expect(got.status).toBe(200);
+    expect(await got.json()).toMatchObject({ data, checksum, revision: 1 });
   });
 
   it('知らない欄が付いた要求も受け付ける', async () => {

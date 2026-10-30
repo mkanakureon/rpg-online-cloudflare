@@ -7,5 +7,6 @@
 import type { GameModule } from '../core/module';
 import { announcements } from './announcements';
 import { rankings } from './rankings';
+import { saves } from './saves';
 
-export const modules: GameModule[] = [announcements, rankings];
+export const modules: GameModule[] = [announcements, rankings, saves];

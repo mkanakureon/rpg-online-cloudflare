@@ -1,6 +1,6 @@
 /**
  * API スキーマの試験 S1: スキーマのファイル（openapi/rpg-online.v1.json）の形と、実際の応答がスキーマに合うこと。
- * 名前と確かめることの正は docs/guides/working/api-schema-design.md §4。挙動（状態コード・データ）は
+ * 名前と確かめることの正は docs/guides/working/api-schema-design.md §4（`セーブの読み書きの応答はスキーマに合う` は docs/guides/working/save-design.md §7）。挙動（状態コード・データ）は
  * test/failure-*.test.ts が見る。ここはスキーマの側から見る。
  * L2 の試験は src/worker.ts の default.fetch を直に呼ぶ（docs/guides/working/failure-case-test-plan.md §2）。
  *
@@ -10,6 +10,8 @@ import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
 import { bearer, bearerForBody } from './support/auth';
+import { sha256Hex } from '../src/modules/saves/checksum';
+import { MAX_SAVE_BYTES } from '../src/modules/saves/limits';
 import specJson from '../openapi/rpg-online.v1.json';
 import { resolveRef, validate, type Schema, type SchemaRoot } from './support/schema-check';
 
@@ -32,7 +34,7 @@ type Spec = SchemaRoot & {
 const spec = specJson as unknown as Spec;
 const methods = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'];
 const errorCodes = ['INVALID_ARGUMENT', 'NOT_FOUND', 'NOT_READY_FOR_PRODUCTION', 'INVALID_JSON', 'INTERNAL_ERROR',
-  'UNAUTHENTICATED', 'TOKEN_EXPIRED', 'PERMISSION_DENIED'];
+  'UNAUTHENTICATED', 'TOKEN_EXPIRED', 'PERMISSION_DENIED', 'SAVE_CONFLICT', 'PAYLOAD_TOO_LARGE'];
 
 // prepare が D1 のエラーに似た例外を投げる偽の DB（本物の D1 を壊さない）
 const brokenDB = {
@@ -90,6 +92,29 @@ function postGuestRaw(body: string, e: unknown = localEnv): Promise<Response> {
   }), e as never);
 }
 
+/** セーブを書く（PUT /v1/saves/{slotId}）。authorization が null なら付けない。既定は demo-rpg・p1 のトークン。 */
+async function putSave(slotId: string, body: unknown, options: { authorization?: string | null; e?: unknown; gameId?: string } = {}): Promise<Response> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  const authorization = options.authorization === undefined ? await bearer('demo-rpg', 'p1') : options.authorization;
+  if (authorization !== null) headers.authorization = authorization;
+  return worker.fetch(new Request(`${base}/v1/saves/${slotId}?gameId=${options.gameId ?? 'demo-rpg'}`, {
+    method: 'PUT',
+    headers,
+    body: typeof body === 'string' ? body : JSON.stringify(body),
+  }), (options.e ?? localEnv) as never);
+}
+/** セーブを読む（GET /v1/saves/{slotId}）。既定は demo-rpg・p1 のトークン。 */
+async function getSave(slotId: string, options: { authorization?: string | null; e?: unknown; gameId?: string } = {}): Promise<Response> {
+  const headers: Record<string, string> = {};
+  const authorization = options.authorization === undefined ? await bearer('demo-rpg', 'p1') : options.authorization;
+  if (authorization !== null) headers.authorization = authorization;
+  return worker.fetch(new Request(`${base}/v1/saves/${slotId}?gameId=${options.gameId ?? 'demo-rpg'}`, { headers }), (options.e ?? localEnv) as never);
+}
+/** data の正しいチェックサムを付けたセーブの書き込みの本文。 */
+async function saveBody(data: string, baseRevision: number): Promise<Record<string, unknown>> {
+  return { formatVersion: 1, data, checksum: await sha256Hex(data), baseRevision };
+}
+
 /** 応答の状態・ヘッダー・本文が、スキーマの操作のその状態の応答に合うことを確かめ、その応答の定義を返す。 */
 async function expectConforms(res: Response, operationId: string): Promise<{ spec: ResponseSpec; body: unknown }> {
   const responses = operation(operationId).responses;
@@ -118,10 +143,10 @@ beforeEach(async () => {
 });
 
 describe('S1: スキーマのファイル', () => {
-  it('スキーマのファイルはOpenAPI 3.1で5つの操作を持つ', () => {
+  it('スキーマのファイルはOpenAPI 3.1で7つの操作を持つ', () => {
     expect(spec.openapi).toMatch(/^3\.1\.\d+$/);
     expect(operations().map((o) => o.operationId).sort())
-      .toEqual(['getHealth', 'getRanking', 'issueGuest', 'listAnnouncements', 'submitScore']);
+      .toEqual(['getHealth', 'getRanking', 'getSave', 'issueGuest', 'listAnnouncements', 'putSave', 'submitScore']);
     const refs = collectRefs(spec);
     expect(refs.length).toBeGreaterThan(0);
     for (const ref of refs) expect(() => resolveRef(ref, spec), ref).not.toThrow();
@@ -164,7 +189,7 @@ describe('S1: スキーマのファイル', () => {
     expect(() => validate(1, { $ref: 'other.json#/X' }, root)).toThrow();
   });
 
-  it('スキーマのErrorCodeの列挙は8つのエラーコードと一致する', () => {
+  it('スキーマのErrorCodeの列挙は10個のエラーコードと一致する', () => {
     const codes = spec.components.schemas.ErrorCode.enum as string[];
     expect([...codes].sort()).toEqual([...errorCodes].sort());
   });
@@ -260,6 +285,8 @@ describe('S1: 応答がスキーマに合う', () => {
       ['UNAUTHENTICATED', 'submitScore', () => postWith('boss-score', valid, null)],
       ['TOKEN_EXPIRED', 'submitScore', async () => postWith('boss-score', valid, await bearer('demo-rpg', 'p1', { exp: 1 }))],
       ['PERMISSION_DENIED', 'submitScore', async () => postWith('boss-score', valid, await bearer('demo-rpg', 'p2'))],
+      ['SAVE_CONFLICT', 'putSave', async () => putSave('schema-conflict', await saveBody('x', 999))],
+      ['PAYLOAD_TOO_LARGE', 'putSave', async () => putSave('schema-large', await saveBody('a'.repeat(MAX_SAVE_BYTES + 1), 0))],
     ];
     const seen = new Set<string>();
     for (const [code, operationId, send] of cases) {
@@ -271,5 +298,39 @@ describe('S1: 応答がスキーマに合う', () => {
       seen.add(actual);
     }
     expect([...seen].sort()).toEqual([...errorCodes].sort());
+  });
+
+  it('セーブの読み書きの応答はスキーマに合う', async () => {
+    await baseEnv.DB.prepare("DELETE FROM saves WHERE player_id = 'p1'").run();
+    const body = await saveBody(JSON.stringify({ hp: 30, map: 'town' }), 0);
+    expect(validate(body, spec.components.schemas.SaveWrite, spec)).toEqual([]);
+    const put = await putSave('auto', body);
+    expect(put.status).toBe(200);
+    await expectConforms(put, 'putSave');
+    const got = await getSave('auto');
+    expect(got.status).toBe(200);
+    await expectConforms(got, 'getSave');
+    const cases: Array<[number, string, string, () => Promise<Response>]> = [
+      [400, 'INVALID_JSON', 'putSave', () => putSave('auto', '{"data":')],
+      [400, 'INVALID_ARGUMENT', 'putSave', async () => putSave('auto', { ...(await saveBody('x', 1)), checksum: await sha256Hex('y') })],
+      [400, 'INVALID_ARGUMENT', 'getSave', () => getSave('auto', { gameId: 'demo.rpg' })],
+      [401, 'UNAUTHENTICATED', 'putSave', async () => putSave('auto', await saveBody('x', 1), { authorization: null })],
+      [401, 'TOKEN_EXPIRED', 'getSave', async () => getSave('auto', { authorization: await bearer('demo-rpg', 'p1', { exp: 1 }) })],
+      [403, 'NOT_READY_FOR_PRODUCTION', 'putSave', async () => putSave('auto', await saveBody('x', 1), { e: baseEnv })],
+      [403, 'NOT_READY_FOR_PRODUCTION', 'getSave', () => getSave('auto', { e: baseEnv })],
+      [403, 'PERMISSION_DENIED', 'getSave', () => getSave('auto', { gameId: 'other-rpg' })],
+      [404, 'NOT_FOUND', 'getSave', () => getSave('never-written')],
+      [404, 'NOT_FOUND', 'putSave', async () => putSave('auto', await saveBody('x', 1), { gameId: 'no-such-game', authorization: await bearer('no-such-game', 'p1') })],
+      [409, 'SAVE_CONFLICT', 'putSave', async () => putSave('auto', await saveBody('x', 0))],
+      [413, 'PAYLOAD_TOO_LARGE', 'putSave', async () => putSave('auto', await saveBody('a'.repeat(MAX_SAVE_BYTES + 1), 1))],
+    ];
+    for (const [status, code, operationId, send] of cases) {
+      const res = await send();
+      expect(res.status, `${operationId} の ${code}`).toBe(status);
+      const { spec: r, body: errBody } = await expectConforms(res, operationId);
+      const actual = (errBody as { error: { code: string } }).error.code;
+      expect(actual).toBe(code);
+      expect(r['x-error-codes'], `${operationId} の ${status} の x-error-codes`).toContain(actual);
+    }
   });
 });

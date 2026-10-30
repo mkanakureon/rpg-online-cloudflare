@@ -8,11 +8,11 @@
 import type { Env } from './env';
 
 export type Route = {
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   pattern: RegExp;                       // url.pathname に当てる。^…$ で書く
   handle(req: Request, env: Env, match: RegExpExecArray, url: URL, known: readonly string[]): Promise<Response>;
 };
 export type GameModule = {
-  name: string;                          // 'announcements' | 'rankings'（game_modules の module と同じ）
+  name: string;                          // 'announcements' | 'rankings' | 'saves'（game_modules の module と同じ）
   routes: Route[];
 };
