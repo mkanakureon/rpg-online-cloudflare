@@ -50,7 +50,7 @@
 ```
 
 - `limit`: 1～50、デフォルト10。
-- 登録の無い`gameId`は**404 `NOT_FOUND`**（`message`は`Unknown game`）。その機能を使わない設定のゲームも**404 `NOT_FOUND`**（`message`は`Feature not enabled for this game`。ランキングの機能は`rankings`、お知らせは`announcements`）。お知らせ（`GET /v1/announcements`）・スコアの投稿（`POST`）も同じ。登録済みで機能を使う設定のゲームなら、ボードにデータが無くても（存在しないボードでも）**200と空の`items`**を返す。ゲームの登録と使う機能の設定はマイグレーションで入れる（`migrations/0002_games.sql`・`migrations/0003_game_modules.sql`。`demo-rpg`は登録済みで両方の機能を使う）。
+- 登録の無い`gameId`は**404 `NOT_FOUND`**（`message`は`Unknown game`）。その機能を使わない設定のゲームも**404 `NOT_FOUND`**（`message`は`Feature not enabled for this game`。ランキングの機能は`rankings`、お知らせは`announcements`）。お知らせ（`GET /v1/announcements`）・スコアの投稿（`POST`）も同じ。登録済みで機能を使う設定のゲームなら、ボードにデータが無くても（存在しないボードでも）**200と空の`items`**を返す。ゲームの登録と使う機能の設定はマイグレーションで入れる（`migrations/0002_games.sql`・`migrations/0003_game_modules.sql`。`migrations/0005_saves.sql`。`demo-rpg`は登録済みで`announcements`・`rankings`・`saves`を使う）。
 - 現PoCの順位は**高スコア優先のみ**。タイムアタックなど昇順ボードは将来追加。
 
 ## POST /v1/rankings/boss-score
@@ -76,13 +76,54 @@
 - `Authorization`が無い・`Bearer`でない・トークンの形か署名が正しくなければ**401 `UNAUTHENTICATED`**（`message`は`Missing or malformed Authorization`か`Invalid token`。どちらが外れたかの詳しい理由は返さない）。期限が切れていれば**401 `TOKEN_EXPIRED`**（ゲストを発行し直す）。
 - 本文の`gameId`・`playerId`がトークンのゲームとプレイヤーと違えば**403 `PERMISSION_DENIED`**（`message`は`Token does not match player`）。本文の形は変わらない（`playerId`も送る）。
 
+## PUT /v1/saves/{slotId}?gameId=demo-rpg
+
+トークンのプレイヤーのスロット（`{slotId}`。名前はゲームが決める・`gameId`と同じ形）にセーブを書く。設計の正は`docs/guides/working/save-design.md`。
+
+見出し: `Authorization: Bearer <token>`（`POST /v1/accounts/guest`が返したもの）。
+
+入力例:
+
+```json
+{"formatVersion":1,"data":"{\"hp\":30,\"map\":\"town\"}","checksum":"b1d7ec2a63599ea44440bea1e1f2bba35b1091ce69bf3e2ada43afea53a877ca","baseRevision":0}
+```
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","slotId":"auto","revision":1,"formatVersion":1,"checksum":"b1d7ec2a63599ea44440bea1e1f2bba35b1091ce69bf3e2ada43afea53a877ca","size":22,"updatedAt":"2026-10-30T12:00:00.000Z"}
+```
+
+- プレイヤーは**トークンのプレイヤーだけ**で決まる（パス・問い合わせ・本文に`playerId`の欄は無い）。他のプレイヤーのセーブは指せない。
+- `data`は文字列で、サーバーは解釈しない（JSON の文字列でも、ゲームが base64 にしたバイナリでもよい）。UTF-8 で**65,536 バイトまで**。超えると**413 `PAYLOAD_TOO_LARGE`**（要求の本文が 394,240 バイトを超えるときは本文を読まずに 413）。`size`は`data`の UTF-8 のバイト数（サーバーが数える）。
+- `checksum`は`data`の UTF-8 のバイト列の SHA-256 を小文字の 16 進 64 文字にしたもの。クライアントが計算して送り、サーバーが計算し直して違えば**400 `INVALID_ARGUMENT`**で書かない。
+- `formatVersion`は 1〜2147483647 の整数で、意味はゲームが決める。サーバーは比べずに保存して返すだけ（古い版の移し替えはクライアントの仕事）。
+- `baseRevision`はクライアントが最後に読んだか書いたリビジョン。**まだセーブが無いスロットに初めて書くときは`0`**。いまのリビジョンと違えば**409 `SAVE_CONFLICT`**で上書きしない（初めてのつもりが既にある・あるつもりが無い、も含む）。409 のときは`GET`で読み直し、どちらを残すかをゲームが決めて、読み直した`revision`を`baseRevision`にして書き直す。サーバーは黙って上書きも統合もしない。
+- `revision`は 1 から始まり、書くたびに 1 つ進む。`updatedAt`はサーバーの時刻（クライアントの時刻は受け取らない）。
+- 書込み系 API なので、`npm run dev`でローカル実行し`APP_ENV=local`を与えた時だけ・トークンがある時だけ通る。`APP_ENV`が`local`でなければ、トークンがあっても無くても**403 `NOT_READY_FOR_PRODUCTION`**。
+- 確かめの順: `APP_ENV`の守り（403）→ トークン（401。本文を読む前）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`。`message`は`Token does not match game`）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ 欄の形（400 `INVALID_ARGUMENT`）→ `data`の大きさ（413）→ チェックサム（400 `INVALID_ARGUMENT`）→ ゲームの登録と機能の設定（404 `NOT_FOUND`。機能の名前は`saves`）→ 書き込み（409 `SAVE_CONFLICT`）。
+
+## GET /v1/saves/{slotId}?gameId=demo-rpg
+
+トークンのプレイヤーのスロットのセーブを読む。見出しは`PUT`と同じ`Authorization: Bearer <token>`。
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","slotId":"auto","revision":1,"formatVersion":1,"data":"{\"hp\":30,\"map\":\"town\"}","checksum":"b1d7ec2a63599ea44440bea1e1f2bba35b1091ce69bf3e2ada43afea53a877ca","size":22,"updatedAt":"2026-10-30T12:00:00.000Z"}
+```
+
+- `PUT`の応答の欄に`data`を足したもの。受け取った`data`でチェックサムを計算し直して比べると、端から端まで壊れていないことが分かる。
+- そのスロットにセーブが無ければ**404 `NOT_FOUND`**（`message`は`Save not found`）。端末は`revision`を`0`と覚えて、初めての書き込みに使う。
+- 読むのも`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順は`APP_ENV`の守り → トークン → `gameId`の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定 → 読む。
+
 ## エラーレスポンス
 
 ```json
 {"error":{"code":"INVALID_ARGUMENT","message":"Invalid parameters"}}
 ```
 
-現PoCの代表コード: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）、`UNAUTHENTICATED`（401）、`TOKEN_EXPIRED`（401）、`PERMISSION_DENIED`（403）。
+現PoCの代表コード: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）、`UNAUTHENTICATED`（401）、`TOKEN_EXPIRED`（401）、`PERMISSION_DENIED`（403）、`SAVE_CONFLICT`（409）、`PAYLOAD_TOO_LARGE`（413）。
 
 ## 互換の決まり
 
@@ -97,6 +138,5 @@
 | POST | `/v1/events/{id}/progress` | 進捗・報酬判定 |
 | GET/POST | `/v1/messages` | 酒場掲示板 |
 | GET/POST | `/v1/adventurers` | ゴースト冒険者登録・取得 |
-| PUT/GET | `/v1/saves/{slot}` | クラウドセーブ |
 
 ※ 認証（ゲストのトークン）の設計の正は`docs/guides/working/account-design.md`、形の正は`openapi/rpg-online.v1.json`。

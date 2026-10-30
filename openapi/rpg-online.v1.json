@@ -588,6 +588,394 @@
           }
         }
       }
+    },
+    "/v1/saves/{slotId}": {
+      "parameters": [
+        {
+          "name": "slotId",
+          "in": "path",
+          "required": true,
+          "description": "スロットの名前（ゲームが決める）。",
+          "schema": {
+            "$ref": "#/components/schemas/Id"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getSave",
+        "summary": "トークンのプレイヤーのスロットのセーブを読む。APP_ENV=local のときだけ受け付ける",
+        "security": [
+          {
+            "bearerToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": true,
+            "description": "トークンのゲーム（g）と同じでなければ 403 PERMISSION_DENIED。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "セーブ（本体 data を含む）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Save"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "gameId の形が外れている。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization が無い・Bearer でない・トークンの形か署名が正しくない（UNAUTHENTICATED）か、トークンの期限が過ぎた（TOKEN_EXPIRED）。本文を読む前に断る。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED",
+              "TOKEN_EXPIRED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION",
+              "PERMISSION_DENIED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "slotId の形が外れている（どのルートにも当たらない）か、登録の無いゲーム（Unknown game）か、セーブの機能を使わない設定のゲーム（Feature not enabled for this game）か、そのスロットにセーブが無い（Save not found）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・署名の鍵が無いなど）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "putSave",
+        "summary": "トークンのプレイヤーのスロットにセーブを書く（baseRevision が今のリビジョンと同じときだけ）。APP_ENV=local のときだけ受け付ける",
+        "security": [
+          {
+            "bearerToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": true,
+            "description": "トークンのゲーム（g）と同じでなければ 403 PERMISSION_DENIED。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveWrite"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "書いた。revision は 1 つ進んだ値。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaveMeta"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON でない（INVALID_JSON）・オブジェクトでない・欄の形が外れている・checksum が data と合わない・gameId の形が外れている（INVALID_ARGUMENT）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT",
+              "INVALID_JSON"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization が無い・Bearer でない・トークンの形か署名が正しくない（UNAUTHENTICATED）か、トークンの期限が過ぎた（TOKEN_EXPIRED）。本文を読む前に断る。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED",
+              "TOKEN_EXPIRED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION",
+              "PERMISSION_DENIED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "slotId の形が外れている（どのルートにも当たらない）か、登録の無いゲーム（Unknown game）か、セーブの機能を使わない設定のゲーム（Feature not enabled for this game）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "baseRevision が今のリビジョンと違う（初めてのつもりが既にある・あるつもりが無い、も含む）。上書きしない。GET で読み直してから書き直す。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "SAVE_CONFLICT"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "要求の本文が大きすぎる（394,240 バイト超え）か、data の UTF-8 のバイト数が 65,536 を超える。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "PAYLOAD_TOO_LARGE"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・署名の鍵が無いなど）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -595,7 +983,7 @@
       "Id": {
         "type": "string",
         "pattern": "^[a-zA-Z0-9_-]{1,64}$",
-        "description": "gameId・playerId・boardId で共通の ID の形。"
+        "description": "gameId・playerId・boardId・slotId で共通の ID の形。"
       },
       "Health": {
         "type": "object",
@@ -796,6 +1184,139 @@
           }
         }
       },
+      "SaveWrite": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "formatVersion",
+          "data",
+          "checksum",
+          "baseRevision"
+        ],
+        "description": "知らない欄は無視する（保存しない）。",
+        "properties": {
+          "formatVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647,
+            "description": "セーブの形の版。意味はゲームが決め、サーバーは比べずに保存して返すだけ。"
+          },
+          "data": {
+            "type": "string",
+            "description": "セーブの本体。サーバーは解釈しない。UTF-8 で 65,536 バイトまで。"
+          },
+          "checksum": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "data の UTF-8 のバイト列の SHA-256（小文字の 16 進 64 文字）。"
+          },
+          "baseRevision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "最後に読んだか書いたリビジョン。まだセーブが無いスロットに初めて書くときは 0。"
+          }
+        }
+      },
+      "SaveMeta": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "slotId",
+          "revision",
+          "formatVersion",
+          "checksum",
+          "size",
+          "updatedAt"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "slotId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1 から始まり、書くたびに 1 つ進む。"
+          },
+          "formatVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647,
+            "description": "セーブの形の版。意味はゲームが決め、サーバーは比べずに保存して返すだけ。"
+          },
+          "checksum": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "data の UTF-8 のバイト列の SHA-256（小文字の 16 進 64 文字）。"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65536,
+            "description": "data の UTF-8 のバイト数（サーバーが数える）。"
+          },
+          "updatedAt": {
+            "type": "string",
+            "description": "サーバーが書いた時刻（ISO 8601・UTC・ミリ秒つき）。"
+          }
+        }
+      },
+      "Save": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "slotId",
+          "revision",
+          "formatVersion",
+          "data",
+          "checksum",
+          "size",
+          "updatedAt"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "slotId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1 から始まり、書くたびに 1 つ進む。"
+          },
+          "formatVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647,
+            "description": "セーブの形の版。意味はゲームが決め、サーバーは比べずに保存して返すだけ。"
+          },
+          "data": {
+            "type": "string",
+            "description": "セーブの本体。サーバーは解釈しない。UTF-8 で 65,536 バイトまで。"
+          },
+          "checksum": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "data の UTF-8 のバイト列の SHA-256（小文字の 16 進 64 文字）。"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65536,
+            "description": "data の UTF-8 のバイト数（サーバーが数える）。"
+          },
+          "updatedAt": {
+            "type": "string",
+            "description": "サーバーが書いた時刻（ISO 8601・UTC・ミリ秒つき）。"
+          }
+        }
+      },
       "Error": {
         "type": "object",
         "additionalProperties": false,
@@ -832,7 +1353,9 @@
           "INTERNAL_ERROR",
           "UNAUTHENTICATED",
           "TOKEN_EXPIRED",
-          "PERMISSION_DENIED"
+          "PERMISSION_DENIED",
+          "SAVE_CONFLICT",
+          "PAYLOAD_TOO_LARGE"
         ]
       }
     },

@@ -182,7 +182,7 @@ L2 の試験の作り方（`src/worker.ts` の `default` を直に呼ぶ・書�
 
 | 束 | テストの名前 | 確かめること | 層 |
 | --- | --- | --- | --- |
-| M1 | `モジュールの一覧はannouncementsとrankingsでルートが重ならない` | `src/modules/index.ts` の `modules` の `name` がちょうど `announcements`・`rankings`。全部のルートの `method` と `pattern` の組に重なりが無く、`/health` に当たるルートが無い | L1 |
+| M1 | `モジュールの一覧はannouncementsとrankingsとsavesでルートが重ならない` | `src/modules/index.ts` の `modules` の `name` がちょうど `announcements`・`rankings`・`saves`（セーブの V1 で置き換えた。名前の正は `docs/guides/working/save-design.md` §7）。全部のルートの `method` と `pattern` の組に重なりが無く、`/health` に当たるルートが無い | L1 |
 | M1 | `limitの検証関数は1から50の数字だけを通し無ければ10にする` | `parseLimit`: `null` → 10・`'1'`・`'50'` は通る・`'0'`・`'51'`・`'1.5'`・`'-1'`・`'1e1'`・`' 5'` は外れ | L1 |
 | M1 | `スコアの投稿の検証関数はいまのAPIと同じ所で合否を分ける` | `parseScoreSubmission`: スコア 0・10 億・表示名 1 文字と 40 文字は通る。スコア -1・1.5・10 億 1・文字列、表示名 0 文字と 41 文字、ID の形の外れ、配列・`null` は外れ。知らない欄は結果に残さない | L1 |
 | M1 | `IDの検証関数は英数字とハイフンと下線の1から64文字だけを通す` | `validId`: 64 文字は通る・65 文字・空・空白入り・`'` 入り・文字列でない値は外れ | L1 |
@@ -196,7 +196,7 @@ L2 の試験の作り方（`src/worker.ts` の `default` を直に呼ぶ・書�
 | M2 | `形の正しくないgameIdはゲームの登録を引く前にINVALID_ARGUMENTの400を返す` | 偽の DB（`prepare` が投げる）で `gameId` の形が外れた GET・POST → 500 でなく 400 `INVALID_ARGUMENT` | L2 |
 | M2 | `登録の無いゲームのNOT_FOUNDの応答はスキーマに合う` | 3 つの操作で登録の無いゲームの 404 を起こし、本文が `Error` に合い、`x-error-codes` に `NOT_FOUND` がある | L2 |
 | M3 | `ゲームの機能の設定の行から使える機能の集合を作り知らない名前は捨てる` | `enabledModules`: `[{module:'rankings'},{module:'chat'},{module:null}]` と既知 `['announcements','rankings']` → `{'rankings'}` | L1 |
-| M3 | `demo-rpgはannouncementsとrankingsの両方を使う設定で登録される` | 試験の D1 の `game_modules` の `demo-rpg` の行がちょうど 2 つ | L2 |
+| M3 | `demo-rpgはannouncementsとrankingsとsavesを使う設定で登録される` | 試験の D1 の `game_modules` の `demo-rpg` の行がちょうど `announcements`・`rankings`・`saves` の 3 つ（セーブの V1 で置き換えた。名前の正は `docs/guides/working/save-design.md` §7） | L2 |
 | M3 | `rankingsを使わない設定のゲームのランキングはNOT_FOUNDの404を返す` | `registerGame(db, 'news-only', ['announcements'])` で GET ランキング → 404・`NOT_FOUND` | L2 |
 | M3 | `rankingsを使わない設定のゲームへのスコアの投稿はNOT_FOUNDの404を返し記録しない` | 同じゲームに POST → 404・行が増えない | L2 |
 | M3 | `announcementsを使わない設定のゲームのお知らせはNOT_FOUNDの404を返す` | `registerGame(db, 'score-only', ['rankings'])` で GET お知らせ → 404・同じゲームのランキングは 200 | L2 |

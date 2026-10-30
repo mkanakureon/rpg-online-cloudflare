@@ -14,7 +14,7 @@ CLIモック（Node.js）                Unreal（C++）・Unity（C#）・ブ�
          +------------------+---------------------+
          |                  |                     |
         D1             KV / R2           Durable Objects
-  SQL・ランキング   配信設定・セーブ      共有状態・リアルタイム
+  SQL・ランキング・セーブ   配信設定・大きなファイル   共有状態・リアルタイム
 ```
 
 ※ 初期PoCは **Workers + D1のみ**。KV/R2/Durable Objectsは機能要求が確定した段階で追加する。
@@ -24,9 +24,9 @@ CLIモック（Node.js）                Unreal（C++）・Unity（C#）・ブ�
 | サービス | 想定用途 | 設計上の注意 |
 | --- | --- | --- |
 | Workers | REST API、ルーティング、入力検証、認証 | スコア・通貨などはクライアント申告を信用しない |
-| D1 | SQL、ランキング、プレイヤー、投稿 | テーブル境界・インデックス・競合制御を設計 |
+| D1 | SQL、ランキング、プレイヤー、投稿、セーブ（本体も 1 行に持つ。64 KiB まで。`docs/guides/working/save-design.md`） | テーブル境界・インデックス・競合制御を設計 |
 | KV | マスターデータ、設定、お知らせのキャッシュ | 結果整合性。残高や在庫の原子的更新に使わない |
-| R2 | セーブデータ、画像、ユーザー生成コンテンツ | 認可、サイズ制限、保存期間・削除ポリシー |
+| R2 | D1 に収まらない大きなセーブ（いまは使わない。`save-design.md` §9）、画像、ユーザー生成コンテンツ | 認可、サイズ制限、保存期間・削除ポリシー |
 | Durable Objects | WebSocket、ロビー、ワールドボス状態 | オブジェクト単位の競合制御。規模・料金を検証 |
 | Cron Triggers | 日次切替・集計・清掃 | 冪等性、タイムゾーンの明示 |
 
@@ -54,13 +54,14 @@ CLIモック（Node.js）                Unreal（C++）・Unity（C#）・ブ�
 - `accounts`: 共通のアカウント（内部の`account_id`。クライアントに返さない。いまはゲストだけ）
 - `game_players`: ゲームごとのプレイヤー（公開用の`playerId`と、それを持つ`account_id`。1 つのアカウントは 1 つのゲームに 1 人）
 - `ranking_entries`: ゲーム、ボード、プレイヤーごとのスコア
+- `saves`: ゲーム、プレイヤー、スロットごとのセーブ（形式の版・本体・チェックサム・リビジョン・消した印）
 - `announcements`: お知らせの内容、有効期間
 - `messages`: 酒場投稿、削除・通報状態
 - `events`: 期間限定イベント定義
 - `event_progress`: プレイヤーごとの達成度と報酬取得状況
 - `adventurer_profiles`: 公開可能なゴースト用プロフィール
 
-PoCで実際に作るのは`games`（登録だけ。公開状態の欄はまだ無い）と`game_modules`と`accounts`と`game_players`と`ranking_entries`と`announcements`のみ。`accounts`と`game_players`の境目は`docs/guides/working/account-design.md` §2。
+PoCで実際に作るのは`games`（登録だけ。公開状態の欄はまだ無い）と`game_modules`と`accounts`と`game_players`と`ranking_entries`と`saves`と`announcements`のみ。`accounts`と`game_players`の境目は`docs/guides/working/account-design.md` §2。
 
 ## 5. クライアントとの将来の境界
 
