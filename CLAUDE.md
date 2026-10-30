@@ -8,9 +8,9 @@ Issue 駆動キット（Node 版）を入れた。入れた版は `.issue-kit/ve
 
 ## プロジェクト
 
-- UE製RPG制作ツールに足すオンライン機能（お知らせ・ランキングなど）のバックエンド。**ローカル専用の PoC**で、認証・レート制限・不正対策は未実装。設計は `docs/guides/working/architecture.md`、HTTP/JSON の契約は `docs/api-contract.md`（CLI・UE・サーバーで共通の正）。
+- Cloudflare 上で動く、エンジンに依存しないモジュール式のゲームバックエンド（OSS を目指す。ADR 0002）。クライアントは Unreal・Unity・ブラウザの 3 つで、いまは CLI モックだけ。**ローカル専用の PoC**で、認証・レート制限・不正対策は未実装。設計は `docs/guides/working/architecture.md`、HTTP/JSON の契約は `docs/api-contract.md`（CLI・UE・サーバーで共通の正）。
 - Node.js **22.14.0**（`.nvmrc`）・npm **11.6.2**・TypeScript・テストは **vitest**（`@cloudflare/vitest-plugin` で Workers のランタイムの中で回す）。Cloudflare Workers・D1。
-- `src/worker.ts` が API の全部（ルーティング・入力の検証・D1）。`scripts/cli-mock.mjs` は将来の UE の HTTP クライアントの代わりで、API を変えたらここも合わせる。
+- `src/worker.ts` が API の全部（ルーティング・入力の検証・D1）。`scripts/cli-mock.mjs` は将来の 3 つの HTTP クライアントの代わりで、API を変えたらここも合わせる。
 - ロジックは入出力（HTTP・DB）から外へ出し、ふつうの関数にする（単体の試験で速く確かめるため。design-cycle §2）。
 
 ## コマンド
