@@ -58,7 +58,7 @@ CLIモック（Node.js）                Unreal（C++）・Unity（C#）・ブ�
 - `event_progress`: プレイヤーごとの達成度と報酬取得状況
 - `adventurer_profiles`: 公開可能なゴースト用プロフィール
 
-PoCで実際に作るのは`ranking_entries`と`announcements`のみ。
+PoCで実際に作るのは`games`（登録だけ。公開状態の欄はまだ無い）と`ranking_entries`と`announcements`のみ。
 
 ## 5. クライアントとの将来の境界
 

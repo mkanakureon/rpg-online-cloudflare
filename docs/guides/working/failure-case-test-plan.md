@@ -33,7 +33,7 @@
 | --- | --- |
 | `gameId` の検証 | `^[a-zA-Z0-9_-]{1,64}$`。外れたら `400 INVALID_ARGUMENT`。GET でも POST でも同じ |
 | ボード ID | パスの `^/v1/rankings/([a-zA-Z0-9_-]{1,64})$`。外れたら（例: 65 文字・空白入り）どのエンドポイントにも当たらず `404 NOT_FOUND` |
-| 存在しないゲーム・ボード | ゲームやボードの一覧の表が無い。形の正しい ID なら `200` と空の `items` が返る |
+| 存在しないゲーム・ボード | ゲームは `games` の表（`migrations/0002_games.sql`。`demo-rpg` は登録済み）で引き、登録の無い `gameId` は `404 NOT_FOUND`（`Unknown game`）。ボードの一覧の表は無く、登録済みのゲームなら形の正しいボード ID で `200` と空の `items` が返る |
 | `limit` | 数字だけの 1〜50。外れたら `400 INVALID_ARGUMENT`。既定 10 |
 | スコア | `Number.isSafeInteger` かつ 0〜1,000,000,000。外れたら `400 INVALID_ARGUMENT`。文字列の `"1200"` も 400。DB にも `CHECK(score >= 0 AND score <= 1000000000)` |
 | 書き込み | `APP_ENV !== 'local'` なら `403 NOT_READY_FOR_PRODUCTION`（本文を読む前）。本文が JSON でなければ `400 INVALID_JSON`、オブジェクトでなければ `400 INVALID_ARGUMENT` |
@@ -49,6 +49,7 @@
 - **層**は `docs/guides/decisions/test-plan.md` §3 の L1（ふつうの関数）・L2（HTTP と D1 を通す）。いまの `src/worker.ts` には外へ出した関数が無いので、`いま` の行は L2 にする（§5 の 決めること 3）。
 - L2 の試験は、`src/worker.ts` の `default` を直に読み込み、`fetch(要求, env)` を呼ぶ。`env` は `cloudflare:workers` の `env` を広げて、書き込みの試験だけ `APP_ENV: 'local'` を渡す。`wrangler.jsonc` の既定の `APP_ENV=disabled` は変えない。
 - D1 のテーブルは、`vitest.config.ts` で `@cloudflare/vitest-plugin` の `readD1Migrations('migrations')` を読み、試験の準備（setup のファイル）で `applyD1Migrations(env.DB, …)` する。データは試験ごとに入れ、試験の間で前のデータに頼らない。
+- 登録の無いゲームへの要求は 404 になる（§5 の 決めること 1）。`demo-rpg` 以外のゲーム（`other-rpg` など）へ書き込む試験は、`beforeEach` で `test/support/games.ts` の `registerGame(db, gameId)` を呼んで登録しておく。
 - DB の失敗の試験は、`prepare` が例外を投げる偽の `DB` を `env` に渡す（本物の D1 を壊さない）。
 - テストの名前は §3 の表の文そのまま `it('…')` に書く。名前を変えるときは、この表も同じコミットで直す（`docs/guides/procedures/node-test-procedure.md`）。
 - 置き場は `test/` の下で、束ごとに 1 ファイル（例: K1 は `test/failure-input.test.ts`、K2 は `test/failure-server.test.ts`）。
@@ -64,9 +65,9 @@
 | 1 | `途中で切れたJSONの本文はINVALID_JSONの400を返す` | いま | L2 | `APP_ENV=local`・本文 `{"gameId":"demo-rpg","sco`（送信の途中で切れた形） | 400・`INVALID_JSON`。行は増えない（K2） |
 | 1 | `CLIはタイムアウトしたら決めた回数だけ再試行して失敗を表示する` | UE統合後 | L2 | CLI モック（`scripts/cli-mock.mjs`）が、応答しないサーバーへ要求する | 決めた時間で打ち切り、決めた回数だけ再試行して、終了コード 1 と理由を出す（回数と時間は Phase 3 で決める） |
 | 1 | `UEクライアントは500を受けたら再試行して利用者に通信エラーを出す` | UE統合後 | L3 | UE のクライアントが `500 INTERNAL_ERROR` を受ける | 再試行のあと、ゲームの画面に通信エラーが出て、ゲームは止まらない（ユーザーが見る） |
-| 2 | `存在しないゲームのランキングは200と空の一覧を返す` | いま | L2 | データ無しで `GET /v1/rankings/boss-score?gameId=no-such-game` | 200・`{"gameId":"no-such-game","boardId":"boss-score","items":[]}`（いまの挙動。404 にするかは §5 の 決めること 1）（K1） |
+| 2 | `登録の無いゲームのランキングはNOT_FOUNDの404を返す` | いま | L2 | 登録の無い `no-such-game` で `GET /v1/rankings/boss-score?gameId=no-such-game` | 404・`NOT_FOUND`（§5 の 決めること 1。置き場は `test/games.test.ts`。`docs/guides/working/core-foundation-design.md` §4 の M2）（K1） |
 | 2 | `存在しないボードのランキングは200と空の一覧を返す` | いま | L2 | `demo-rpg` の `boss-score` に 1 行入れて `GET /v1/rankings/no-such-board?gameId=demo-rpg` | 200・`items` が空。`boss-score` の行が混ざらない（決めること 1）（K1） |
-| 2 | `存在しないゲームのお知らせは200と空の一覧を返す` | いま | L2 | `GET /v1/announcements?gameId=no-such-game` | 200・`{"gameId":"no-such-game","items":[]}`（決めること 1）（K1） |
+| 2 | `登録の無いゲームのお知らせはNOT_FOUNDの404を返す` | いま | L2 | 登録の無い `no-such-game` で `GET /v1/announcements?gameId=no-such-game` | 404・`NOT_FOUND`（決めること 1。置き場は `test/games.test.ts`）（K1） |
 | 2 | `ボードIDの形が正しくなければNOT_FOUNDの404を返す` | いま | L2 | `GET /v1/rankings/` に 65 文字のボード ID、と `GET /v1/rankings/boss%20score` | どちらも 404・`NOT_FOUND`（K1） |
 | 2 | `gameIdが無いか形が正しくなければINVALID_ARGUMENTの400を返す` | いま | L2 | `GET /v1/rankings/boss-score`（`gameId` 無し）・`gameId=` （空）・`gameId=demo.rpg` | どれも 400・`INVALID_ARGUMENT`（K1） |
 | 2 | `limitが1から50の外なら400を返す` | いま | L2 | `limit=0`・`limit=51`・`limit=-1`・`limit=1.5`・`limit=abc` | どれも 400・`INVALID_ARGUMENT`。`limit=1` と `limit=50` は 200（K1） |
@@ -119,9 +120,9 @@ K1:
 import { runTests, requireTests, gitClean, done } from './scripts/issue-run/check-lib.mjs';
 runTests();
 requireTests([
-  '存在しないゲームのランキングは200と空の一覧を返す',
+  '登録の無いゲームのランキングはNOT_FOUNDの404を返す',
   '存在しないボードのランキングは200と空の一覧を返す',
-  '存在しないゲームのお知らせは200と空の一覧を返す',
+  '登録の無いゲームのお知らせはNOT_FOUNDの404を返す',
   'ボードIDの形が正しくなければNOT_FOUNDの404を返す',
   'gameIdが無いか形が正しくなければINVALID_ARGUMENTの400を返す',
   'limitが1から50の外なら400を返す',
@@ -198,7 +199,7 @@ done();
 
 | # | 決めること | 案 | 決定（推しのとおり） |
 | --- | --- | --- | --- |
-| 1 | 存在しないゲーム・ボードの GET の応答 | A: いまのまま 200 と空の `items`。B: ゲームとボードの表を足し 404 `NOT_FOUND` | **A**。PoC にゲームの登録の仕組みが無く、B は新しいマイグレーションと登録の API が要る。`docs/api-contract.md` に「形が正しい ID は 200 と空の一覧」と 1 行足す（契約の正はそちら）。登録の仕組みを入れるときに B を決め直す |
+| 1 | 存在しないゲーム・ボードの GET の応答 | A: いまのまま 200 と空の `items`。B: ゲームとボードの表を足し 404 `NOT_FOUND` | **ゲームだけ B・ボードは A**（2026-10-30 に決め直した。`docs/guides/working/core-foundation-design.md` §6 の決めること 1）。登録の無いゲームは 404 `NOT_FOUND`（`Unknown game`。エラーコードは足さない）。ゲームの登録は `games` の表をマイグレーションで入れる（登録の API は作らない）。ボードは表を作らず、登録済みのゲームなら 200 と空の `items`。契約の正は `docs/api-contract.md` |
 | 2 | 書き込みで、低いスコアでも `displayName` を上書きする | A: いまのまま上書き。B: スコアが上がったときだけ上書き | **A**。名前の変更を反映できる。§3 の試験は `score` だけを見るので、どちらでも通る |
 | 3 | 入力の検証を `src/worker.ts` の外のふつうの関数にするか | A: K1 で検証の関数を外へ出し、L1 の試験を足す。B: いまは L2 だけ | **B**（K1・K2 は `src/` を変えない束にして、試験だけを先にそろえる）。外へ出すのは認証を入れる K3 の前に、別の Issue で。§3 の名前は HTTP で見る形なので、外へ出しても変えなくてよい |
 | 4 | 二重送信の見分け方（送信 ID） | A: `Idempotency-Key` のヘッダー。B: 本文の欄 | **A**（本文の形を変えず、CLI と UE で同じに付けられる）。認証の設計（K3）で決める |

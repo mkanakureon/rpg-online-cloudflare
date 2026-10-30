@@ -79,7 +79,7 @@
         ],
         "responses": {
           "200": {
-            "description": "お知らせの一覧。データが無くても 200 と空の items。",
+            "description": "お知らせの一覧。登録済みのゲームなら、データが無くても 200 と空の items。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -112,6 +112,29 @@
             },
             "x-error-codes": [
               "INVALID_ARGUMENT"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "登録の無いゲーム（message は Unknown game）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
             ],
             "content": {
               "application/json": {
@@ -228,7 +251,7 @@
             }
           },
           "404": {
-            "description": "boardId の形が外れている（どのルートにも当たらない）。",
+            "description": "boardId の形が外れている（どのルートにも当たらない）か、登録の無いゲーム（message は Unknown game）。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -357,7 +380,7 @@
             }
           },
           "404": {
-            "description": "boardId の形が外れている（どのルートにも当たらない）。",
+            "description": "boardId の形が外れている（どのルートにも当たらない）か、登録の無いゲーム（message は Unknown game）。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",

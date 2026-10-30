@@ -29,7 +29,7 @@
 ```
 
 - `limit`: 1～50、デフォルト10。
-- 形の正しい`gameId`・`boardId`なら、データが無くても（存在しないゲーム・ボードでも）**200と空の`items`**を返す。404にはしない。お知らせ（`GET /v1/announcements`）も同じ。ゲームの登録の仕組みを入れるときに決め直す。
+- 登録の無い`gameId`は**404 `NOT_FOUND`**（`message`は`Unknown game`）。お知らせ（`GET /v1/announcements`）・スコアの投稿（`POST`）も同じ。登録済みのゲームなら、ボードにデータが無くても（存在しないボードでも）**200と空の`items`**を返す。ゲームの登録はマイグレーションで入れる（`migrations/0002_games.sql`。`demo-rpg`は登録済み）。
 - 現PoCの順位は**高スコア優先のみ**。タイムアタックなど昇順ボードは将来追加。
 
 ## POST /v1/rankings/boss-score
