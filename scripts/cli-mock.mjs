@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Mac-side CLI replacement for a future UE HTTP client. Local testing only. */
 import {
-  SMOKE_BOARD_ID, SMOKE_SLOT_ID, authHeaders, guestRequest, saveData, saveWrite, scoreSubmission, sha256Hex
+  SMOKE_BOARD_ID, SMOKE_SLOT_ID, authHeaders, configPath, guestRequest, saveData, saveWrite, scoreSubmission, sha256Hex
 } from './cli-requests.mjs';
 
 const base = process.env.API_BASE_URL || 'http://127.0.0.1:8787';
@@ -21,6 +21,19 @@ async function call(path, options = {}) {
 try {
   const health = await call('/health');
   if (health.status !== 'ok') throw new Error('Health check failed');
+
+  // 設定はトークン無しで読める（ゲストの発行の前）。2 回目は ETag を If-None-Match に付けて、本文の無い 304 を確かめる
+  // （304 は本文が無いので call() を通さず fetch を直に使う。docs/guides/working/config-design.md §6）
+  const configUrl = configPath();
+  const first = await fetch(`${base}${configUrl}`);
+  const settings = await first.json();
+  const etag = first.headers.get('etag');
+  console.log(`GET ${configUrl}:`, first.status, JSON.stringify(settings), `etag=${etag}`);
+  if (first.status !== 200 || !etag) throw new Error('Config could not be read');
+  if (settings.clientVersion.update === 'required') throw new Error('Client version is older than the minimum');
+  const again = await fetch(`${base}${configUrl}`, { headers: { 'If-None-Match': etag } });
+  console.log(`GET ${configUrl}:`, again.status, '(If-None-Match)');
+  if (again.status !== 304) throw new Error('Unchanged config was sent again (expected 304)');
   await call('/v1/announcements?gameId=demo-rpg');
 
   const guest = await call('/v1/accounts/guest', {

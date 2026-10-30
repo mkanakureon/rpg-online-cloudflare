@@ -6,7 +6,8 @@
 // 概要記述: Claude Opus 5.5 — 2026-10-30
 import type { GameModule } from '../core/module';
 import { announcements } from './announcements';
+import { config } from './config';
 import { rankings } from './rankings';
 import { saves } from './saves';
 
-export const modules: GameModule[] = [announcements, rankings, saves];
+export const modules: GameModule[] = [announcements, rankings, saves, config];

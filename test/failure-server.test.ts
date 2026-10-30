@@ -2,7 +2,8 @@
  * 失敗ケースの試験 K2: サーバー側の失敗と互換（ケース 1・5・6・7 の「いま」）。
  * 名前と期待する結果の正は docs/guides/working/failure-case-test-plan.md §3。ただし `CLIモックと同じ流れでゲストのセーブを書いて読み直せる`・
  * `CLIモックと同じ流れでセーブの一覧に出たスロットを消せる` は
- * docs/guides/working/save-design.md §7 が正（互換の試験の隣に置く）。
+ * docs/guides/working/save-design.md §7 が正、`CLIモックと同じ流れで設定を読み変わっていなければ304を受け取る` は
+ * docs/guides/working/config-design.md §7 が正（互換の試験の隣に置く）。
  * src/worker.ts の default.fetch を直に呼ぶ L2 の試験。DB の失敗は prepare が投げる偽の DB で起こす。
  */
 import { env } from 'cloudflare:workers';
@@ -10,7 +11,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
 import { bearerForBody } from './support/auth';
 import {
-  SMOKE_BOARD_ID, SMOKE_SLOT_ID, authHeaders, guestRequest, saveData, saveWrite, scoreSubmission, sha256Hex,
+  CLI_CLIENT_VERSION, SMOKE_BOARD_ID, SMOKE_SLOT_ID, authHeaders, configPath, guestRequest, saveData, saveWrite, scoreSubmission, sha256Hex,
 } from '../scripts/cli-requests.mjs';
 
 type Migration = { name: string; queries: string[] };
@@ -228,6 +229,22 @@ describe('ケース 7: マイグレーションと互換', () => {
     expect(await deleted.json()).toEqual({ ok: true, gameId, slotId: SMOKE_SLOT_ID });
     const got = await worker.fetch(new Request(path, { headers: authHeaders(token) }), localEnv as never);
     expect(got.status).toBe(404);
+  });
+
+  it('CLIモックと同じ流れで設定を読み変わっていなければ304を受け取る', async () => {
+    // scripts/cli-mock.mjs の C1 の流れ: トークン無しで設定を読み、etag を If-None-Match に付けてもう一度読むと 304。
+    // 落ちたら API か CLI モックを直す合図
+    const path = configPath();
+    expect(path).toContain(`clientVersion=${CLI_CLIENT_VERSION}`);
+    const first = await worker.fetch(new Request(base + path), baseEnv as never);
+    expect(first.status).toBe(200);
+    const body = await first.json<{ clientVersion: { update: string } }>();
+    expect(body.clientVersion.update).not.toBe('required');
+    const etag = first.headers.get('etag');
+    expect(etag).not.toBeNull();
+    const again = await worker.fetch(new Request(base + path, { headers: { 'If-None-Match': etag! } }), baseEnv as never);
+    expect(again.status).toBe(304);
+    expect(await again.text()).toBe('');
   });
 
   it('知らない欄が付いた要求も受け付ける', async () => {

@@ -1,7 +1,7 @@
 /**
  * 共通 API の土台 M1: モジュールの一覧と、外へ出した検証関数の L1 の試験。
- * 名前と確かめることの正は docs/guides/working/core-foundation-design.md §4 の M1 の行。ただしセーブの V1 で置き換えた
- * `モジュールの一覧はannouncementsとrankingsとsavesでルートが重ならない` は docs/guides/working/save-design.md §7 が正。
+ * 名前と確かめることの正は docs/guides/working/core-foundation-design.md §4 の M1 の行。ただし機能の一覧の試験は、
+ * 設定配信の C1 で置き換えたもので docs/guides/working/config-design.md §7 が正。
  * HTTP と D1 に触らない。挙動を変えないことは、いまの L2 の試験がそのまま通ることで見る。
  */
 import { describe, expect, it } from 'vitest';
@@ -10,8 +10,8 @@ import { modules } from '../src/modules';
 import { parseLimit, parseScoreSubmission } from '../src/modules/rankings/validate';
 
 describe('M1 モジュールへの分割', () => {
-  it('モジュールの一覧はannouncementsとrankingsとsavesでルートが重ならない', () => {
-    expect(modules.map((m) => m.name).sort()).toEqual(['announcements', 'rankings', 'saves']);
+  it('モジュールの一覧はannouncementsとrankingsとsavesとconfigでルートが重ならない', () => {
+    expect(modules.map((m) => m.name).sort()).toEqual(['announcements', 'config', 'rankings', 'saves']);
     const routes = modules.flatMap((m) => m.routes);
     const keys = routes.map((r) => `${r.method} ${r.pattern.source}`);
     expect(new Set(keys).size).toBe(keys.length);

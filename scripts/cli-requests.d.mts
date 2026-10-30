@@ -32,3 +32,7 @@ export declare function saveWrite(data: string, checksum: string, baseRevision?:
   checksum: string;
   baseRevision: number;
 };
+
+export declare const CLI_CLIENT_VERSION: string;
+
+export declare function configPath(gameId?: string, clientVersion?: string): string;

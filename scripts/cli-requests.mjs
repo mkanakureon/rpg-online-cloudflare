@@ -5,6 +5,8 @@
 // 流れはゲストの発行（guestRequest）→ そのトークンを付けたスコアの投稿（authHeaders・scoreSubmission）→ 同じトークンで
 // セーブを書いて読む（SMOKE_SLOT_ID・saveData・sha256Hex・saveWrite。テスト「CLIモックと同じ流れでゲストのセーブを書いて読み直せる」）→
 // 一覧に出たスロットを消す（テスト「CLIモックと同じ流れでセーブの一覧に出たスロットを消せる」）。
+// 設定はトークンの要らない読み取りで、ゲストの発行より前に読み、ETag を If-None-Match に付けて 304 を受け取る
+// （CLI_CLIENT_VERSION・configPath。テスト「CLIモックと同じ流れで設定を読み変わっていなければ304を受け取る」）。
 // Node.js と Workers のランタイムの両方で読めるよう、Node.js の API を使わない（チェックサムは crypto.subtle）。型は cli-requests.d.mts。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
@@ -44,4 +46,12 @@ export async function sha256Hex(text) {
 /** セーブの書き込みの本文（PUT /v1/saves/:slotId）。初めて書くときの baseRevision は 0。 */
 export function saveWrite(data, checksum, baseRevision = 0) {
   return { formatVersion: 1, data, checksum, baseRevision };
+}
+
+/** CLI モックが名乗るクライアントの版（demo-rpg の最低の版と同じ。docs/guides/working/config-design.md §6）。 */
+export const CLI_CLIENT_VERSION = '1.0.0';
+
+/** 設定を読むパス（GET /v1/config）。 */
+export function configPath(gameId = 'demo-rpg', clientVersion = CLI_CLIENT_VERSION) {
+  return `/v1/config?gameId=${encodeURIComponent(gameId)}&clientVersion=${encodeURIComponent(clientVersion)}`;
 }

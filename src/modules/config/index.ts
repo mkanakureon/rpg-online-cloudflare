@@ -1,0 +1,65 @@
+// config/index.ts — 設定配信のモジュール（GET /v1/config）。機能フラグとクライアントの版を返す。
+//
+// 読むだけ（書き換えの口は無い）で、トークンも APP_ENV の守りも掛けない（公開の情報。秘密を入れない）。
+// 検査の順: gameId の形 → clientVersion の形 → ゲームの登録と機能の設定（config）→ 表を引く → ETag と If-None-Match（304）。
+// 200 と 304 は jsonHeaders を広げて cache-control: no-cache と etag を付ける（エラーは error() のまま no-store）。
+// 表の版が形に合わなければマイグレーションの誤りとして throw し、入口の try/catch で 500 にする。
+// 設計の正は docs/guides/working/config-design.md §3、形の正は docs/api-contract.md と openapi/rpg-online.v1.json。
+//
+// 概要記述: Claude Opus 5.5 — 2026-10-30
+import { requireGame } from '../../core/games';
+import { error, jsonHeaders } from '../../core/http';
+import { validId } from '../../core/ids';
+import type { GameModule } from '../../core/module';
+import { etagOf, matchesIfNoneMatch } from './etag';
+import { parseVersion, updateStatus } from './version';
+
+/** 表の版を数の配列にする。NULL は null、形の外れは throw（500）。 */
+function storedVersion(text: string | null): number[] | null {
+  if (text === null) return null;
+  const parsed = parseVersion(text);
+  if (!parsed) throw new Error('Invalid client version in game_configs');
+  return parsed;
+}
+
+export const config: GameModule = {
+  name: 'config',
+  routes: [
+    {
+      method: 'GET',
+      pattern: /^\/v1\/config$/,
+      async handle(req, env, _match, url, known) {
+        const gameId = url.searchParams.get('gameId');
+        if (!validId(gameId)) return error('INVALID_ARGUMENT', 'Invalid gameId', 400);
+        const rawVersion = url.searchParams.get('clientVersion');
+        const client = rawVersion === null ? null : parseVersion(rawVersion);
+        if (rawVersion !== null && !client) return error('INVALID_ARGUMENT', 'Invalid clientVersion', 400);
+        const unknown = await requireGame(env, gameId, config.name, known);
+        if (unknown) return unknown;
+
+        const versions = await env.DB.prepare(
+          'SELECT min_client_version, latest_client_version FROM game_configs WHERE game_id = ?'
+        ).bind(gameId).all<{ min_client_version: string | null; latest_client_version: string | null }>();
+        const flagRows = await env.DB.prepare(
+          'SELECT name, enabled FROM config_flags WHERE game_id = ? ORDER BY name ASC'
+        ).bind(gameId).all<{ name: string; enabled: number }>();
+        const row = versions.results[0];
+        const minimum = row?.min_client_version ?? null;
+        const latest = row?.latest_client_version ?? null;
+        const flags = Object.fromEntries(flagRows.results.map((f) => [f.name, f.enabled === 1]));
+        const body = JSON.stringify({
+          gameId,
+          clientVersion: { minimum, latest, update: updateStatus(client, storedVersion(minimum), storedVersion(latest)) },
+          flags,
+        });
+
+        const etag = await etagOf(body);
+        const headers = { ...jsonHeaders, 'cache-control': 'no-cache', etag };
+        if (matchesIfNoneMatch(req.headers.get('if-none-match'), etag)) {
+          return new Response(null, { status: 304, headers: { 'cache-control': 'no-cache', etag } });
+        }
+        return new Response(body, { status: 200, headers });
+      },
+    },
+  ],
+};
