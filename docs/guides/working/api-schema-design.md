@@ -58,7 +58,7 @@
 
 ## 3. スキーマの中身（いまの挙動を写す）
 
-`paths` の 5 つの操作と、`components.schemas` に置く形（`issueGuest` はアカウントの A1 で足した。挙動の正は `docs/guides/working/account-design.md` §3）。`submitScore` は `security: [{ bearerToken: [] }]` で `Authorization: Bearer <token>` が要る（`components.securitySchemes` の `bearerToken` は `type: http`・`scheme: bearer`。アカウントの A2 で足した。挙動の正は `docs/guides/working/account-design.md` §5）。
+`paths` の 7 つの操作と、`components.schemas` に置く形（`issueGuest` はアカウントの A1 で足した。挙動の正は `docs/guides/working/account-design.md` §3。`getSave`・`putSave` はセーブの V1 で足した。挙動の正は `docs/guides/working/save-design.md` §3）。`submitScore`・`getSave`・`putSave` は `security: [{ bearerToken: [] }]` で `Authorization: Bearer <token>` が要る（`components.securitySchemes` の `bearerToken` は `type: http`・`scheme: bearer`。アカウントの A2 で足した。挙動の正は `docs/guides/working/account-design.md` §5）。
 
 | 操作（`operationId`） | エンドポイント | 引数・本文 | 応答（状態 → 形） |
 | --- | --- | --- | --- |
@@ -67,6 +67,8 @@
 | `listAnnouncements` | `GET /v1/announcements` | クエリ `gameId`（必須・`Id`） | 200 → `AnnouncementList`（`gameId`・`items` は `Announcement` の配列・`maxItems: 50`）・400・500 → `Error` |
 | `getRanking` | `GET /v1/rankings/{boardId}` | パス `boardId`（`Id`）・クエリ `gameId`（必須・`Id`）・`limit`（`integer`・`minimum: 1`・`maximum: 50`・`default: 10`） | 200 → `RankingList`（`gameId`・`boardId`・`items` は `RankingEntry` の配列・`maxItems: 50`）・400・404・500 → `Error` |
 | `submitScore` | `POST /v1/rankings/{boardId}` | パス `boardId`（`Id`）・本文 `ScoreSubmission`（必須） | 200 → `ScoreAccepted`（`ok` は `const: true`・`gameId`・`boardId`・`playerId`）・400・401・403・404・500 → `Error` |
+| `getSave` | `GET /v1/saves/{slotId}` | パス `slotId`（`Id`）・クエリ `gameId`（必須・`Id`） | 200 → `Save`（`SaveMeta` の欄と `data`）・400・401・403・404・500 → `Error` |
+| `putSave` | `PUT /v1/saves/{slotId}` | パス `slotId`（`Id`）・クエリ `gameId`（必須・`Id`）・本文 `SaveWrite`（必須。`formatVersion`・`data`・`checksum`・`baseRevision`） | 200 → `SaveMeta`（`gameId`・`slotId`・`revision`・`formatVersion`・`checksum`・`size`・`updatedAt`）・400・401・403・404・409・413・500 → `Error` |
 
 | 形（`components.schemas`） | 中身 |
 | --- | --- |
@@ -113,7 +115,7 @@
 | S1 | `GET /v1/rankings/{boardId}の応答はスキーマに合う` | 2 行入れて 200 の本文が `RankingList` に合う | L2 |
 | S1 | `POST /v1/rankings/{boardId}の応答はスキーマに合う` | `APP_ENV=local` で正しい本文を送り、200 の本文が `ScoreAccepted` に合う | L2 |
 | S1 | `エラーの応答はスキーマに書いた状態とエラーコードの組で返る` | 10 個のエラーコードを 1 つずつ起こし（偽の DB で 500 も。認証の 3 つは `submitScore` で、`SAVE_CONFLICT`・`PAYLOAD_TOO_LARGE` は `putSave` で）、本文が `Error` に合い、状態とコードの組が §3 の表（スキーマの `x-error-codes`）に載っている | L2 |
-| S2 | `スキーマの操作はどれもsrc/worker.tsのルートに当たる` | スキーマの 5 つの操作に、スキーマの例の値で要求し、どれも `NOT_FOUND` でない | L2 |
+| S2 | `スキーマの操作はどれもsrc/worker.tsのルートに当たる` | スキーマの操作（いまは 7 つ）に、スキーマの例の値で要求し、どれも `NOT_FOUND` でない | L2 |
 | S2 | `スキーマに無いメソッドとパスはNOT_FOUNDの404を返す` | スキーマの `paths` から作った「無いメソッド」（`POST /health`・`DELETE /v1/rankings/{boardId}` など）と「無いパス」（`/v1/events`）が 404 `NOT_FOUND`。スキーマに無いルートを足すと落ちる | L2 |
 | S2 | `スキーマの入力の制約の境目でAPIの合否がスキーマと一致する` | `ScoreSubmission` と `limit` の `minimum`・`maximum`・`minLength`・`maxLength`・`pattern` から境目の値（ちょうど・1 つ外）を作って送り、スキーマが通す値は 200・外す値は 400 `INVALID_ARGUMENT`。値は手で並べずスキーマから作る | L2 |
 | S2 | `api-contract.mdの要求と応答の例はスキーマに合う` | `docs/api-contract.md` の ```json の例（各エンドポイントの応答・入力・エラー）が、その節の操作のスキーマに合う | L1 |

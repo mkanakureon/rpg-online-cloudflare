@@ -10,9 +10,9 @@ async function call(path, options = {}) {
   const response = await fetch(`${base}${path}`, options);
   const body = await response.json();
   // トークンは画面に出さない（docs/guides/decisions/operations-security.md）
-  // セーブの本体（data）も画面に出さない（size と revision だけ見せる）
+  // セーブの応答は本体（data）を出さず、size と revision だけ見せる（docs/guides/working/save-design.md §6）
   let shown = body && typeof body === 'object' && 'token' in body ? { ...body, token: '[redacted]' } : body;
-  if (shown && typeof shown === 'object' && 'data' in shown) shown = { ...shown, data: '[omitted]' };
+  if (path.startsWith('/v1/saves/') && response.ok) shown = { size: body.size, revision: body.revision };
   console.log(`${options.method || 'GET'} ${path}:`, response.status, JSON.stringify(shown));
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return body;
