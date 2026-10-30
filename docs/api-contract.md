@@ -12,6 +12,27 @@
 {"status":"ok","service":"rpg-online-backend"}
 ```
 
+## POST /v1/accounts/guest
+
+ゲストのアカウントを発行し、そのゲームのプレイヤー ID（`playerId`）とトークンを返す。1 回で、アカウント 1 つとそのゲームのプレイヤー 1 人を作る。設計の正は `docs/guides/working/account-design.md`。
+
+入力例:
+
+```json
+{"gameId":"demo-rpg"}
+```
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","playerId":"6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","token":"v1.eyJnIjoiZGVtby1ycGcifQ.c2lnbmF0dXJl","expiresAt":"2026-11-29T00:00:00.000Z"}
+```
+
+- `playerId`はゲームごとに分けた公開用の ID（UUID）。内部のアカウント ID は応答にもトークンにも入れない。同じ本文で 2 回呼ぶと、別のアカウントと別の`playerId`になる。
+- `token`は`v1.<本文>.<署名>`（HMAC-SHA256）で、期限は 30 日（`expiresAt`）。期限が切れたらゲストを発行し直す（前のプレイヤーは引き継がない）。
+- 登録の無い`gameId`は**404 `NOT_FOUND`**（`message`は`Unknown game`）。アカウントはどのゲームにも要る土台なので、ゲームの機能の設定（`game_modules`）は見ない。
+- 書込み系 API なので、`npm run dev`でローカル実行し`APP_ENV=local`を与えた時のみ発行できる（ほかは本文を読む前に**403 `NOT_READY_FOR_PRODUCTION`**）。
+
 ## GET /v1/announcements?gameId=demo-rpg
 
 レスポンス例（200）:

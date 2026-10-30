@@ -63,6 +63,137 @@
         }
       }
     },
+    "/v1/accounts/guest": {
+      "post": {
+        "operationId": "issueGuest",
+        "summary": "ゲストのアカウントを発行し、そのゲームのプレイヤー ID とトークンを返す。APP_ENV=local のときだけ受け付ける",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GuestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "発行した（アカウント 1 つとそのゲームのプレイヤー 1 人を作った）。内部のアカウント ID は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuestIssued"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON でない（INVALID_JSON）・オブジェクトでない・gameId の形が外れている（INVALID_ARGUMENT）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT",
+              "INVALID_JSON"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（本文を読む前に断る）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "登録の無いゲーム（message は Unknown game）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・署名の鍵が無いなど）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/announcements": {
       "get": {
         "operationId": "listAnnouncements",
@@ -592,6 +723,46 @@
           },
           "playerId": {
             "$ref": "#/components/schemas/Id"
+          }
+        }
+      },
+      "GuestRequest": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "gameId"
+        ],
+        "description": "知らない欄は無視する。",
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          }
+        }
+      },
+      "GuestIssued": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "playerId",
+          "token",
+          "expiresAt"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "playerId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "token": {
+            "type": "string",
+            "pattern": "^v1\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+            "description": "v1.<本文>.<署名>（どちらも base64url）。本文はクライアントが読めるが、形は決めない（Authorization: Bearer に付けて送るだけ）。期限は 30 日。"
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "トークンの期限（ISO 8601・UTC）。過ぎたらゲストを発行し直す。"
           }
         }
       },

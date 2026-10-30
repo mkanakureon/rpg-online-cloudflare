@@ -51,7 +51,8 @@ CLIモック（Node.js）                Unreal（C++）・Unity（C#）・ブ�
 
 - `games`: ゲームの設定と公開状態
 - `game_modules`: ゲームごとに使う機能（行があればその機能を使う）
-- `players`: プラットフォーム認証済みのプレイヤー
+- `accounts`: 共通のアカウント（内部の`account_id`。クライアントに返さない。いまはゲストだけ）
+- `game_players`: ゲームごとのプレイヤー（公開用の`playerId`と、それを持つ`account_id`。1 つのアカウントは 1 つのゲームに 1 人）
 - `ranking_entries`: ゲーム、ボード、プレイヤーごとのスコア
 - `announcements`: お知らせの内容、有効期間
 - `messages`: 酒場投稿、削除・通報状態
@@ -59,7 +60,7 @@ CLIモック（Node.js）                Unreal（C++）・Unity（C#）・ブ�
 - `event_progress`: プレイヤーごとの達成度と報酬取得状況
 - `adventurer_profiles`: 公開可能なゴースト用プロフィール
 
-PoCで実際に作るのは`games`（登録だけ。公開状態の欄はまだ無い）と`game_modules`と`ranking_entries`と`announcements`のみ。
+PoCで実際に作るのは`games`（登録だけ。公開状態の欄はまだ無い）と`game_modules`と`accounts`と`game_players`と`ranking_entries`と`announcements`のみ。`accounts`と`game_players`の境目は`docs/guides/working/account-design.md` §2。
 
 ## 5. クライアントとの将来の境界
 
