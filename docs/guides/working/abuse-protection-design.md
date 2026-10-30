@@ -198,7 +198,7 @@ content-type: application/json; charset=utf-8
 
 ## 7. 試験の名前の表
 
-名前は `it('…')` の文そのまま（`docs/guides/procedures/node-test-procedure.md`）。置き場は R1 が `test/rate-limits.test.ts`（L1 の 3 本も同じファイル）、R2 が `test/saves-limits.test.ts`、スキーマの 2 本は `test/schema-conformance.test.ts`、CLI モックの 1 本は `test/failure-server.test.ts`。
+名前は `it('…')` の文そのまま（`docs/guides/procedures/node-test-procedure.md`）。置き場は R1 が `test/rate-limits.test.ts`（L1 の 3 本も同じファイル）、R2 が `test/saves-rate-limits.test.ts`、スキーマの 2 本は `test/schema-conformance.test.ts`、CLI モックの 1 本は `test/failure-server.test.ts`。
 
 試験の作り方:
 

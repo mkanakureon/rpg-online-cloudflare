@@ -162,19 +162,20 @@ INSERT OR IGNORE INTO game_modules (game_id, module) SELECT game_id, 'saves' FRO
 | 1 | ルート（`^/v1/saves/([a-zA-Z0-9_-]{1,64})$` と `PUT`） | 404 `NOT_FOUND`（`Endpoint not found`） |
 | 2 | `requireLocalWrite(env)` | 403 `NOT_READY_FOR_PRODUCTION` |
 | 3 | `requireAuth(req, env)` | 401 `UNAUTHENTICATED`・`TOKEN_EXPIRED`（鍵が無ければ 500） |
-| 4 | 問い合わせの `gameId` が `validId` | 400 `INVALID_ARGUMENT`（`Invalid gameId`） |
-| 5 | `gameId` がトークンの `g` と同じ | 403 `PERMISSION_DENIED`（`Token does not match game`） |
-| 6 | `Content-Length` があれば `MAX_REQUEST_BYTES` 以下 | 413 `PAYLOAD_TOO_LARGE`（本文を読まない） |
-| 7 | `req.text()` のバイト数が `MAX_REQUEST_BYTES` 以下 | 413 `PAYLOAD_TOO_LARGE` |
-| 8 | 本文が JSON | 400 `INVALID_JSON` |
-| 9 | `parseSaveWrite`: オブジェクトで、`formatVersion` が 1〜2147483647 の整数・`data` が文字列・`checksum` が `^[0-9a-f]{64}$`・`baseRevision` が 0 以上の安全な整数 | 400 `INVALID_ARGUMENT`（どの欄かを `message` に） |
-| 10 | `utf8Size(data) <= MAX_SAVE_BYTES` | 413 `PAYLOAD_TOO_LARGE` |
-| 11 | `sha256Hex(data) === checksum` | 400 `INVALID_ARGUMENT`（`checksum does not match data`） |
-| 12 | `requireGame(env, gameId, 'saves', known)` | 404 `NOT_FOUND`（`Unknown game`・`Feature not enabled for this game`） |
-| 13 | 書き込み（下の SQL） | 409 `SAVE_CONFLICT`・409 `SLOT_LIMIT_EXCEEDED`（V2）。DB の失敗は 500 `INTERNAL_ERROR` |
+| 4 | トークンのプレイヤーの利用制限 `consume(env.DB, RATE_LIMITS.saves, '<g>:<p>')`（4 つの操作を合わせて数える。`abuse-protection-design.md`） | 429 `RATE_LIMITED`（`Retry-After`） |
+| 5 | 問い合わせの `gameId` が `validId` | 400 `INVALID_ARGUMENT`（`Invalid gameId`） |
+| 6 | `gameId` がトークンの `g` と同じ | 403 `PERMISSION_DENIED`（`Token does not match game`） |
+| 7 | `Content-Length` があれば `MAX_REQUEST_BYTES` 以下 | 413 `PAYLOAD_TOO_LARGE`（本文を読まない） |
+| 8 | `req.text()` のバイト数が `MAX_REQUEST_BYTES` 以下 | 413 `PAYLOAD_TOO_LARGE` |
+| 9 | 本文が JSON | 400 `INVALID_JSON` |
+| 10 | `parseSaveWrite`: オブジェクトで、`formatVersion` が 1〜2147483647 の整数・`data` が文字列・`checksum` が `^[0-9a-f]{64}$`・`baseRevision` が 0 以上の安全な整数 | 400 `INVALID_ARGUMENT`（どの欄かを `message` に） |
+| 11 | `utf8Size(data) <= MAX_SAVE_BYTES` | 413 `PAYLOAD_TOO_LARGE` |
+| 12 | `sha256Hex(data) === checksum` | 400 `INVALID_ARGUMENT`（`checksum does not match data`） |
+| 13 | `requireGame(env, gameId, 'saves', known)` | 404 `NOT_FOUND`（`Unknown game`・`Feature not enabled for this game`） |
+| 14 | 書き込み（下の SQL） | 409 `SAVE_CONFLICT`・409 `SLOT_LIMIT_EXCEEDED`（V2）。DB の失敗は 500 `INTERNAL_ERROR` |
 
-- 2・3 は本文を読む前（`account-design.md` §5 と同じ理由: 認証されていない要求の本文を読まない）。5 も本文を読む前に決まる。
-- 6・7 は大きな本文を JSON として読む前に断る（Workers のメモリ 128 MB を、大きな本文の繰り返しで使い切らせない）。
+- 2〜4 は本文を読む前（`account-design.md` §5 と同じ理由: 認証されていない要求の本文を読まない）。6 も本文を読む前に決まる。4 で断った書き込みは、リビジョンを進めず行を変えない。
+- 7・8 は大きな本文を JSON として読む前に断る（Workers のメモリ 128 MB を、大きな本文の繰り返しで使い切らせない）。
 
 書き込みの SQL（1 つの文で、比べることと書くことを同時にする。D1 の問い合わせは 1 つずつ順に動くので、文の中は割り込まれない）:
 
@@ -214,7 +215,7 @@ INSERT OR IGNORE INTO game_modules (game_id, module) SELECT game_id, 'saves' FRO
 {"gameId":"demo-rpg","slotId":"auto","revision":1,"formatVersion":1,"data":"{\"hp\":30,\"map\":\"town\"}","checksum":"…","size":22,"updatedAt":"2026-10-30T12:00:00.000Z"}
 ```
 
-検査の順: 1 ルート（404）→ 2 `requireLocalWrite`（403。§10 の決めること 8）→ 3 `requireAuth`（401）→ 4 `gameId`（400）→ 5 トークンの `g`（403）→ 6 `requireGame(…, 'saves', …)`（404）→ 7 `SELECT … WHERE game_id = ? AND player_id = ? AND slot_id = ? AND deleted = 0`。行が無ければ 404 `NOT_FOUND`（`Save not found`）。
+検査の順: 1 ルート（404）→ 2 `requireLocalWrite`（403。§10 の決めること 8）→ 3 `requireAuth`（401）→ 4 プレイヤーの利用制限（429 `RATE_LIMITED`）→ 5 `gameId`（400）→ 6 トークンの `g`（403）→ 7 `requireGame(…, 'saves', …)`（404）→ 8 `SELECT … WHERE game_id = ? AND player_id = ? AND slot_id = ? AND deleted = 0`。行が無ければ 404 `NOT_FOUND`（`Save not found`）。
 
 ### `GET /v1/saves?gameId=demo-rpg`（V2）
 
@@ -224,11 +225,11 @@ INSERT OR IGNORE INTO game_modules (game_id, module) SELECT game_id, 'saves' FRO
 {"gameId":"demo-rpg","items":[{"slotId":"auto","revision":3,"formatVersion":1,"checksum":"…","size":22,"updatedAt":"…"}]}
 ```
 
-検査の順は `GET /v1/saves/{slotId}` の 1〜6 と同じ。セーブが 1 つも無ければ 200 と空の `items`。
+検査の順は `GET /v1/saves/{slotId}` の 1〜7 と同じ。セーブが 1 つも無ければ 200 と空の `items`。
 
 ### `DELETE /v1/saves/{slotId}?gameId=demo-rpg&baseRevision=3`（V2）
 
-- 検査の順: 1 ルート → 2 `requireLocalWrite` → 3 `requireAuth` → 4 `gameId` → 5 トークンの `g` → 6 `parseRevision(baseRevision)` が 1 以上の整数（400 `INVALID_ARGUMENT`）→ 7 `requireGame` → 8 墓石にする `UPDATE saves SET deleted = 1, data = '', checksum = '', size = 0, revision = revision + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE game_id = ? AND player_id = ? AND slot_id = ? AND revision = ? AND deleted = 0 RETURNING slot_id`（行は消さない。§2）。
+- 検査の順: 1 ルート → 2 `requireLocalWrite` → 3 `requireAuth` → 4 プレイヤーの利用制限（429 `RATE_LIMITED`）→ 5 `gameId` → 6 トークンの `g` → 7 `parseRevision(baseRevision)` が 1 以上の整数（400 `INVALID_ARGUMENT`）→ 8 `requireGame` → 9 墓石にする `UPDATE saves SET deleted = 1, data = '', checksum = '', size = 0, revision = revision + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE game_id = ? AND player_id = ? AND slot_id = ? AND revision = ? AND deleted = 0 RETURNING slot_id`（行は消さない。§2）。
 - 行が返らなければ、そのスロットに `deleted = 0` の行があれば 409 `SAVE_CONFLICT`、無ければ（行が無い・墓石）404 `NOT_FOUND`（`Save not found`）。
 - 応答（200）: `{"ok":true,"gameId":"demo-rpg","slotId":"auto"}`。消した後は、`GET` が 404・一覧に出ない・スロットの数に数えない。同じスロットに `baseRevision: 0` で書き直せ、リビジョンは墓石の次へ進む（1 に戻さない）。だから消す前のリビジョンを覚えた古い端末の書き込みは 409 になる。
 
