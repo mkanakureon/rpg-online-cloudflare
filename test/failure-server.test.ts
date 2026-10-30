@@ -1,6 +1,7 @@
 /**
  * 失敗ケースの試験 K2: サーバー側の失敗と互換（ケース 1・5・6・7 の「いま」）。
- * 名前と期待する結果の正は docs/guides/working/failure-case-test-plan.md §3。ただし `CLIモックと同じ流れでゲストのセーブを書いて読み直せる` は
+ * 名前と期待する結果の正は docs/guides/working/failure-case-test-plan.md §3。ただし `CLIモックと同じ流れでゲストのセーブを書いて読み直せる`・
+ * `CLIモックと同じ流れでセーブの一覧に出たスロットを消せる` は
  * docs/guides/working/save-design.md §7 が正（互換の試験の隣に置く）。
  * src/worker.ts の default.fetch を直に呼ぶ L2 の試験。DB の失敗は prepare が投げる偽の DB で起こす。
  */
@@ -194,6 +195,39 @@ describe('ケース 7: マイグレーションと互換', () => {
     const got = await worker.fetch(new Request(path, { headers: authHeaders(token) }), localEnv as never);
     expect(got.status).toBe(200);
     expect(await got.json()).toMatchObject({ data, checksum, revision: 1 });
+  });
+
+  it('CLIモックと同じ流れでセーブの一覧に出たスロットを消せる', async () => {
+    // scripts/cli-mock.mjs の V2 の流れ: ゲストを発行して PUT した後、一覧 → 読んだリビジョンで DELETE → GET が 404。
+    // 落ちたら API か CLI モックを直す合図
+    const guest = await worker.fetch(new Request(`${base}/v1/accounts/guest`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(guestRequest()),
+    }), localEnv as never);
+    expect(guest.status).toBe(200);
+    const { gameId, token } = await guest.json<{ gameId: string; token: string }>();
+    const data = saveData();
+    const path = `${base}/v1/saves/${SMOKE_SLOT_ID}?gameId=${gameId}`;
+    const put = await worker.fetch(new Request(path, {
+      method: 'PUT',
+      headers: authHeaders(token),
+      body: JSON.stringify(saveWrite(data, await sha256Hex(data), 0)),
+    }), localEnv as never);
+    expect(put.status).toBe(200);
+    const listed = await worker.fetch(new Request(`${base}/v1/saves?gameId=${gameId}`, { headers: authHeaders(token) }), localEnv as never);
+    expect(listed.status).toBe(200);
+    const { items } = await listed.json<{ items: Array<{ slotId: string; revision: number }> }>();
+    const slot = items.find((item) => item.slotId === SMOKE_SLOT_ID);
+    expect(slot).toBeDefined();
+    const deleted = await worker.fetch(new Request(`${path}&baseRevision=${slot!.revision}`, {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    }), localEnv as never);
+    expect(deleted.status).toBe(200);
+    expect(await deleted.json()).toEqual({ ok: true, gameId, slotId: SMOKE_SLOT_ID });
+    const got = await worker.fetch(new Request(path, { headers: authHeaders(token) }), localEnv as never);
+    expect(got.status).toBe(404);
   });
 
   it('知らない欄が付いた要求も受け付ける', async () => {

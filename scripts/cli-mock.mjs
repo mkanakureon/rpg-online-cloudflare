@@ -12,7 +12,7 @@ async function call(path, options = {}) {
   // トークンは画面に出さない（docs/guides/decisions/operations-security.md）
   // セーブの応答は本体（data）を出さず、size と revision だけ見せる（docs/guides/working/save-design.md §6）
   let shown = body && typeof body === 'object' && 'token' in body ? { ...body, token: '[redacted]' } : body;
-  if (path.startsWith('/v1/saves/') && response.ok) shown = { size: body.size, revision: body.revision };
+  if (path.startsWith('/v1/saves/') && response.ok && options.method !== 'DELETE') shown = { size: body.size, revision: body.revision };
   console.log(`${options.method || 'GET'} ${path}:`, response.status, JSON.stringify(shown));
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return body;
@@ -53,6 +53,15 @@ try {
     || await sha256Hex(loaded.data) !== loaded.checksum) {
     throw new Error('Loaded save does not match the written one');
   }
+
+  // 一覧にスロットがあることを見て、読んだリビジョンで消す。消した後は読むと 404（docs/guides/working/save-design.md §6 の V2）
+  const listed = await call(`/v1/saves?gameId=${submission.gameId}`, { headers: authHeaders(guest.token) });
+  const slot = listed.items.find((item) => item.slotId === SMOKE_SLOT_ID);
+  if (!slot) throw new Error('Written save not found in the save list');
+  await call(`${savePath}&baseRevision=${slot.revision}`, { method: 'DELETE', headers: authHeaders(guest.token) });
+  const gone = await fetch(`${base}${savePath}`, { headers: authHeaders(guest.token) });
+  console.log(`GET ${savePath}:`, gone.status, '(after DELETE)');
+  if (gone.status !== 404) throw new Error('Deleted save is still readable');
   console.log('\nPASS: local CLI smoke test');
 } catch (error) {
   console.error('\nFAIL: local CLI smoke test', error);

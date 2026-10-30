@@ -1,6 +1,6 @@
 // validate.ts — セーブの書き込みの本文の検証と、data の大きさの数え方。入出力を持たない。
 //
-// src/modules/saves/index.ts が JSON を読んだ後の本文をここに渡し、外れなら 400 INVALID_ARGUMENT にする（message はどの欄か）。
+// src/modules/saves/index.ts が JSON を読んだ後の本文（と削除の問い合わせの baseRevision）をここに渡し、外れなら 400 INVALID_ARGUMENT にする。
 // 欄の範囲の正は docs/guides/working/save-design.md §3 の検査の順 9。data の中身は見ない（解釈しない）。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
@@ -38,4 +38,11 @@ export function parseSaveWrite(value: unknown): SaveWriteResult {
 /** text の UTF-8 のバイト数。 */
 export function utf8Size(text: string): number {
   return new TextEncoder().encode(text).byteLength;
+}
+
+/** 削除の問い合わせの baseRevision（数字だけの文字列）を 1 以上の安全な整数に直す。外れは null。 */
+export function parseRevision(raw: string | null): number | null {
+  if (raw === null || !/^[0-9]{1,16}$/.test(raw)) return null;
+  const revision = Number(raw);
+  return Number.isSafeInteger(revision) && revision >= 1 ? revision : null;
 }

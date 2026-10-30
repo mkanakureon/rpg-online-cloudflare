@@ -1,6 +1,6 @@
 /**
  * API スキーマの試験 S1: スキーマのファイル（openapi/rpg-online.v1.json）の形と、実際の応答がスキーマに合うこと。
- * 名前と確かめることの正は docs/guides/working/api-schema-design.md §4（`セーブの読み書きの応答はスキーマに合う` は docs/guides/working/save-design.md §7）。挙動（状態コード・データ）は
+ * 名前と確かめることの正は docs/guides/working/api-schema-design.md §4（`セーブの読み書きの応答はスキーマに合う`・`セーブの一覧と削除の応答はスキーマに合う` と、操作とエラーコードの数の試験は docs/guides/working/save-design.md §7）。挙動（状態コード・データ）は
  * test/failure-*.test.ts が見る。ここはスキーマの側から見る。
  * L2 の試験は src/worker.ts の default.fetch を直に呼ぶ（docs/guides/working/failure-case-test-plan.md §2）。
  *
@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
 import { bearer, bearerForBody } from './support/auth';
 import { sha256Hex } from '../src/modules/saves/checksum';
-import { MAX_SAVE_BYTES } from '../src/modules/saves/limits';
+import { MAX_SAVE_BYTES, MAX_SLOTS } from '../src/modules/saves/limits';
 import specJson from '../openapi/rpg-online.v1.json';
 import { resolveRef, validate, type Schema, type SchemaRoot } from './support/schema-check';
 
@@ -34,7 +34,7 @@ type Spec = SchemaRoot & {
 const spec = specJson as unknown as Spec;
 const methods = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'];
 const errorCodes = ['INVALID_ARGUMENT', 'NOT_FOUND', 'NOT_READY_FOR_PRODUCTION', 'INVALID_JSON', 'INTERNAL_ERROR',
-  'UNAUTHENTICATED', 'TOKEN_EXPIRED', 'PERMISSION_DENIED', 'SAVE_CONFLICT', 'PAYLOAD_TOO_LARGE'];
+  'UNAUTHENTICATED', 'TOKEN_EXPIRED', 'PERMISSION_DENIED', 'SAVE_CONFLICT', 'PAYLOAD_TOO_LARGE', 'SLOT_LIMIT_EXCEEDED'];
 
 // prepare が D1 のエラーに似た例外を投げる偽の DB（本物の D1 を壊さない）
 const brokenDB = {
@@ -110,6 +110,23 @@ async function getSave(slotId: string, options: { authorization?: string | null;
   if (authorization !== null) headers.authorization = authorization;
   return worker.fetch(new Request(`${base}/v1/saves/${slotId}?gameId=${options.gameId ?? 'demo-rpg'}`, { headers }), (options.e ?? localEnv) as never);
 }
+/** セーブの一覧（GET /v1/saves）か削除（DELETE /v1/saves/{slotId}）。既定は demo-rpg・p1 のトークン。query は gameId の後に付ける。 */
+async function manageSave(method: 'GET' | 'DELETE', path: string, query = '', options: { authorization?: string | null; e?: unknown; gameId?: string } = {}): Promise<Response> {
+  const headers: Record<string, string> = {};
+  const authorization = options.authorization === undefined ? await bearer('demo-rpg', 'p1') : options.authorization;
+  if (authorization !== null) headers.authorization = authorization;
+  return worker.fetch(new Request(`${base}${path}?gameId=${options.gameId ?? 'demo-rpg'}${query}`, { method, headers }), (options.e ?? localEnv) as never);
+}
+/** player のスロットを MAX_SLOTS 個まで埋める（SLOT_LIMIT_EXCEEDED を起こすため）。 */
+async function fillSlots(player: string): Promise<string> {
+  const authorization = await bearer('demo-rpg', player);
+  await baseEnv.DB.prepare('DELETE FROM saves WHERE player_id = ?').bind(player).run();
+  for (let i = 0; i < MAX_SLOTS; i++) {
+    const res = await putSave(`slot-${i}`, await saveBody('x', 0), { authorization });
+    expect(res.status).toBe(200);
+  }
+  return authorization;
+}
 /** data の正しいチェックサムを付けたセーブの書き込みの本文。 */
 async function saveBody(data: string, baseRevision: number): Promise<Record<string, unknown>> {
   return { formatVersion: 1, data, checksum: await sha256Hex(data), baseRevision };
@@ -143,10 +160,10 @@ beforeEach(async () => {
 });
 
 describe('S1: スキーマのファイル', () => {
-  it('スキーマのファイルはOpenAPI 3.1で7つの操作を持つ', () => {
+  it('スキーマのファイルはOpenAPI 3.1で9つの操作を持つ', () => {
     expect(spec.openapi).toMatch(/^3\.1\.\d+$/);
     expect(operations().map((o) => o.operationId).sort())
-      .toEqual(['getHealth', 'getRanking', 'getSave', 'issueGuest', 'listAnnouncements', 'putSave', 'submitScore']);
+      .toEqual(['deleteSave', 'getHealth', 'getRanking', 'getSave', 'issueGuest', 'listAnnouncements', 'listSaves', 'putSave', 'submitScore']);
     const refs = collectRefs(spec);
     expect(refs.length).toBeGreaterThan(0);
     for (const ref of refs) expect(() => resolveRef(ref, spec), ref).not.toThrow();
@@ -189,7 +206,7 @@ describe('S1: スキーマのファイル', () => {
     expect(() => validate(1, { $ref: 'other.json#/X' }, root)).toThrow();
   });
 
-  it('スキーマのErrorCodeの列挙は10個のエラーコードと一致する', () => {
+  it('スキーマのErrorCodeの列挙は11個のエラーコードと一致する', () => {
     const codes = spec.components.schemas.ErrorCode.enum as string[];
     expect([...codes].sort()).toEqual([...errorCodes].sort());
   });
@@ -287,6 +304,7 @@ describe('S1: 応答がスキーマに合う', () => {
       ['PERMISSION_DENIED', 'submitScore', async () => postWith('boss-score', valid, await bearer('demo-rpg', 'p2'))],
       ['SAVE_CONFLICT', 'putSave', async () => putSave('schema-conflict', await saveBody('x', 999))],
       ['PAYLOAD_TOO_LARGE', 'putSave', async () => putSave('schema-large', await saveBody('a'.repeat(MAX_SAVE_BYTES + 1), 0))],
+      ['SLOT_LIMIT_EXCEEDED', 'putSave', async () => putSave('one-more', await saveBody('x', 0), { authorization: await fillSlots('schema-slots') })],
     ];
     const seen = new Set<string>();
     for (const [code, operationId, send] of cases) {
@@ -323,6 +341,44 @@ describe('S1: 応答がスキーマに合う', () => {
       [404, 'NOT_FOUND', 'putSave', async () => putSave('auto', await saveBody('x', 1), { gameId: 'no-such-game', authorization: await bearer('no-such-game', 'p1') })],
       [409, 'SAVE_CONFLICT', 'putSave', async () => putSave('auto', await saveBody('x', 0))],
       [413, 'PAYLOAD_TOO_LARGE', 'putSave', async () => putSave('auto', await saveBody('a'.repeat(MAX_SAVE_BYTES + 1), 1))],
+    ];
+    for (const [status, code, operationId, send] of cases) {
+      const res = await send();
+      expect(res.status, `${operationId} の ${code}`).toBe(status);
+      const { spec: r, body: errBody } = await expectConforms(res, operationId);
+      const actual = (errBody as { error: { code: string } }).error.code;
+      expect(actual).toBe(code);
+      expect(r['x-error-codes'], `${operationId} の ${status} の x-error-codes`).toContain(actual);
+    }
+  });
+
+  it('セーブの一覧と削除の応答はスキーマに合う', async () => {
+    await baseEnv.DB.prepare("DELETE FROM saves WHERE player_id = 'p1'").run();
+    expect((await putSave('auto', await saveBody('x', 0))).status).toBe(200);
+    const listed = await manageSave('GET', '/v1/saves');
+    expect(listed.status).toBe(200);
+    const { body: listBody } = await expectConforms(listed, 'listSaves');
+    expect((listBody as { items: Array<{ slotId: string }> }).items.map((i) => i.slotId)).toEqual(['auto']);
+    const deleted = await manageSave('DELETE', '/v1/saves/auto', '&baseRevision=1');
+    expect(deleted.status).toBe(200);
+    await expectConforms(deleted, 'deleteSave');
+    const empty = await manageSave('GET', '/v1/saves');
+    expect(empty.status).toBe(200);
+    await expectConforms(empty, 'listSaves');
+    expect((await putSave('auto', await saveBody('y', 0))).status).toBe(200);
+    const cases: Array<[number, string, string, () => Promise<Response>]> = [
+      [400, 'INVALID_ARGUMENT', 'listSaves', () => manageSave('GET', '/v1/saves', '', { gameId: 'demo.rpg' })],
+      [400, 'INVALID_ARGUMENT', 'deleteSave', () => manageSave('DELETE', '/v1/saves/auto', '&baseRevision=0')],
+      [401, 'UNAUTHENTICATED', 'listSaves', () => manageSave('GET', '/v1/saves', '', { authorization: null })],
+      [401, 'TOKEN_EXPIRED', 'deleteSave', async () => manageSave('DELETE', '/v1/saves/auto', '&baseRevision=3', { authorization: await bearer('demo-rpg', 'p1', { exp: 1 }) })],
+      [403, 'NOT_READY_FOR_PRODUCTION', 'listSaves', () => manageSave('GET', '/v1/saves', '', { e: baseEnv })],
+      [403, 'NOT_READY_FOR_PRODUCTION', 'deleteSave', () => manageSave('DELETE', '/v1/saves/auto', '&baseRevision=3', { e: baseEnv })],
+      [403, 'PERMISSION_DENIED', 'deleteSave', () => manageSave('DELETE', '/v1/saves/auto', '&baseRevision=3', { gameId: 'other-rpg' })],
+      [404, 'NOT_FOUND', 'listSaves', async () => manageSave('GET', '/v1/saves', '', { gameId: 'no-such-game', authorization: await bearer('no-such-game', 'p1') })],
+      [404, 'NOT_FOUND', 'deleteSave', () => manageSave('DELETE', '/v1/saves/never-written', '&baseRevision=1')],
+      [409, 'SAVE_CONFLICT', 'deleteSave', () => manageSave('DELETE', '/v1/saves/auto', '&baseRevision=1')],
+      [409, 'SAVE_CONFLICT', 'putSave', async () => putSave('auto', await saveBody('z', 1))],
+      [409, 'SLOT_LIMIT_EXCEEDED', 'putSave', async () => putSave('one-more', await saveBody('x', 0), { authorization: await fillSlots('schema-slots') })],
     ];
     for (const [status, code, operationId, send] of cases) {
       const res = await send();

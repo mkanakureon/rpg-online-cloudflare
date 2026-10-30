@@ -3,7 +3,8 @@
 // scripts/cli-mock.mjs と test/failure-server.test.ts の両方がここを読み込む。本文と見出しの形を変えると
 // テスト「今のCLIモックと同じ形の要求を受け付ける」で API と合っているかが確かめられる。
 // 流れはゲストの発行（guestRequest）→ そのトークンを付けたスコアの投稿（authHeaders・scoreSubmission）→ 同じトークンで
-// セーブを書いて読む（SMOKE_SLOT_ID・saveData・sha256Hex・saveWrite。テスト「CLIモックと同じ流れでゲストのセーブを書いて読み直せる」）。
+// セーブを書いて読む（SMOKE_SLOT_ID・saveData・sha256Hex・saveWrite。テスト「CLIモックと同じ流れでゲストのセーブを書いて読み直せる」）→
+// 一覧に出たスロットを消す（テスト「CLIモックと同じ流れでセーブの一覧に出たスロットを消せる」）。
 // Node.js と Workers のランタイムの両方で読めるよう、Node.js の API を使わない（チェックサムは crypto.subtle）。型は cli-requests.d.mts。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
