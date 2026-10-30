@@ -333,7 +333,9 @@ describe('E2 報酬の受け取り', () => {
     const res = await list({ gameId: 'no-events' });
     expect(res.status).toBe(404);
     expect((await res.json<ErrorBody>()).error).toEqual({ code: 'NOT_FOUND', message: 'Feature not enabled for this game' });
-    await expectError(await claim('login', { gameId: 'no-events' }), 404, 'NOT_FOUND');
+    const claimed = await claim('login', { gameId: 'no-events' });
+    expect(claimed.status).toBe(404);
+    expect((await claimed.json<ErrorBody>()).error).toEqual({ code: 'NOT_FOUND', message: 'Feature not enabled for this game' });
   });
 
   it('イベントの一覧と受け取りの応答はスキーマに合う', async () => {
