@@ -121,7 +121,7 @@ DELETE FROM rate_limit_counters WHERE scope = ? AND subject = ? AND window_start
 
 ### 鍵
 
-- IP: `CF-Connecting-IP` の値の SHA-256（16 進）を `subject` にする。IP をそのまま残さない（`operations-security.md` の 6）。見出しが無いとき（vitest・`wrangler dev` で付かないとき。§1 の要確認）は `'no-ip'` の 1 つの鍵で数える（**見出しが無いことを理由に数えずに通さない**。本番で付かない事故があっても、通し放題にならず、全員が 1 つの鍵で止まる側に倒れる）。
+- IP: `CF-Connecting-IP` の値の SHA-256（16 進）を `subject` にする。IP をそのまま残さない（`operations-security.md` の 6）。見出しが無いとき（vitest・`wrangler dev` で付かないとき。§1 の要確認）は `'no-ip'` の 1 つの鍵で数える（**見出しが無いことを理由に数えずに通さない**。本番で付かない事故があっても、通し放題にならず、全員が 1 つの鍵で止まる側に倒れる）。ローカルで見出しが付かないなら、`npm run cli:smoke` を 1 分に 10 回より多く回すと 429 になる（ふつうの使い方では掛からない。掛かったら `Retry-After` の秒だけ待つ）。
 - プレイヤー: トークンの `g` と `p`（`requireAuth` の後）。本文の `playerId` は使わない。
 - ゲーム: ゲストの発行の本文の `gameId`（形を確かめ、ゲームの登録を確かめた後）。
 
@@ -234,7 +234,7 @@ content-type: application/json; charset=utf-8
 
 | テストの名前 | 束 | この設計で決めた中身 |
 | --- | --- | --- |
-| `決めた回数を超えて連投すると429を返す` | R1 | 同じプレイヤーのスコアの投稿で、`score` の鍵に `count = 30` を入れてから 1 回 POST → 429・`RATE_LIMITED`・`Retry-After`。ランキングの行は変わらない（§3） |
+| `決めた回数を超えて連投すると429を返す` | R1 | 同じプレイヤーのスコアの投稿で、`score` の鍵に `count = 30` を入れてから 1 回 POST → 429・`RATE_LIMITED`・`Retry-After`。ランキングの行は変わらない（§3）。**計画の入力（上限を超える回数を POST）からの違い**: 30 回分を表に入れて 31 回目だけ送る。数える所は同じで、窓の境目をまたいで結果が揺れないため（§7 の試験の作り方）。失敗ケースの計画の入力の書き方は、R1 の実装の Issue で計画の側をこの形に置き換える |
 | `同じ送信IDの二重送信は1回分として扱う` | R1 | 同じ `Idempotency-Key` を付けたスコアの投稿を 2 回 → 2 回とも 200 で同じ本文。行は 1 つ・スコアは 1 回分（§5。見出しを読まない実装で通る） |
 
 ## 8. 挙動が変わる既存の試験と、直す手続き
@@ -252,7 +252,7 @@ content-type: application/json; charset=utf-8
 
 - **`APP_ENV === 'local'` の時だけ書き込みを通す守りは外さない**（`CLAUDE.md` の「守るもの」）。この設計は `account-design.md` §10 の条件 2・3 を満たすためのもので、R1・R2 が合格しても守りを外すかはユーザーが決める。§3 の順のとおり、守りは制限より先。
 - R1 を実装した Issue で直す所（この Issue では変えない。CLAUDE.md 原則 5 で旧文を置き換える）:
-  - `docs/api-contract.md`: 冒頭の「レート制限・不正対策が未実装」を「書き込みの口とセーブに回数の制限（429・`Retry-After`）。スコアは値の範囲と回数まで」に置き換え、エラーコードの表に `RATE_LIMITED` を足す。`openapi/rpg-online.v1.json` の `ErrorCode` と、ゲストの発行・スコアの投稿（R2 でセーブの 4 つ）に 429 の応答と `Retry-After` の見出し。
+  - `docs/api-contract.md`: 冒頭の「ログイン・レート制限・不正対策が未実装」を「ログインは未実装（ゲストのトークンだけ）。書き込みの口とセーブに回数の制限（429・`Retry-After`）。スコアは値の範囲と回数まで」に置き換え、エラーコードの表に `RATE_LIMITED` を足す。`openapi/rpg-online.v1.json` の `ErrorCode` と、ゲストの発行・スコアの投稿（R2 でセーブの 4 つ）に 429 の応答と `Retry-After` の見出し。
   - `docs/guides/working/architecture.md`: 利用制限の置き場（`src/core/rate-limit.ts`・`rate_limit_counters`）。
 - 守りを外すとき（ユーザーが決めた後）に直す所:
   - `CLAUDE.md` のプロジェクトの行「認証・レート制限・不正対策は未実装」を「認証はゲストのトークン・利用制限は D1 の固定窓・スコアは値の範囲と回数まで（ゲーム固有の確かめは無い）」の形に置き換える。
@@ -327,8 +327,10 @@ requireTests([
   'マイグレーションを2回当ててもデータは壊れない',
 ]);
 // セーブ・設定・お知らせ・守り・既存のマイグレーションを変えない（R2 で触る）
-const keep = ['src/modules/saves/', 'src/modules/config/', 'src/modules/announcements/', 'src/core/guards.ts', 'migrations/0001_initial.sql',
-  'migrations/0004_accounts.sql', 'migrations/0005_saves.sql', 'migrations/0007_config_master_data.sql', 'wrangler.jsonc', 'vitest.config.ts', pkg];
+const migrations = ['0001_initial', '0002_games', '0003_game_modules', '0004_accounts', '0005_saves', '0006_config', '0007_config_master_data']
+  .map((m) => `migrations/${m}.sql`);
+const keep = ['src/modules/saves/', 'src/modules/config/', 'src/modules/announcements/', 'src/core/guards.ts', ...migrations,
+  'wrangler.jsonc', 'vitest.config.ts', pkg];
 gitClean(keep, { base });
 done();
 ```
@@ -340,7 +342,7 @@ import { runTests, requireTests, gitClean, check, done } from './scripts/issue-r
 import { readFileSync } from 'node:fs';
 const base = 'MAIN_SHA'; // 実装の Issue を作るときの main の SHA に書き換える
 const pkg = ['package', 'json'].join('.');
-check(/rate/i.test(readFileSync('src/modules/saves/index.ts', 'utf8')), 'セーブのモジュールが利用制限を呼ぶ');
+check(/\bconsume\(/.test(readFileSync('src/modules/saves/index.ts', 'utf8')), 'セーブのモジュールが利用制限（consume）を呼ぶ');
 runTests();
 requireTests([
   'セーブの操作を上限より多く呼ぶと429とRetry-Afterを返す',
