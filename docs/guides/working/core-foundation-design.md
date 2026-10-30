@@ -351,7 +351,7 @@ requireTests([
 ]);
 // openapi/ と docs/api-contract.md は M3 で直す所がある（§3）ので守らない
 gitClean(['migrations/0001_initial.sql', 'migrations/0002_games.sql', 'test/failure-input.test.ts', 'test/failure-server.test.ts',
-  'test/schema-conformance.test.ts', 'test/health.test.ts', 'scripts/', ['package', 'json'].join('.'), 'wrangler.jsonc'], { base });
+  'test/schema-conformance.test.ts', 'test/health.test.ts', 'test/apply-migrations.ts', 'scripts/', ['package', 'json'].join('.'), 'wrangler.jsonc'], { base });
 done();
 ```
 
