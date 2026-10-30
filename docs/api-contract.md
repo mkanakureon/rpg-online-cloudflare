@@ -100,8 +100,9 @@
 - `formatVersion`は 1〜2147483647 の整数で、意味はゲームが決める。サーバーは比べずに保存して返すだけ（古い版の移し替えはクライアントの仕事）。
 - `baseRevision`はクライアントが最後に読んだか書いたリビジョン。**まだセーブが無いスロットに初めて書くときは`0`**。いまのリビジョンと違えば**409 `SAVE_CONFLICT`**で上書きしない（初めてのつもりが既にある・あるつもりが無い、も含む）。409 のときは`GET`で読み直し、どちらを残すかをゲームが決めて、読み直した`revision`を`baseRevision`にして書き直す。サーバーは黙って上書きも統合もしない。
 - `revision`は 1 から始まり、書くたびに 1 つ進む。`updatedAt`はサーバーの時刻（クライアントの時刻は受け取らない）。
+- スロットは 1 プレイヤー・1 ゲームに**10 個まで**。新しいスロットに書くと超えるときは**409 `SLOT_LIMIT_EXCEEDED`**で書かない（消したスロットは数えない。既にあるスロットの上書きは上限まで埋まっていても通る）。`DELETE`で要らないスロットを消してから書く。
 - 書込み系 API なので、`npm run dev`でローカル実行し`APP_ENV=local`を与えた時だけ・トークンがある時だけ通る。`APP_ENV`が`local`でなければ、トークンがあっても無くても**403 `NOT_READY_FOR_PRODUCTION`**。
-- 確かめの順: `APP_ENV`の守り（403）→ トークン（401。本文を読む前）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`。`message`は`Token does not match game`）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ 欄の形（400 `INVALID_ARGUMENT`）→ `data`の大きさ（413）→ チェックサム（400 `INVALID_ARGUMENT`）→ ゲームの登録と機能の設定（404 `NOT_FOUND`。機能の名前は`saves`）→ 書き込み（409 `SAVE_CONFLICT`）。
+- 確かめの順: `APP_ENV`の守り（403）→ トークン（401。本文を読む前）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`。`message`は`Token does not match game`）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ 欄の形（400 `INVALID_ARGUMENT`）→ `data`の大きさ（413）→ チェックサム（400 `INVALID_ARGUMENT`）→ ゲームの登録と機能の設定（404 `NOT_FOUND`。機能の名前は`saves`）→ 書き込み（409 `SAVE_CONFLICT`・409 `SLOT_LIMIT_EXCEEDED`）。
 
 ## GET /v1/saves/{slotId}?gameId=demo-rpg
 
@@ -117,13 +118,42 @@
 - そのスロットにセーブが無ければ**404 `NOT_FOUND`**（`message`は`Save not found`）。端末は`revision`を`0`と覚えて、初めての書き込みに使う。
 - 読むのも`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順は`APP_ENV`の守り → トークン → `gameId`の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定 → 読む。
 
+## GET /v1/saves?gameId=demo-rpg
+
+トークンのプレイヤーのセーブの一覧（メタデータだけ）。見出しは`PUT`と同じ`Authorization: Bearer <token>`。
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","items":[{"slotId":"auto","revision":3,"formatVersion":1,"checksum":"b1d7ec2a63599ea44440bea1e1f2bba35b1091ce69bf3e2ada43afea53a877ca","size":22,"updatedAt":"2026-10-30T12:00:00.000Z"}]}
+```
+
+- `items`の各行は`GET /v1/saves/{slotId}`の応答から`gameId`と`data`を除いたもの（本体を読まずに`formatVersion`・`size`・`revision`が分かる）。並びは`slotId`の昇順。最大 10 件なのでページングしない。
+- 自分（トークンのプレイヤー）のスロットだけが出る。消したスロットは出ない。セーブが 1 つも無ければ**200 と空の`items`**。
+- 一覧も`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順は`GET /v1/saves/{slotId}`と同じ（`APP_ENV`の守り → トークン → `gameId`の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定 → 読む）。
+
+## DELETE /v1/saves/{slotId}?gameId=demo-rpg&baseRevision=…
+
+トークンのプレイヤーのスロットのセーブを消す。見出しは`PUT`と同じ`Authorization: Bearer <token>`。`baseRevision`は最後に読んだか書いたリビジョン（1 以上の整数）。
+
+レスポンス例（200）:
+
+```json
+{"ok":true,"gameId":"demo-rpg","slotId":"auto"}
+```
+
+- `baseRevision`がいまのリビジョンと違えば**409 `SAVE_CONFLICT`**で消さない（別の端末が書いたばかりのセーブを古い画面から消さないため）。`GET`で読み直してから消し直す。
+- そのスロットにセーブが無い（消した後も同じ）・他のプレイヤーのスロットは**404 `NOT_FOUND`**（`message`は`Save not found`）。`baseRevision`が無い・1 以上の整数でなければ**400 `INVALID_ARGUMENT`**。
+- 消した後は`GET`が 404・一覧に出ない・スロットの数に数えない。同じスロットに`baseRevision: 0`で書き直せるが、`revision`は 1 に戻らず消す前より先へ進む（サーバーは消した印を残す）。だから消す前のリビジョンを覚えた古い端末の書き込みは 409 `SAVE_CONFLICT`になる。
+- 書込み系 API なので`APP_ENV=local`の時だけ・トークンがある時だけ通る（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順: `APP_ENV`の守り → トークン → `gameId`の形 → トークンのゲームとの突き合わせ → `baseRevision`の形（400）→ ゲームの登録と機能の設定（404）→ 消す（409・404）。
+
 ## エラーレスポンス
 
 ```json
 {"error":{"code":"INVALID_ARGUMENT","message":"Invalid parameters"}}
 ```
 
-現PoCの代表コード: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）、`UNAUTHENTICATED`（401）、`TOKEN_EXPIRED`（401）、`PERMISSION_DENIED`（403）、`SAVE_CONFLICT`（409）、`PAYLOAD_TOO_LARGE`（413）。
+現PoCの代表コード: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）、`UNAUTHENTICATED`（401）、`TOKEN_EXPIRED`（401）、`PERMISSION_DENIED`（403）、`SAVE_CONFLICT`（409）、`PAYLOAD_TOO_LARGE`（413）、`SLOT_LIMIT_EXCEEDED`（409）。
 
 ## 互換の決まり
 
