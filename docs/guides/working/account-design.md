@@ -123,12 +123,14 @@ CREATE TABLE IF NOT EXISTS game_players (
 | # | 確かめ | 外れたとき |
 | --- | --- | --- |
 | 1 | `requireLocalWrite(env)`（書き込みの API。本文を読む前） | 403 `NOT_READY_FOR_PRODUCTION` |
-| 2 | 本文が JSON | 400 `INVALID_JSON` |
-| 3 | 本文がオブジェクトで、`gameId` が `validId`（知らない欄は無視） | 400 `INVALID_ARGUMENT` |
-| 4 | `loadGame` でゲームが登録済み（`game_modules` は見ない。§2） | 404 `NOT_FOUND`（`Unknown game`） |
-| 5 | `tokenSecret(env)` が鍵を返す（§4） | 例外を投げ、入口の `try/catch` で 500 `INTERNAL_ERROR`（中身を返さない） |
-| 6 | `db.batch` で `accounts` と `game_players` に 1 行ずつ（どちらかが落ちれば両方入らない） | DB の失敗は 500 `INTERNAL_ERROR` |
-| 7 | `signToken({ gameId, playerId, exp: now + TOKEN_TTL_SECONDS }, key)` | — |
+| 2 | IP の利用制限（`consume`。本文を読む前。`abuse-protection-design.md` §2・§3） | 429 `RATE_LIMITED`・`Retry-After` |
+| 3 | 本文が JSON | 400 `INVALID_JSON` |
+| 4 | 本文がオブジェクトで、`gameId` が `validId`（知らない欄は無視） | 400 `INVALID_ARGUMENT` |
+| 5 | `loadGame` でゲームが登録済み（`game_modules` は見ない。§2） | 404 `NOT_FOUND`（`Unknown game`） |
+| 6 | ゲームの利用制限（`consume`。登録の後） | 429 `RATE_LIMITED`・`Retry-After` |
+| 7 | `tokenSecret(env)` が鍵を返す（§4） | 例外を投げ、入口の `try/catch` で 500 `INTERNAL_ERROR`（中身を返さない） |
+| 8 | `db.batch` で `accounts` と `game_players` に 1 行ずつ（どちらかが落ちれば両方入らない） | DB の失敗は 500 `INTERNAL_ERROR` |
+| 9 | `signToken({ gameId, playerId, exp: now + TOKEN_TTL_SECONDS }, key)` | — |
 
 - 応答に `account_id` を入れない（§2）。`expiresAt` はトークンの `exp` を ISO 8601 にしたもの。
 - 状態は 200（ほかの POST と同じ。§8 の決めること 10）。
@@ -195,9 +197,10 @@ CREATE TABLE IF NOT EXISTS game_players (
 | 3 | `verifyToken` が `expired` | 401 `TOKEN_EXPIRED`（`Token expired`） | 新しい |
 | 4 | 本文が JSON | 400 `INVALID_JSON` | 同じ（認証の後になる） |
 | 5 | `parseScoreSubmission` | 400 `INVALID_ARGUMENT` | 同じ |
-| 6 | 本文の `gameId`・`playerId` がトークンの `g`・`p` と同じ | 403 `PERMISSION_DENIED`（`Token does not match player`） | 新しい（なりすまし） |
-| 7 | `requireGame(env, gameId, 'rankings', known)` | 404 `NOT_FOUND` | 同じ |
-| 8 | 書き込み | DB の失敗は 500 | 同じ |
+| 6 | プレイヤーの利用制限（`consume`。鍵はトークンの `g`・`p`。本文の形の後・なりすましの前。`abuse-protection-design.md` §3） | 429 `RATE_LIMITED`・`Retry-After` | 利用制限 R1 で足した |
+| 7 | 本文の `gameId`・`playerId` がトークンの `g`・`p` と同じ | 403 `PERMISSION_DENIED`（`Token does not match player`） | 新しい（なりすまし） |
+| 8 | `requireGame(env, gameId, 'rankings', known)` | 404 `NOT_FOUND` | 同じ |
+| 9 | 書き込み | DB の失敗は 500 | 同じ |
 
 - 認証（3）は本文を読む前（2 の守りと同じ理由: 認証されていない要求の本文を読まない）。
 - `requireAuth` は DB を引かない（トークンは自己完結。§8 の決めること 2）。だから既存の DB の失敗の試験の順（`requireGame` で落ちて 500）は変わらない。
@@ -276,7 +279,7 @@ API を変えたら CLI モックも合わせる決まり（CLAUDE.md）なの�
 | 既存の試験（`test/`） | 束 | 何が変わるか | 直し方 |
 | --- | --- | --- | --- |
 | `スキーマのファイルはOpenAPI 3.1で4つの操作を持つ` | A1 | 操作が 5 つになり、名前の「4つ」が嘘になる | 消して、§6 の `スキーマのファイルはOpenAPI 3.1で5つの操作を持つ` に置き換える（見る範囲は増える） |
-| `test/failure-input.test.ts`・`test/failure-server.test.ts`・`test/games.test.ts`・`test/game-modules.test.ts`・`test/schema-conformance.test.ts` の POST の試験（`post`・`postRaw` の手伝いと、`スコアが10億を超えると400を返す` の直書きの 1 か所） | A2 | トークンが無いと 401 で落ちる | **開始状態（要求の見出し）だけ**を直す: 手伝いが `test/support/auth.ts` の `bearer(gameId, playerId)` で本文の `gameId`・`playerId` のトークンを `Authorization` に付ける（本文がオブジェクトでない・`gameId` か `playerId` が `validId` に合わないときは `demo-rpg`・`p1`。形の正しくない ID でトークンを作ると §4 の確かめの 3 で `malformed` の 401 になり、`SQLを混ぜたgameIdはINVALID_ARGUMENTの400を返す`・`形の正しくないgameIdはゲームの登録を引く前にINVALID_ARGUMENTの400を返す` の 400 に届かないため。代わりの値のトークンでも、本文の検証（§5 の順の 5）がなりすましの確かめ（6）より先なので 400 のまま）。本文・env・期待する結果は 1 文字も変えない。`本番の設定では…403を返す` の試験も見出しが付くだけで、期待は 403 のまま |
+| `test/failure-input.test.ts`・`test/failure-server.test.ts`・`test/games.test.ts`・`test/game-modules.test.ts`・`test/schema-conformance.test.ts` の POST の試験（`post`・`postRaw` の手伝いと、`スコアが10億を超えると400を返す` の直書きの 1 か所） | A2 | トークンが無いと 401 で落ちる | **開始状態（要求の見出し）だけ**を直す: 手伝いが `test/support/auth.ts` の `bearer(gameId, playerId)` で本文の `gameId`・`playerId` のトークンを `Authorization` に付ける（本文がオブジェクトでない・`gameId` か `playerId` が `validId` に合わないときは `demo-rpg`・`p1`。形の正しくない ID でトークンを作ると §4 の確かめの 3 で `malformed` の 401 になり、`SQLを混ぜたgameIdはINVALID_ARGUMENTの400を返す`・`形の正しくないgameIdはゲームの登録を引く前にINVALID_ARGUMENTの400を返す` の 400 に届かないため。代わりの値のトークンでも、本文の検証（§5 の順の 5）がなりすましの確かめ（7）より先なので 400 のまま）。本文・env・期待する結果は 1 文字も変えない。`本番の設定では…403を返す` の試験も見出しが付くだけで、期待は 403 のまま |
 | `今のCLIモックと同じ形の要求を受け付ける` | A2 | いまの CLI モックの要求（トークン無し）は 401 になる | **名前を変えず、中身を A2 の CLI モックに合わせる**: `scripts/cli-requests.mjs` の `guestRequest()` でゲストを発行し、`scoreSubmission(発行された playerId)` を `authHeaders(発行された token)` で POST、GET で載ることを見る。期待する結果（200・`ok: true`・GET の行がその本文と同じ）は変えない。CLI モックと試験が同じ関数を読むので、これからも「API を変えたら CLI モックも直す合図」のまま |
 | `スキーマのErrorCodeの列挙は5つのエラーコードと一致する` | A2 | コードが 8 つになり、名前の「5つ」が嘘になる | 消して、§6 の `スキーマのErrorCodeの列挙は8つのエラーコードと一致する` に置き換える |
 | `エラーの応答はスキーマに書いた状態とエラーコードの組で返る` | A2 | 試験の中の `errorCodes`（いまの 5 つ）と、起こしたコードの集合が一致するかを見ているので、8 つにすると足りなくなる | `errorCodes` に 3 つを足し、`submitScore` の 3 つのコードを起こす行を足す。いまの行と期待は変えない（見る範囲は増える） |
