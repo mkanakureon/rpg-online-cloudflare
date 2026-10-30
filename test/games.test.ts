@@ -8,6 +8,7 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
+import { resetRateLimits } from './support/rate-limits';
 import { bearerForBody } from './support/auth';
 import specJson from '../openapi/rpg-online.v1.json';
 import { registerGame } from './support/games';
@@ -58,6 +59,7 @@ beforeEach(async () => {
     baseEnv.DB.prepare("DELETE FROM announcements WHERE id <> 'welcome'"),
     baseEnv.DB.prepare("DELETE FROM games WHERE game_id <> 'demo-rpg'"),
   ]);
+  await resetRateLimits(baseEnv.DB);
 });
 
 describe('M2: 登録の無いゲームを断る', () => {

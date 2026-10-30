@@ -9,6 +9,7 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
+import { resetRateLimits } from './support/rate-limits';
 import { bearer, tokenFor } from './support/auth';
 import { registerGame } from './support/games';
 
@@ -61,6 +62,7 @@ beforeEach(async () => {
     baseEnv.DB.prepare('DELETE FROM game_players'),
     baseEnv.DB.prepare('DELETE FROM accounts'),
   ]);
+  await resetRateLimits(baseEnv.DB);
 });
 
 describe('A2: スコアの投稿の認証', () => {

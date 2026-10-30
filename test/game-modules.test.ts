@@ -9,6 +9,7 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
+import { resetRateLimits } from './support/rate-limits';
 import { bearerForBody } from './support/auth';
 import { enabledModules } from '../src/core/games';
 import { registerGame } from './support/games';
@@ -47,6 +48,7 @@ beforeEach(async () => {
     baseEnv.DB.prepare("DELETE FROM game_modules WHERE game_id <> 'demo-rpg'"),
     baseEnv.DB.prepare("DELETE FROM games WHERE game_id <> 'demo-rpg'"),
   ]);
+  await resetRateLimits(baseEnv.DB);
 });
 
 describe('M3 ゲームごとの機能の設定', () => {

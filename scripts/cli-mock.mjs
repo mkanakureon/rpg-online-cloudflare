@@ -14,7 +14,9 @@ async function call(path, options = {}) {
   // セーブの応答は本体（data）を出さず、size と revision だけ見せる（docs/guides/working/save-design.md §6）
   let shown = body && typeof body === 'object' && 'token' in body ? { ...body, token: '[redacted]' } : body;
   if (path.startsWith('/v1/saves/') && response.ok && options.method !== 'DELETE') shown = { size: body.size, revision: body.revision };
-  console.log(`${options.method || 'GET'} ${path}:`, response.status, JSON.stringify(shown));
+  // 利用制限（429 RATE_LIMITED）は Retry-After の秒を足して見せ、再試行せずに止まる（docs/guides/working/abuse-protection-design.md §11）
+  const retryAfter = response.status === 429 ? [`retry-after=${response.headers.get('retry-after')}`] : [];
+  console.log(`${options.method || 'GET'} ${path}:`, response.status, JSON.stringify(shown), ...retryAfter);
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return body;
 }

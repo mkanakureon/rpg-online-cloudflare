@@ -12,6 +12,7 @@ import { idPattern } from '../src/core/ids';
 import {
   LOCAL_DEV_TOKEN_SECRET, parseBearer, signToken, tokenSecret, TOKEN_TTL_SECONDS, verifyToken,
 } from '../src/core/token';
+import { resetRateLimits } from './support/rate-limits';
 
 type TestEnv = { DB: D1Database; APP_ENV: string };
 const baseEnv = env as unknown as TestEnv;
@@ -66,6 +67,7 @@ beforeEach(async () => {
     baseEnv.DB.prepare('DELETE FROM game_players'),
     baseEnv.DB.prepare('DELETE FROM accounts'),
   ]);
+  await resetRateLimits(baseEnv.DB);
 });
 
 describe('A1: トークン（L1）', () => {

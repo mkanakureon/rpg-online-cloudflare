@@ -6,6 +6,7 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
+import { resetRateLimits } from './support/rate-limits';
 import { bearer, bearerForBody } from './support/auth';
 import { registerGame } from './support/games';
 
@@ -48,6 +49,7 @@ beforeEach(async () => {
     baseEnv.DB.prepare('DELETE FROM ranking_entries'),
     baseEnv.DB.prepare("DELETE FROM announcements WHERE id <> 'welcome'"),
   ]);
+  await resetRateLimits(baseEnv.DB);
 });
 
 describe('ケース 2: 存在しないもの・形の正しくない入力', () => {

@@ -9,6 +9,7 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
+import { resetRateLimits } from './support/rate-limits';
 import { bearerForBody } from './support/auth';
 import { registerGame } from './support/games';
 import {
@@ -64,6 +65,7 @@ beforeEach(async () => {
     baseEnv.DB.prepare('DELETE FROM ranking_entries'),
     baseEnv.DB.prepare("DELETE FROM announcements WHERE id <> 'welcome'"),
   ]);
+  await resetRateLimits(baseEnv.DB);
 });
 
 describe('ケース 1: サーバー側の失敗', () => {
@@ -278,6 +280,35 @@ describe('ケース 7: マイグレーションと互換', () => {
         baseEnv.DB.prepare("DELETE FROM games WHERE game_id = 'cli-master'"),
       ]);
     }
+  });
+
+  it('CLIモックの通しの流れを続けて2回回しても利用制限に掛からない', async () => {
+    // scripts/cli-mock.mjs の書き込みの流れ（ゲストの発行 → スコア → セーブの書く・読む・一覧・消す）を、同じ IP から 2 回続けて回す。
+    // 1 つでも 429 になったら利用制限の数（src/core/rate-limit-policy.ts）が CLI モックの使い方より小さい合図
+    // （docs/guides/working/abuse-protection-design.md §7）
+    const ip = { 'CF-Connecting-IP': '198.51.100.7' };
+    const statuses: number[] = [];
+    const send = async (path: string, init: RequestInit = {}): Promise<Response> => {
+      const res = await worker.fetch(new Request(base + path, init), localEnv as never);
+      statuses.push(res.status);
+      return res;
+    };
+    for (let run = 0; run < 2; run++) {
+      const guest = await send('/v1/accounts/guest', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...ip }, body: JSON.stringify(guestRequest()),
+      });
+      const { playerId, token } = await guest.json<{ playerId: string; token: string }>();
+      const headers = { ...authHeaders(token), ...ip };
+      const submission = scoreSubmission(playerId);
+      await send(`/v1/rankings/${SMOKE_BOARD_ID}`, { method: 'POST', headers, body: JSON.stringify(submission) });
+      const data = saveData();
+      const savePath = `/v1/saves/${SMOKE_SLOT_ID}?gameId=${submission.gameId}`;
+      await send(savePath, { method: 'PUT', headers, body: JSON.stringify(saveWrite(data, await sha256Hex(data), 0)) });
+      await send(savePath, { headers });
+      await send(`/v1/saves?gameId=${submission.gameId}`, { headers });
+      await send(`${savePath}&baseRevision=1`, { method: 'DELETE', headers });
+    }
+    expect(statuses).toEqual(Array(12).fill(200));
   });
 
   it('知らない欄が付いた要求も受け付ける', async () => {

@@ -1,7 +1,8 @@
 // accounts.ts — ゲストの発行（POST /v1/accounts/guest）のルートと、その本文の検証。
 //
-// 検査の順は docs/guides/working/account-design.md §3: APP_ENV=local の門（本文を読む前）→ JSON → 本文の形
-// → ゲームの登録（game_modules は見ない。アカウントはどのゲームにも要る土台）→ 鍵 → accounts と game_players に
+// 検査の順は docs/guides/working/account-design.md §3 と abuse-protection-design.md §3: APP_ENV=local の門（本文を読む前）
+// → IP ごとの利用制限（本文を読む前。429）→ JSON → 本文の形 → ゲームの登録（game_modules は見ない。アカウントはどのゲームにも
+// 要る土台）→ ゲームごとの利用制限（429）→ 鍵 → accounts と game_players に
 // 1 行ずつ（batch で両方か無し）→ トークン。応答・トークン・ログに account_id を出さない。
 // モジュールでなく core に置き、src/core/router.ts が /health の次に当てる。
 //
@@ -11,6 +12,8 @@ import { requireLocalWrite } from './guards';
 import { error, json } from './http';
 import { validId } from './ids';
 import type { Route } from './module';
+import { consume, ipSubject } from './rate-limit';
+import { RATE_LIMITS } from './rate-limit-policy';
 import { signToken, tokenSecret, TOKEN_TTL_SECONDS } from './token';
 
 /** 本文の形を確かめる（知らない欄は無視する）。 */
@@ -27,6 +30,8 @@ export const guestRoute: Route = {
   async handle(req, env, _match, _url, known) {
     const blocked = requireLocalWrite(env);
     if (blocked) return blocked;
+    const ipLimited = await consume(env.DB, RATE_LIMITS.guestIp, await ipSubject(req));
+    if (ipLimited) return ipLimited;
     let value: unknown;
     try { value = await req.json(); }
     catch { return error('INVALID_JSON', 'Request body must be JSON', 400); }
@@ -34,6 +39,8 @@ export const guestRoute: Route = {
     if (!parsed.ok) return error('INVALID_ARGUMENT', parsed.message, 400);
     const { gameId } = parsed;
     if (!await loadGame(env.DB, gameId, known)) return error('NOT_FOUND', 'Unknown game', 404);
+    const gameLimited = await consume(env.DB, RATE_LIMITS.guestGame, gameId);
+    if (gameLimited) return gameLimited;
     const secret = tokenSecret(env);
     // 鍵の値はメッセージに入れない。入口の try/catch が 500 INTERNAL_ERROR にする
     if (!secret) throw new Error('Token signing secret is not configured');

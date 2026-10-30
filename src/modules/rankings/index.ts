@@ -1,7 +1,8 @@
 // rankings/index.ts — ランキングのモジュール（GET・POST /v1/rankings/{boardId}）。
 //
 // GET は gameId → limit → ゲームの登録と機能の設定の順に確かめて上位を返す。POST は APP_ENV=local の門（本文を読む前）
-// → トークン（本文を読む前）→ JSON の読み取り → 形の検証（validate.ts）→ トークンと本文の突き合わせ
+// → トークン（本文を読む前）→ JSON の読み取り → 形の検証（validate.ts）→ トークンのプレイヤーごとの利用制限（429。DB を引くので
+// 形の検証の後。形の外れは DB を引かずに 400）→ トークンと本文の突き合わせ
 // → ゲームの登録と機能の設定 → 書き込み（高いほうのスコアを残す）。順の正は docs/guides/working/account-design.md §5。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
@@ -11,6 +12,8 @@ import { requireLocalWrite } from '../../core/guards';
 import { error, json } from '../../core/http';
 import { validId } from '../../core/ids';
 import type { GameModule } from '../../core/module';
+import { consume } from '../../core/rate-limit';
+import { RATE_LIMITS } from '../../core/rate-limit-policy';
 import { parseLimit, parseScoreSubmission } from './validate';
 
 type RankingEntry = {
@@ -57,6 +60,9 @@ export const rankings: GameModule = {
         const parsed = parseScoreSubmission(value);
         if (!parsed.ok) return error('INVALID_ARGUMENT', parsed.message, 400);
         const { gameId, playerId, displayName, score } = parsed.value;
+        // 本文の playerId でなくトークンのプレイヤーで数える（偽れない鍵）
+        const limited = await consume(env.DB, RATE_LIMITS.score, `${auth.claims.gameId}:${auth.claims.playerId}`);
+        if (limited) return limited;
         const denied = requireSamePlayer(auth.claims, gameId, playerId);
         if (denied) return denied;
         const unknown = await requireGame(env, gameId, rankings.name, known);

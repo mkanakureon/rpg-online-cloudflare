@@ -1,7 +1,8 @@
 /**
  * API スキーマの試験 S1: スキーマのファイル（openapi/rpg-online.v1.json）の形と、実際の応答がスキーマに合うこと。
  * 名前と確かめることの正は docs/guides/working/api-schema-design.md §4（`セーブの読み書きの応答はスキーマに合う`・`セーブの一覧と削除の応答はスキーマに合う` とエラーコードの数の試験は docs/guides/working/save-design.md §7、
- * `設定の応答はスキーマに合う`・`マスターデータの応答はスキーマに合う` と操作の数の試験は設定配信の C1・C2 で足し・置き換えたもので docs/guides/working/config-design.md §7）。挙動（状態コード・データ）は
+ * `設定の応答はスキーマに合う`・`マスターデータの応答はスキーマに合う` と操作の数の試験は設定配信の C1・C2 で足し・置き換えたもので docs/guides/working/config-design.md §7、
+ * `429の応答はスキーマに合う` とエラーコードの数の試験は利用制限の R1 で足し・置き換えたもので docs/guides/working/abuse-protection-design.md §7）。挙動（状態コード・データ）は
  * test/failure-*.test.ts が見る。ここはスキーマの側から見る。
  * L2 の試験は src/worker.ts の default.fetch を直に呼ぶ（docs/guides/working/failure-case-test-plan.md §2）。
  *
@@ -16,6 +17,8 @@ import { MAX_SAVE_BYTES, MAX_SLOTS } from '../src/modules/saves/limits';
 import specJson from '../openapi/rpg-online.v1.json';
 import { resolveRef, validate, type Schema, type SchemaRoot } from './support/schema-check';
 import { registerGame } from './support/games';
+import { fillRateLimit, resetRateLimits } from './support/rate-limits';
+import { RATE_LIMITS } from '../src/core/rate-limit-policy';
 
 type TestEnv = { DB: D1Database; APP_ENV: string };
 const baseEnv = env as unknown as TestEnv;
@@ -36,7 +39,7 @@ type Spec = SchemaRoot & {
 const spec = specJson as unknown as Spec;
 const methods = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'];
 const errorCodes = ['INVALID_ARGUMENT', 'NOT_FOUND', 'NOT_READY_FOR_PRODUCTION', 'INVALID_JSON', 'INTERNAL_ERROR',
-  'UNAUTHENTICATED', 'TOKEN_EXPIRED', 'PERMISSION_DENIED', 'SAVE_CONFLICT', 'PAYLOAD_TOO_LARGE', 'SLOT_LIMIT_EXCEEDED'];
+  'UNAUTHENTICATED', 'TOKEN_EXPIRED', 'PERMISSION_DENIED', 'SAVE_CONFLICT', 'PAYLOAD_TOO_LARGE', 'SLOT_LIMIT_EXCEEDED', 'RATE_LIMITED'];
 
 // prepare が D1 のエラーに似た例外を投げる偽の DB（本物の D1 を壊さない）
 const brokenDB = {
@@ -159,6 +162,7 @@ beforeEach(async () => {
     baseEnv.DB.prepare('DELETE FROM ranking_entries'),
     baseEnv.DB.prepare("DELETE FROM announcements WHERE id <> 'welcome'"),
   ]);
+  await resetRateLimits(baseEnv.DB);
 });
 
 describe('S1: スキーマのファイル', () => {
@@ -209,7 +213,7 @@ describe('S1: スキーマのファイル', () => {
     expect(() => validate(1, { $ref: 'other.json#/X' }, root)).toThrow();
   });
 
-  it('スキーマのErrorCodeの列挙は11個のエラーコードと一致する', () => {
+  it('スキーマのErrorCodeの列挙は12個のエラーコードと一致する', () => {
     const codes = spec.components.schemas.ErrorCode.enum as string[];
     expect([...codes].sort()).toEqual([...errorCodes].sort());
   });
@@ -308,6 +312,8 @@ describe('S1: 応答がスキーマに合う', () => {
       ['SAVE_CONFLICT', 'putSave', async () => putSave('schema-conflict', await saveBody('x', 999))],
       ['PAYLOAD_TOO_LARGE', 'putSave', async () => putSave('schema-large', await saveBody('a'.repeat(MAX_SAVE_BYTES + 1), 0))],
       ['SLOT_LIMIT_EXCEEDED', 'putSave', async () => putSave('one-more', await saveBody('x', 0), { authorization: await fillSlots('schema-slots') })],
+      // p1 のスコアの数を上限まで埋めるので最後に置く（前の行の p1 の投稿を断らせない）
+      ['RATE_LIMITED', 'submitScore', async () => { await fillRateLimit(baseEnv.DB, RATE_LIMITS.score, 'demo-rpg:p1'); return post('boss-score', valid); }],
     ];
     const seen = new Set<string>();
     for (const [code, operationId, send] of cases) {
@@ -319,6 +325,20 @@ describe('S1: 応答がスキーマに合う', () => {
       seen.add(actual);
     }
     expect([...seen].sort()).toEqual([...errorCodes].sort());
+  });
+
+  it('429の応答はスキーマに合う', async () => {
+    const valid = { gameId: 'demo-rpg', playerId: 'p1', displayName: 'Player One', score: 1200 };
+    await fillRateLimit(baseEnv.DB, RATE_LIMITS.score, 'demo-rpg:p1');
+    const res = await post('boss-score', valid);
+    expect(res.status).toBe(429);
+    const { spec: r, body } = await expectConforms(res, 'submitScore');
+    expect(r.headers?.['Retry-After']?.required, '429 のスキーマに Retry-After の見出しがある').toBe(true);
+    expect(res.headers.get('Retry-After')).toMatch(/^[1-9][0-9]*$/);
+    const actual = (body as { error: { code: string } }).error.code;
+    expect(actual).toBe('RATE_LIMITED');
+    expect(r['x-error-codes']).toContain(actual);
+    expect(operation('issueGuest').responses['429']?.headers?.['Retry-After']?.required, 'ゲストの発行の 429 にも Retry-After がある').toBe(true);
   });
 
   it('セーブの読み書きの応答はスキーマに合う', async () => {
