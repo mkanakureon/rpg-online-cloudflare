@@ -122,7 +122,7 @@
             }
           },
           "404": {
-            "description": "登録の無いゲーム（message は Unknown game）。",
+            "description": "登録の無いゲーム（message は Unknown game）か、お知らせの機能を使わない設定のゲーム（message は Feature not enabled for this game）。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -251,7 +251,7 @@
             }
           },
           "404": {
-            "description": "boardId の形が外れている（どのルートにも当たらない）か、登録の無いゲーム（message は Unknown game）。",
+            "description": "boardId の形が外れている（どのルートにも当たらない）か、登録の無いゲーム（message は Unknown game）か、ランキングの機能を使わない設定のゲーム（message は Feature not enabled for this game）。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -380,7 +380,7 @@
             }
           },
           "404": {
-            "description": "boardId の形が外れている（どのルートにも当たらない）か、登録の無いゲーム（message は Unknown game）。",
+            "description": "boardId の形が外れている（どのルートにも当たらない）か、登録の無いゲーム（message は Unknown game）か、ランキングの機能を使わない設定のゲーム（message は Feature not enabled for this game）。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",

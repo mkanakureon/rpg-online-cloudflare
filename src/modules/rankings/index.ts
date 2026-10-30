@@ -1,7 +1,7 @@
 // rankings/index.ts — ランキングのモジュール（GET・POST /v1/rankings/{boardId}）。
 //
-// GET は gameId → limit → ゲームの登録の順に確かめて上位を返す。POST は APP_ENV=local の門（本文を読む前）
-// → JSON の読み取り → 形の検証（validate.ts）→ ゲームの登録 → 書き込み（高いほうのスコアを残す）。
+// GET は gameId → limit → ゲームの登録と機能の設定の順に確かめて上位を返す。POST は APP_ENV=local の門（本文を読む前）
+// → JSON の読み取り → 形の検証（validate.ts）→ ゲームの登録と機能の設定 → 書き込み（高いほうのスコアを残す）。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
 import { requireGame } from '../../core/games';
@@ -25,13 +25,13 @@ export const rankings: GameModule = {
     {
       method: 'GET',
       pattern: boardPath,
-      async handle(_req, env, match, url) {
+      async handle(_req, env, match, url, known) {
         const boardId = match[1];
         const gameId = url.searchParams.get('gameId');
         if (!validId(gameId)) return error('INVALID_ARGUMENT', 'Invalid gameId', 400);
         const limit = parseLimit(url.searchParams.get('limit'));
         if (limit === null) return error('INVALID_ARGUMENT', 'limit must be 1..50', 400);
-        const unknown = await requireGame(env, gameId, rankings.name);
+        const unknown = await requireGame(env, gameId, rankings.name, known);
         if (unknown) return unknown;
         const rows = await env.DB.prepare(
           'SELECT player_id AS playerId, display_name AS displayName, score FROM ranking_entries '
@@ -43,7 +43,7 @@ export const rankings: GameModule = {
     {
       method: 'POST',
       pattern: boardPath,
-      async handle(req, env, match) {
+      async handle(req, env, match, _url, known) {
         const boardId = match[1];
         const blocked = requireLocalWrite(env);
         if (blocked) return blocked;
@@ -53,7 +53,7 @@ export const rankings: GameModule = {
         const parsed = parseScoreSubmission(value);
         if (!parsed.ok) return error('INVALID_ARGUMENT', parsed.message, 400);
         const { gameId, playerId, displayName, score } = parsed.value;
-        const unknown = await requireGame(env, gameId, rankings.name);
+        const unknown = await requireGame(env, gameId, rankings.name, known);
         if (unknown) return unknown;
         await env.DB.prepare(
           `INSERT INTO ranking_entries (game_id, board_id, player_id, display_name, score)
