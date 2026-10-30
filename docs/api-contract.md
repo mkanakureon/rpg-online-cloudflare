@@ -1,6 +1,6 @@
 # 初期API仕様（検討版）
 
-この仕様はMacでの**ローカルPoC**向け。認証が未実装のため、書込み系APIは公開用に使用しない。
+この仕様はMacでの**ローカルPoC**向け。認証はゲストのトークンだけで、ログイン・レート制限・不正対策が未実装のため、書込み系APIは公開用に使用しない。
 
 形（欄・型・範囲・状態コードとエラーコードの組）の正はスキーマ（`openapi/rpg-online.v1.json`）、挙動の説明の正はこの文書。
 
@@ -55,6 +55,8 @@
 
 ## POST /v1/rankings/boss-score
 
+見出し: `Authorization: Bearer <token>`（`token`は`POST /v1/accounts/guest`が返したもの）。
+
 入力例:
 
 ```json
@@ -69,7 +71,10 @@
 
 - PoCでは同一プレイヤーについて**最高スコアだけを保持**。
 - `score`は0～1,000,000,000の整数。
-- `npm run dev`でローカル実行し`APP_ENV=local`を与えた時のみ書込み可能。本番では適切な認証、本人確認、データ検証が必要。
+- `npm run dev`でローカル実行し`APP_ENV=local`を与えた時だけ・トークンがある時だけ書込み可能。`APP_ENV`が`local`でなければ、トークンがあっても無くても本文を読む前に**403 `NOT_READY_FOR_PRODUCTION`**。
+- 確かめの順: `APP_ENV`の守り（403）→ トークン（本文を読む前）→ 本文の JSON（400 `INVALID_JSON`）→ 欄の形（400 `INVALID_ARGUMENT`）→ トークンと本文の突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録（404 `NOT_FOUND`）→ 書き込み。
+- `Authorization`が無い・`Bearer`でない・トークンの形か署名が正しくなければ**401 `UNAUTHENTICATED`**（`message`は`Missing or malformed Authorization`か`Invalid token`。どちらが外れたかの詳しい理由は返さない）。期限が切れていれば**401 `TOKEN_EXPIRED`**（ゲストを発行し直す）。
+- 本文の`gameId`・`playerId`がトークンのゲームとプレイヤーと違えば**403 `PERMISSION_DENIED`**（`message`は`Token does not match player`）。本文の形は変わらない（`playerId`も送る）。
 
 ## エラーレスポンス
 
@@ -77,7 +82,7 @@
 {"error":{"code":"INVALID_ARGUMENT","message":"Invalid parameters"}}
 ```
 
-現PoCの代表コード: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）。
+現PoCの代表コード: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）、`UNAUTHENTICATED`（401）、`TOKEN_EXPIRED`（401）、`PERMISSION_DENIED`（403）。
 
 ## 互換の決まり
 
@@ -94,4 +99,4 @@
 | GET/POST | `/v1/adventurers` | ゴースト冒険者登録・取得 |
 | PUT/GET | `/v1/saves/{slot}` | クラウドセーブ |
 
-※ HTTP認証方式と詳細スキーマはPhase 1で確定させる。
+※ 認証（ゲストのトークン）の設計の正は`docs/guides/working/account-design.md`、形の正は`openapi/rpg-online.v1.json`。

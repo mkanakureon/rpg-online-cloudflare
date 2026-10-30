@@ -3,7 +3,7 @@
   "info": {
     "title": "RPG Online Backend (local PoC)",
     "version": "1.0.0",
-    "description": "ローカル専用の PoC。認証・レート制限・不正対策は未実装。形（欄・型・範囲・状態コードとエラーコードの組）の正はこのファイル、挙動の説明の正は docs/api-contract.md。応答はどれも content-type: application/json; charset=utf-8。状態ごとに返りうるエラーコードは各応答の x-error-codes に書く。スキーマに無いパスとメソッドは 404 NOT_FOUND。"
+    "description": "ローカル専用の PoC。認証はゲストのトークン（POST /v1/accounts/guest が返す Bearer）だけで、ログイン・レート制限・不正対策は未実装。形（欄・型・範囲・状態コードとエラーコードの組）の正はこのファイル、挙動の説明の正は docs/api-contract.md。応答はどれも content-type: application/json; charset=utf-8。状態ごとに返りうるエラーコードは各応答の x-error-codes に書く。スキーマに無いパスとメソッドは 404 NOT_FOUND。"
   },
   "servers": [
     {
@@ -431,7 +431,12 @@
       },
       "post": {
         "operationId": "submitScore",
-        "summary": "スコアを送る（同じプレイヤーは最高スコアを残す）。APP_ENV=local のときだけ受け付ける",
+        "summary": "スコアを送る（同じプレイヤーは最高スコアを残す）。APP_ENV=local のときだけ・トークンの本人の分だけ受け付ける",
+        "security": [
+          {
+            "bearerToken": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -487,8 +492,8 @@
               }
             }
           },
-          "403": {
-            "description": "APP_ENV が local でない（本文を読む前に断る）。",
+          "401": {
+            "description": "Authorization が無い・Bearer でない・トークンの形か署名が正しくない（UNAUTHENTICATED）か、トークンの期限が過ぎた（TOKEN_EXPIRED）。本文を読む前に断る。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -500,7 +505,32 @@
               }
             },
             "x-error-codes": [
-              "NOT_READY_FOR_PRODUCTION"
+              "UNAUTHENTICATED",
+              "TOKEN_EXPIRED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（本文を読む前に断る。トークンがあっても無くても）か、本文の gameId・playerId がトークンのゲームとプレイヤーと違う（PERMISSION_DENIED）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION",
+              "PERMISSION_DENIED"
             ],
             "content": {
               "application/json": {
@@ -799,8 +829,18 @@
           "NOT_FOUND",
           "NOT_READY_FOR_PRODUCTION",
           "INVALID_JSON",
-          "INTERNAL_ERROR"
+          "INTERNAL_ERROR",
+          "UNAUTHENTICATED",
+          "TOKEN_EXPIRED",
+          "PERMISSION_DENIED"
         ]
+      }
+    },
+    "securitySchemes": {
+      "bearerToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "POST /v1/accounts/guest が返す token（v1.<本文>.<HMAC-SHA256>・期限 30 日）。形の正は docs/guides/working/account-design.md §4。"
       }
     }
   }

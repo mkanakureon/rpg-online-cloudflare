@@ -41,7 +41,7 @@
 | 時刻 | クライアントの時刻は受け取らない（知らない欄は無視）。同点の順は `updated_at ASC, player_id ASC` |
 | 他ゲーム | SQL はどれも `WHERE game_id = ?` を `prepare().bind()` で渡す。別のゲームの行は返らない |
 | DB の失敗 | `fetch` の `catch` で `500 INTERNAL_ERROR`・`Internal server error`。エラーの中身は返さない |
-| 認証 | 無い（ケース 8 は全部 `認証後`） |
+| 認証 | 無い（ケース 8 は全部 `認証後`）。アカウントの A2 で、スコアの投稿に `Authorization: Bearer <token>` が要るようになった（`docs/guides/working/account-design.md` §5。`認証後` の試験の置き場は `test/auth.test.ts`） |
 | テストの環境 | `wrangler.jsonc` の既定は `APP_ENV=disabled`。D1 は試験ごとの分けた環境で、マイグレーションは自動では入らない |
 
 ## 2. 試験の作り方（全部の束で共通）
@@ -79,7 +79,7 @@
 | 4 | `他のゲームのお知らせは返さない` | いま | L2 | `other-rpg` にお知らせを 1 件足し、`GET /v1/announcements?gameId=demo-rpg` | 200・`items` は `welcome` だけ（マイグレーションの初期データ）（K1） |
 | 4 | `SQLを混ぜたgameIdはINVALID_ARGUMENTの400を返す` | いま | L2 | GET は `gameId=demo-rpg' OR '1'='1`（URL エンコード）。POST は `APP_ENV=local` で本文の `gameId` を同じ文字列に | どちらも 400・`INVALID_ARGUMENT`。他ゲームの行は返らない（K1） |
 | 4 | `同じプレイヤーIDでも他のゲームの記録は書き換えない` | いま | L2 | `demo-rpg` の `p1` が 1200 の状態で、`other-rpg` の `p1` を 5000 で POST | `demo-rpg` の GET の `p1` は 1200 のまま（K1） |
-| 4 | `他のプレイヤーになりすました書き込みを弾く` | 認証後 | L2 | トークンのプレイヤーと違う `playerId` で POST | 403（コードは認証の設計で決める）。行は変わらない |
+| 4 | `他のプレイヤーになりすました書き込みを弾く` | 認証後 | L2 | トークンのプレイヤーと違う `playerId` で POST | 403・`PERMISSION_DENIED`。行は変わらない |
 | 5 | `同じスコアを二重送信しても行は1つで結果は同じ` | いま | L2 | `APP_ENV=local`・同じ本文の POST を 2 回 | どちらも 200・同じ本文。GET でそのプレイヤーは 1 行・`score` は 1200（K2） |
 | 5 | `低いスコアを後から送っても最高スコアが残る` | いま | L2 | 1200 を POST のあと 800 を POST | どちらも 200。GET の `score` は 1200（K2） |
 | 5 | `同じプレイヤーが並べて連投しても最高スコアだけが残る` | いま | L2 | 同じプレイヤーで score 1〜20 の POST を `Promise.all` で 20 本 | 全部 200。GET でそのプレイヤーは 1 行・`score` は 20（K2） |
@@ -89,13 +89,13 @@
 | 6 | `同点なら先に記録した人が上に並ぶ` | いま | L2 | 同点の 2 行を入れて GET。`p2` の `updated_at` を `2026-01-01 00:00:00`、`p1` を `2026-01-02 00:00:00` にする（ID の順と時刻の順を逆にする） | 先の時刻の `p2` が上（`ORDER BY score DESC, updated_at ASC, player_id ASC`）（K2） |
 | 6 | `UEクライアントは端末の時刻がずれていても期間の判定にサーバーの時刻を使う` | UE統合後 | L3 | 端末の時計を 1 日ずらしたゲームで、期間限定イベントを開く | 期間の内か外かがサーバーの時刻で決まる（ユーザーが見る。イベントの API は Phase 2） |
 | 7 | `マイグレーションを2回当ててもデータは壊れない` | いま | L2 | `applyD1Migrations` を当てたあとに 1 行入れ、`readD1Migrations` の各 `queries` を `env.DB.batch` で直にもう一度流す（`applyD1Migrations` の 2 回目は当てた記録を見て飛ばすので、それでは確かめにならない） | 2 回目の SQL がエラーにならず、入れた行と `welcome` が残る（K2） |
-| 7 | `今のCLIモックと同じ形の要求を受け付ける` | いま | L2 | `scripts/cli-mock.mjs` と同じ本文（`gameId`・`playerId`・`displayName`・`score`）で POST のあと GET | 200・`ok: true`。GET に載る（API を変えたら CLI モックも直す合図）（K2） |
+| 7 | `今のCLIモックと同じ形の要求を受け付ける` | いま | L2 | `scripts/cli-mock.mjs` と同じ流れ（`scripts/cli-requests.mjs` の `guestRequest()` でゲストを発行し、`scoreSubmission(発行された playerId)` を `authHeaders(発行された token)` で POST）のあと GET | 200・`ok: true`。GET に載る（API を変えたら CLI モックも直す合図）（K2） |
 | 7 | `知らない欄が付いた要求も受け付ける` | いま | L2 | 正しい本文に `"clientVersion":"0.0.1"` と `"extra":{}` を足して POST | 200。知らない欄は保存されない（新しい CLI と古いサーバー、の向きの互換）（K2） |
 | 7 | `旧CLIはスキーマ変更後のAPIでもランキングを送って読める` | UE統合後 | L2 | 次のマイグレーションを当てたあと、その前の版の CLI モックの要求の形で POST と GET | 200 で送れて読める。変えるなら版の番号の扱いを先に決める（決めること 5） |
-| 8 | `トークンが無い書き込みは401を返す` | 認証後 | L2 | `Authorization` 無しで POST | 401（コード名は認証の設計で決める）。行は増えない |
-| 8 | `期限切れのトークンは401を返す` | 認証後 | L2 | 期限の過ぎたトークンで POST | 401・期限切れと分かるコード。行は増えない |
-| 8 | `署名の正しくないトークンは401を返す` | 認証後 | L2 | 署名を書き換えたトークンで POST | 401。行は増えない。本文に検証の中身が入らない |
-| 8 | `認証が入っても本番でない環境の無認証の書き込みは403のまま` | 認証後 | L2 | `APP_ENV=disabled` でトークン無しの POST | 403・`NOT_READY_FOR_PRODUCTION`（いまの守り。認証の設計で置き換えるまで残す） |
+| 8 | `トークンが無い書き込みは401を返す` | 認証後 | L2 | `Authorization` 無しで POST | 401・`UNAUTHENTICATED`。行は増えない |
+| 8 | `期限切れのトークンは401を返す` | 認証後 | L2 | 期限の過ぎたトークンで POST | 401・`TOKEN_EXPIRED`。行は増えない |
+| 8 | `署名の正しくないトークンは401を返す` | 認証後 | L2 | 署名を書き換えたトークンで POST | 401・`UNAUTHENTICATED`。行は増えない。本文に検証の中身が入らない |
+| 8 | `認証が入っても本番でない環境の無認証の書き込みは403のまま` | 認証後 | L2 | `APP_ENV=disabled` でトークン無しの POST | 403・`NOT_READY_FOR_PRODUCTION`（`APP_ENV` の守りが認証より先。`docs/guides/working/account-design.md` §10 の条件で守りを外すまで残す） |
 
 数（行）: いま 25（K1 が 14・K2 が 11）・認証後 7・UE統合後 4。
 
@@ -161,19 +161,29 @@ gitClean(['src/', 'migrations/', ['package', 'json'].join('.'), 'wrangler.jsonc'
 done();
 ```
 
-K3（認証の設計が決まってから。名前は §3 のまま）:
+K3（名前は §3 のまま）は 2 つに分けた（`docs/guides/working/account-design.md` §6 の K3 の割り当て）。認証となりすましの 5 本はアカウントの A2（`test/auth.test.ts`）で作り、A2 の確認コマンドの `requireTests` に入れる:
 
 ```js
 import { runTests, requireTests, done } from './scripts/issue-run/check-lib.mjs';
 runTests();
 requireTests([
-  '他のプレイヤーになりすました書き込みを弾く',
-  '決めた回数を超えて連投すると429を返す',
-  '同じ送信IDの二重送信は1回分として扱う',
   'トークンが無い書き込みは401を返す',
   '期限切れのトークンは401を返す',
   '署名の正しくないトークンは401を返す',
+  '他のプレイヤーになりすました書き込みを弾く',
   '認証が入っても本番でない環境の無認証の書き込みは403のまま',
+]);
+done();
+```
+
+連投の制限と送信 ID の 2 本は範囲の外（アカウントの設計書 §8 の決めること 9）。ロードマップ「スコア不正対策と利用制限の適用範囲を決定」の設計で、次の形で作る:
+
+```js
+import { runTests, requireTests, done } from './scripts/issue-run/check-lib.mjs';
+runTests();
+requireTests([
+  '決めた回数を超えて連投すると429を返す',
+  '同じ送信IDの二重送信は1回分として扱う',
 ]);
 done();
 ```
