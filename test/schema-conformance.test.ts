@@ -1,7 +1,8 @@
 /**
  * API スキーマの試験 S1: スキーマのファイル（openapi/rpg-online.v1.json）の形と、実際の応答がスキーマに合うこと。
  * 名前と確かめることの正は docs/guides/working/api-schema-design.md §4（`セーブの読み書きの応答はスキーマに合う`・`セーブの一覧と削除の応答はスキーマに合う` とエラーコードの数の試験は docs/guides/working/save-design.md §7、
- * `設定の応答はスキーマに合う`・`マスターデータの応答はスキーマに合う` と操作の数の試験は設定配信の C1・C2 で足し・置き換えたもので docs/guides/working/config-design.md §7、
+ * `設定の応答はスキーマに合う`・`マスターデータの応答はスキーマに合う` は設定配信の C1・C2 で足したもので docs/guides/working/config-design.md §7、
+ * 操作の数の試験は所持品の E1 で置き換えたもので docs/guides/working/event-reward-design.md §8、
  * `429の応答はスキーマに合う` とエラーコードの数の試験は利用制限の R1 で足し・置き換えたもので docs/guides/working/abuse-protection-design.md §7）。挙動（状態コード・データ）は
  * test/failure-*.test.ts が見る。ここはスキーマの側から見る。
  * L2 の試験は src/worker.ts の default.fetch を直に呼ぶ（docs/guides/working/failure-case-test-plan.md §2）。
@@ -166,11 +167,11 @@ beforeEach(async () => {
 });
 
 describe('S1: スキーマのファイル', () => {
-  it('スキーマのファイルはOpenAPI 3.1で11個の操作を持つ', () => {
+  it('スキーマのファイルはOpenAPI 3.1で13個の操作を持つ', () => {
     expect(spec.openapi).toMatch(/^3\.1\.\d+$/);
     expect(operations().map((o) => o.operationId).sort())
-      .toEqual(['deleteSave', 'getConfig', 'getHealth', 'getMasterData', 'getRanking', 'getSave', 'issueGuest', 'listAnnouncements', 'listSaves',
-        'putSave', 'submitScore']);
+      .toEqual(['deleteSave', 'getConfig', 'getHealth', 'getInventory', 'getMasterData', 'getRanking', 'getSave', 'issueGuest',
+        'listAnnouncements', 'listInventoryHistory', 'listSaves', 'putSave', 'submitScore']);
     const refs = collectRefs(spec);
     expect(refs.length).toBeGreaterThan(0);
     for (const ref of refs) expect(() => resolveRef(ref, spec), ref).not.toThrow();

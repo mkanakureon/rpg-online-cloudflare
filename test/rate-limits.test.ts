@@ -79,6 +79,7 @@ describe('R1: 数え方（L1）', () => {
       guestGame: { scope: 'guest-game', limit: 300, period: 60 },
       score: { scope: 'score', limit: 30, period: 60 },
       saves: { scope: 'saves', limit: 60, period: 60 },
+      rewards: { scope: 'rewards', limit: 60, period: 60 },
     });
   });
 });

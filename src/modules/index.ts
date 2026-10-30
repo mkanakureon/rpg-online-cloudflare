@@ -7,7 +7,8 @@
 import type { GameModule } from '../core/module';
 import { announcements } from './announcements';
 import { config } from './config';
+import { inventory } from './inventory';
 import { rankings } from './rankings';
 import { saves } from './saves';
 
-export const modules: GameModule[] = [announcements, rankings, saves, config];
+export const modules: GameModule[] = [announcements, rankings, saves, config, inventory];
