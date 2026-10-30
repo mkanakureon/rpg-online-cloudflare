@@ -84,7 +84,7 @@
 | `RankingEntry` | `playerId`（`Id`）・`displayName`（`string`・1〜40）・`score`（`integer`・0〜1000000000） |
 | `ScoreSubmission` | `gameId`・`playerId`（`Id`）・`displayName`（`string`・1〜40）・`score`（`integer`・0〜1000000000）。全部必須。`additionalProperties: true`（知らない欄は無視する決まり） |
 | `Error` | `error` の中に `code`（`ErrorCode`）と `message`（`string`）。両方必須 |
-| `ErrorCode` | `enum: [INVALID_ARGUMENT, NOT_FOUND, NOT_READY_FOR_PRODUCTION, INVALID_JSON, INTERNAL_ERROR, UNAUTHENTICATED, TOKEN_EXPIRED, PERMISSION_DENIED, SAVE_CONFLICT, PAYLOAD_TOO_LARGE, SLOT_LIMIT_EXCEEDED]` |
+| `ErrorCode` | `enum: [INVALID_ARGUMENT, NOT_FOUND, NOT_READY_FOR_PRODUCTION, INVALID_JSON, INTERNAL_ERROR, UNAUTHENTICATED, TOKEN_EXPIRED, PERMISSION_DENIED, SAVE_CONFLICT, PAYLOAD_TOO_LARGE, SLOT_LIMIT_EXCEEDED, RATE_LIMITED]` |
 
 状態コードとエラーコードの組（スキーマでは各応答の `Error` に `x-error-codes` の拡張の欄で書く。OpenAPI は `x-` の欄を許す）:
 
@@ -99,12 +99,13 @@
 | 409 | `SAVE_CONFLICT` | `putSave`・`deleteSave` |
 | 409 | `SLOT_LIMIT_EXCEEDED` | `putSave` |
 | 413 | `PAYLOAD_TOO_LARGE` | `putSave` |
+| 429 | `RATE_LIMITED` | `issueGuest`・`submitScore`（利用制限。見出し `Retry-After` の秒を付ける。`docs/guides/working/abuse-protection-design.md` §3） |
 | 500 | `INTERNAL_ERROR` | 全部 |
 
 - 応答の形は `additionalProperties: false`（§5 の決めること 4）。欄を足すときはスキーマも同じコミットで足す合図になる。
 - `limit` はスキーマでは `integer`。`src/worker.ts` は `1.5`・`abc`・`-1` を 400 にする（数字だけの文字列）。クエリは文字列で来るので、検証の関数は「数字だけの文字列を整数に直してから見る」とし、それ以外は外れにする。
 - `message` は `string` だけにして、文は決めない（§5 の決めること 5）。
-- `content-type` は応答の `content` の `application/json` で表す（OpenAPI 3.1 は `headers` の `Content-Type` を無視する決まり）。`charset=utf-8` は説明の文に書き、S1 の試験が実物のヘッダーを見る。`cache-control` と、`getConfig`・`getMasterData` の `ETag` だけを `headers` に書く（`getConfig`・`getMasterData` の 304 は本文が無く `content` を持たない）。
+- `content-type` は応答の `content` の `application/json` で表す（OpenAPI 3.1 は `headers` の `Content-Type` を無視する決まり）。`charset=utf-8` は説明の文に書き、S1 の試験が実物のヘッダーを見る。`cache-control` と、`getConfig`・`getMasterData` の `ETag` と、429 の `Retry-After` だけを `headers` に書く（`getConfig`・`getMasterData` の 304 は本文が無く `content` を持たない）。
 - `displayName` の長さ: `src/worker.ts` は `displayName.length`（UTF-16 の単位）で 1〜40 を見る。JSON Schema の `minLength`・`maxLength` は文字（コードポイント）で数えるので、BMP の外の文字（絵文字など）で食い違う。自前の検証関数（§2）は `src/worker.ts` に合わせて `.length` で数え、そのことをスキーマの `description` に書く。数え方を文字に揃えるかは、挙動を変えることなので別の Issue で決める（§5 の決めること 3 の振り分け）。S2 の境目の試験は BMP の中の文字だけを使う。
 - 応答の `RankingEntry` は DB より厳しい（DB の `display_name`・`player_id` に CHECK が無い）。いまは API だけが書くので合うが、手やマイグレーションで行を入れたら S1 が落ちうる。
 
@@ -116,12 +117,12 @@
 | --- | --- | --- | --- |
 | S1 | `スキーマのファイルはOpenAPI 3.1で11個の操作を持つ` | `openapi` が `3.1.x`・`paths` の操作が `getHealth`・`issueGuest`・`listAnnouncements`・`getRanking`・`submitScore`・`getSave`・`putSave`・`listSaves`・`deleteSave`・`getConfig`・`getMasterData` のちょうど 11 個（セーブの V1 で 5 つから 7 つに、V2 で 9 つに、設定配信の C1 で 10 個に、C2 で 11 個に置き換えた。名前の正は `docs/guides/working/config-design.md` §7）・`$ref` が全部 `components.schemas` の中を指す | L1 |
 | S1 | `スキーマの検証関数は型と必須と範囲と形の外れを見つける` | §2 の検証の関数の自己試験。§2 の語ごとに、合う値と外れる値を 1 つずつ渡し、外れだけを外れと言う（関数が何も見ずに通すことを防ぐ） | L1 |
-| S1 | `スキーマのErrorCodeの列挙は11個のエラーコードと一致する` | `ErrorCode` の `enum` がちょうど `INVALID_ARGUMENT`・`NOT_FOUND`・`NOT_READY_FOR_PRODUCTION`・`INVALID_JSON`・`INTERNAL_ERROR`・`UNAUTHENTICATED`・`TOKEN_EXPIRED`・`PERMISSION_DENIED`・`SAVE_CONFLICT`・`PAYLOAD_TOO_LARGE`・`SLOT_LIMIT_EXCEEDED`（アカウントの A2 で 5 つから 8 つに、セーブの V1 で 10 個に、V2 で 11 個に置き換えた。名前の正は `docs/guides/working/save-design.md` §7） | L1 |
+| S1 | `スキーマのErrorCodeの列挙は12個のエラーコードと一致する` | `ErrorCode` の `enum` がちょうど `INVALID_ARGUMENT`・`NOT_FOUND`・`NOT_READY_FOR_PRODUCTION`・`INVALID_JSON`・`INTERNAL_ERROR`・`UNAUTHENTICATED`・`TOKEN_EXPIRED`・`PERMISSION_DENIED`・`SAVE_CONFLICT`・`PAYLOAD_TOO_LARGE`・`SLOT_LIMIT_EXCEEDED`・`RATE_LIMITED`（アカウントの A2 で 5 つから 8 つに、セーブの V1 で 10 個に、V2 で 11 個に、利用制限の R1 で 12 個に置き換えた。名前の正は `docs/guides/working/abuse-protection-design.md` §7） | L1 |
 | S1 | `GET /healthの応答はスキーマに合う` | 200 の本文が `Health` に合い、ヘッダーがスキーマの `headers` に合う | L2 |
 | S1 | `GET /v1/announcementsの応答はスキーマに合う` | 初期データの `welcome` がある状態で 200 の本文が `AnnouncementList` に合う | L2 |
 | S1 | `GET /v1/rankings/{boardId}の応答はスキーマに合う` | 2 行入れて 200 の本文が `RankingList` に合う | L2 |
 | S1 | `POST /v1/rankings/{boardId}の応答はスキーマに合う` | `APP_ENV=local` で正しい本文を送り、200 の本文が `ScoreAccepted` に合う | L2 |
-| S1 | `エラーの応答はスキーマに書いた状態とエラーコードの組で返る` | 11 個のエラーコードを 1 つずつ起こし（偽の DB で 500 も。認証の 3 つは `submitScore` で、`SAVE_CONFLICT`・`PAYLOAD_TOO_LARGE`・`SLOT_LIMIT_EXCEEDED` は `putSave` で）、本文が `Error` に合い、状態とコードの組が §3 の表（スキーマの `x-error-codes`）に載っている | L2 |
+| S1 | `エラーの応答はスキーマに書いた状態とエラーコードの組で返る` | 12 個のエラーコードを 1 つずつ起こし（偽の DB で 500 も。認証の 3 つと `RATE_LIMITED` は `submitScore` で、`SAVE_CONFLICT`・`PAYLOAD_TOO_LARGE`・`SLOT_LIMIT_EXCEEDED` は `putSave` で）、本文が `Error` に合い、状態とコードの組が §3 の表（スキーマの `x-error-codes`）に載っている | L2 |
 | S2 | `スキーマの操作はどれもsrc/worker.tsのルートに当たる` | スキーマの操作（いまは 11 個）に、スキーマの例の値で要求し、どれも `NOT_FOUND` でない | L2 |
 | S2 | `スキーマに無いメソッドとパスはNOT_FOUNDの404を返す` | スキーマの `paths` から作った「無いメソッド」（`POST /health`・`DELETE /v1/rankings/{boardId}` など）と「無いパス」（`/v1/events`）が 404 `NOT_FOUND`。スキーマに無いルートを足すと落ちる | L2 |
 | S2 | `スキーマの入力の制約の境目でAPIの合否がスキーマと一致する` | `ScoreSubmission` と `limit` の `minimum`・`maximum`・`minLength`・`maxLength`・`pattern` から境目の値（ちょうど・1 つ外）を作って送り、スキーマが通す値は 200・外す値は 400 `INVALID_ARGUMENT`。値は手で並べずスキーマから作る | L2 |
@@ -176,7 +177,7 @@ runTests();
 requireTests([
   'スキーマのファイルはOpenAPI 3.1で11個の操作を持つ',
   'スキーマの検証関数は型と必須と範囲と形の外れを見つける',
-  'スキーマのErrorCodeの列挙は11個のエラーコードと一致する',
+  'スキーマのErrorCodeの列挙は12個のエラーコードと一致する',
   'GET /healthの応答はスキーマに合う',
   'GET /v1/announcementsの応答はスキーマに合う',
   'GET /v1/rankings/{boardId}の応答はスキーマに合う',

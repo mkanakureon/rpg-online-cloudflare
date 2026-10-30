@@ -1,6 +1,6 @@
 # 初期API仕様（検討版）
 
-この仕様はMacでの**ローカルPoC**向け。認証はゲストのトークンだけで、ログイン・レート制限・不正対策が未実装のため、書込み系APIは公開用に使用しない。
+この仕様はMacでの**ローカルPoC**向け。ログインは未実装（認証はゲストのトークンだけ）。書き込みの口（ゲストの発行・スコアの投稿）に回数の制限（**429 `RATE_LIMITED`**と`Retry-After`。下の「利用制限」）がある。スコアは値の範囲と回数までしか確かめない（ゲームの中で取れるスコアかは見ない）。書込み系APIは公開用に使用しない。
 
 形（欄・型・範囲・状態コードとエラーコードの組）の正はスキーマ（`openapi/rpg-online.v1.json`）、挙動の説明の正はこの文書。
 
@@ -32,6 +32,8 @@
 - `token`は`v1.<本文>.<署名>`（HMAC-SHA256）で、期限は 30 日（`expiresAt`）。期限が切れたらゲストを発行し直す（前のプレイヤーは引き継がない）。
 - 登録の無い`gameId`は**404 `NOT_FOUND`**（`message`は`Unknown game`）。アカウントはどのゲームにも要る土台なので、ゲームの機能の設定（`game_modules`）は見ない。
 - 書込み系 API なので、`npm run dev`でローカル実行し`APP_ENV=local`を与えた時のみ発行できる（ほかは本文を読む前に**403 `NOT_READY_FOR_PRODUCTION`**）。
+- 同じ IP（`CF-Connecting-IP`）からは 60 秒の窓に 10 回、同じゲームへは 60 秒の窓に 300 回まで。超えると**429 `RATE_LIMITED`**と`Retry-After`で、行を作らない（下の「利用制限」）。
+- 確かめの順: `APP_ENV`の守り（403）→ IP の利用制限（429。本文を読む前）→ 本文の JSON（400 `INVALID_JSON`）→ 欄の形（400 `INVALID_ARGUMENT`）→ ゲームの登録（404 `NOT_FOUND`）→ ゲームの利用制限（429）→ 書き込み。
 
 ## GET /v1/announcements?gameId=demo-rpg
 
@@ -72,7 +74,8 @@
 - PoCでは同一プレイヤーについて**最高スコアだけを保持**。
 - `score`は0～1,000,000,000の整数。
 - `npm run dev`でローカル実行し`APP_ENV=local`を与えた時だけ・トークンがある時だけ書込み可能。`APP_ENV`が`local`でなければ、トークンがあっても無くても本文を読む前に**403 `NOT_READY_FOR_PRODUCTION`**。
-- 確かめの順: `APP_ENV`の守り（403）→ トークン（本文を読む前）→ 本文の JSON（400 `INVALID_JSON`）→ 欄の形（400 `INVALID_ARGUMENT`）→ トークンと本文の突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録（404 `NOT_FOUND`）→ 書き込み。
+- 同じプレイヤー（トークンのゲームとプレイヤー）は 60 秒の窓に 30 回まで。超えると**429 `RATE_LIMITED`**と`Retry-After`で、記録を変えない（下の「利用制限」）。トークンの無い・正しくない要求は数えない（401 が先）。
+- 確かめの順: `APP_ENV`の守り（403）→ トークン（本文を読む前）→ プレイヤーの利用制限（429）→ 本文の JSON（400 `INVALID_JSON`）→ 欄の形（400 `INVALID_ARGUMENT`）→ トークンと本文の突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録（404 `NOT_FOUND`）→ 書き込み。
 - `Authorization`が無い・`Bearer`でない・トークンの形か署名が正しくなければ**401 `UNAUTHENTICATED`**（`message`は`Missing or malformed Authorization`か`Invalid token`。どちらが外れたかの詳しい理由は返さない）。期限が切れていれば**401 `TOKEN_EXPIRED`**（ゲストを発行し直す）。
 - 本文の`gameId`・`playerId`がトークンのゲームとプレイヤーと違えば**403 `PERMISSION_DENIED`**（`message`は`Token does not match player`）。本文の形は変わらない（`playerId`も送る）。
 
@@ -195,7 +198,28 @@
 {"error":{"code":"INVALID_ARGUMENT","message":"Invalid parameters"}}
 ```
 
-現PoCの代表コード: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）、`UNAUTHENTICATED`（401）、`TOKEN_EXPIRED`（401）、`PERMISSION_DENIED`（403）、`SAVE_CONFLICT`（409）、`PAYLOAD_TOO_LARGE`（413）、`SLOT_LIMIT_EXCEEDED`（409）。
+現PoCの代表コード: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）、`UNAUTHENTICATED`（401）、`TOKEN_EXPIRED`（401）、`PERMISSION_DENIED`（403）、`SAVE_CONFLICT`（409）、`PAYLOAD_TOO_LARGE`（413）、`SLOT_LIMIT_EXCEEDED`（409）、`RATE_LIMITED`（429）。
+
+## 利用制限
+
+ゲストの発行とスコアの投稿は、決めた秒の窓（固定。窓の始まりは UNIX 秒を窓の長さで割り切った時刻）の中の回数を数え、上限を超えると断る。設計の正は`docs/guides/working/abuse-protection-design.md`。
+
+| 口 | 数える単位 | 上限 |
+| --- | --- | --- |
+| `POST /v1/accounts/guest` | IP（`CF-Connecting-IP`。見出しが無ければ全員で 1 つ） | 60 秒に 10 回 |
+| `POST /v1/accounts/guest` | ゲーム（本文の`gameId`） | 60 秒に 300 回 |
+| `POST /v1/rankings/{boardId}` | プレイヤー（トークンのゲームとプレイヤー） | 60 秒に 30 回 |
+
+レスポンス例（429。見出し`Retry-After: 37`）:
+
+```json
+{"error":{"code":"RATE_LIMITED","message":"Too many requests"}}
+```
+
+- `Retry-After`は次に送ってよいまでの秒（窓の終わりまで。1〜60 の整数）。クライアントはこの秒だけ待ってから送り直す。どの単位で断ったか・上限の数は返さない。
+- 断った要求も数える。断ったときは行を作らない・変えない。
+- `APP_ENV`の守り（403）が先で、そのときは数えない。IP はハッシュ（SHA-256）にして数え、IP をそのまま残さない。
+- 二重送信の`Idempotency-Key`の見出しは受け取って無視する（スコアは最高スコアだけ残すので、同じ要求を 2 回送っても記録と応答は同じ。回数は 2 回分数える）。
 
 ## 互換の決まり
 

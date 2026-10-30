@@ -39,6 +39,7 @@ CLIモック（Node.js）                Unreal（C++）・Unity（C#）・ブ�
 - エラー：`{ "error": { "code": "...", "message": "..." } }`。
 - 冪等性：報酬受取や購入など状態更新には`Idempotency-Key`を導入する。
 - 一覧：ページング／件数上限を必須とする。PoCは最大50件。
+- 利用制限：ゲストの発行（IP ごと・ゲームごと）とスコアの投稿（プレイヤーごと）を D1 の固定窓で数え、上限を超えたら 429 `RATE_LIMITED` と`Retry-After`（秒）。数え方は`src/core/rate-limit.ts`（窓の関数と`consume`）、回数と窓は`src/core/rate-limit-policy.ts`の 1 か所、数は表`rate_limit_counters`（`migrations/0008_rate_limits.sql`）。設計の正は`docs/guides/working/abuse-protection-design.md`。
 - セキュリティ：本番はBearer認証やプラットフォーム認証の検証を導入。ゲーム内に管理用APIキーを埋め込まない。
 
 詳細は[API仕様（案）](../../api-contract.md)。
@@ -59,12 +60,13 @@ CLIモック（Node.js）                Unreal（C++）・Unity（C#）・ブ�
 - `config_flags`: ゲームごとの機能フラグ（名前と真偽値。クライアントに配るだけで、サーバーの挙動は変えない）
 - `config_master_data`: ゲームごとのマスターデータ（キーごとの文字列。1 キー 64 KiB まで。サーバーは中身を解釈しない）
 - `announcements`: お知らせの内容、有効期間
+- `rate_limit_counters`: 利用制限の数（単位の名前・鍵・窓の始まりごとに 1 行。IP はハッシュにして持つ。`docs/guides/working/abuse-protection-design.md` §3）
 - `messages`: 酒場投稿、削除・通報状態
 - `events`: 期間限定イベント定義
 - `event_progress`: プレイヤーごとの達成度と報酬取得状況
 - `adventurer_profiles`: 公開可能なゴースト用プロフィール
 
-PoCで実際に作るのは`games`（登録だけ。公開状態の欄はまだ無い）と`game_modules`と`accounts`と`game_players`と`ranking_entries`と`saves`と`announcements`のみ。`accounts`と`game_players`の境目は`docs/guides/working/account-design.md` §2。
+PoCで実際に作るのは`games`（登録だけ。公開状態の欄はまだ無い）と`game_modules`と`accounts`と`game_players`と`ranking_entries`と`saves`と`announcements`と`rate_limit_counters`のみ。`accounts`と`game_players`の境目は`docs/guides/working/account-design.md` §2。
 
 ## 5. クライアントとの将来の境界
 
