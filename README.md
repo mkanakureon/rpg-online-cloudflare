@@ -44,7 +44,8 @@ npm run typecheck
 | GET | `/health` | ヘルスチェック |
 | GET | `/v1/announcements?gameId=demo-rpg` | サンプルお知らせ取得 |
 | GET | `/v1/rankings/boss-score?gameId=demo-rpg` | スコアランキング取得 |
-| POST | `/v1/rankings/boss-score` | ローカル専用スコア投稿（認証なし） |
+| POST | `/v1/accounts/guest` | ローカル専用ゲスト発行（プレイヤー ID とトークンを返す） |
+| POST | `/v1/rankings/boss-score` | ローカル専用スコア投稿（`Authorization: Bearer <token>` が要る） |
 
 `npm run cli:smoke` がこれらを呼び出し、応答と上位ランキングへの反映を検証します。サーバーの本番仕様を保証するものではありません。
 
