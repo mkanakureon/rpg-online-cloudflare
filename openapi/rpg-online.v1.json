@@ -3,7 +3,7 @@
   "info": {
     "title": "RPG Online Backend (local PoC)",
     "version": "1.0.0",
-    "description": "ローカル専用の PoC。認証はゲストのトークン（POST /v1/accounts/guest が返す Bearer）だけで、ログインは未実装。ゲストの発行とスコアの投稿に回数の制限（429 RATE_LIMITED と Retry-After の秒）があり、スコアは値の範囲と回数までしか確かめない。形（欄・型・範囲・状態コードとエラーコードの組）の正はこのファイル、挙動の説明の正は docs/api-contract.md。本文のある応答はどれも content-type: application/json; charset=utf-8（本文の無い 304 は除く）。状態ごとに返りうるエラーコードは各応答の x-error-codes に書く。スキーマに無いパスとメソッドは 404 NOT_FOUND。"
+    "description": "ローカル専用の PoC。認証はゲストのトークン（POST /v1/accounts/guest が返す Bearer）だけで、ログインは未実装。ゲストの発行・スコアの投稿・セーブの操作に回数の制限（429 RATE_LIMITED と Retry-After の秒）があり、スコアは値の範囲と回数までしか確かめない。形（欄・型・範囲・状態コードとエラーコードの組）の正はこのファイル、挙動の説明の正は docs/api-contract.md。本文のある応答はどれも content-type: application/json; charset=utf-8（本文の無い 304 は除く）。状態ごとに返りうるエラーコードは各応答の x-error-codes に書く。スキーマに無いパスとメソッドは 404 NOT_FOUND。"
   },
   "servers": [
     {
@@ -786,6 +786,37 @@
               }
             }
           },
+          "429": {
+            "description": "利用制限を超えた（同じプレイヤーのセーブの操作〔書く・読む・一覧・消す〕が合わせて窓の中で上限を超えた）。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。クライアントはこの秒だけ待ってから送り直す。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "500": {
             "description": "想定外の失敗（DB の失敗・署名の鍵が無いなど）。中身は返さない。",
             "headers": {
@@ -949,6 +980,37 @@
             },
             "x-error-codes": [
               "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "利用制限を超えた（同じプレイヤーのセーブの操作〔書く・読む・一覧・消す〕が合わせて窓の中で上限を超えた）。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。クライアントはこの秒だけ待ってから送り直す。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
             ],
             "content": {
               "application/json": {
@@ -1175,6 +1237,37 @@
               }
             }
           },
+          "429": {
+            "description": "利用制限を超えた（同じプレイヤーのセーブの操作〔書く・読む・一覧・消す〕が合わせて窓の中で上限を超えた）。書かない（リビジョンを進めない）。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。クライアントはこの秒だけ待ってから送り直す。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "500": {
             "description": "想定外の失敗（DB の失敗・署名の鍵が無いなど）。中身は返さない。",
             "headers": {
@@ -1359,6 +1452,37 @@
             },
             "x-error-codes": [
               "SAVE_CONFLICT"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "利用制限を超えた（同じプレイヤーのセーブの操作〔書く・読む・一覧・消す〕が合わせて窓の中で上限を超えた）。消さない（リビジョンを進めない）。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。クライアントはこの秒だけ待ってから送り直す。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
             ],
             "content": {
               "application/json": {
