@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS inventory_balances (
   PRIMARY KEY (game_id, player_id, item_id),
   FOREIGN KEY (game_id, item_id) REFERENCES inventory_items(game_id, item_id)
 );
--- 受領の履歴（増減 1 回で 1 行。書き換えない・消さない）
+-- 受領の履歴（増減 1 回で 1 行。API からは書き換えない・消さない。ゲームの行を消したときだけ CASCADE で消える）
 CREATE TABLE IF NOT EXISTS inventory_ledger (
   entry_id INTEGER PRIMARY KEY,                 -- 増える番号（履歴の順と続きの鍵）
   game_id TEXT NOT NULL REFERENCES games(game_id) ON DELETE CASCADE,
@@ -153,7 +153,7 @@ CREATE TABLE IF NOT EXISTS event_claims (
   player_id TEXT NOT NULL,
   event_id TEXT NOT NULL,
   period_key TEXT NOT NULL,                     -- 'once'・'2026-10-30'（デイリー）・'2026-10-26'（週間。月曜の日付）
-  claim_id TEXT NOT NULL UNIQUE,                -- サーバーが作る（src/core/ids.ts の乱数の ID）
+  claim_id TEXT NOT NULL UNIQUE,                -- サーバーが作る（crypto.randomUUID()。ゲストの発行の src/core/accounts.ts と同じ作り方）
   claimed_at INTEGER NOT NULL,                  -- サーバーの時刻（UNIX 秒）
   PRIMARY KEY (game_id, player_id, event_id, period_key)
 );
@@ -302,6 +302,7 @@ INSERT INTO inventory_balances (game_id, player_id, item_id, amount, updated_at)
 
 - 並べて送っても: D1 は `batch` を順に流すので、2 つ目の `batch` の文 1 は一意の鍵で何もせず、その `claim_id` の行が無いので文 2・3 も何もしない（§8 の `同じ期間の受け取りを並べて送っても付与は1回分`）。
 - 2 回目を 200 にする理由: クライアント（CLI・UE・Unity・ブラウザ）は応答が届かなかったとき、同じ要求を送り直すだけでよい（結果を確かめ直す手間が要らない）。2 回目かどうかを知りたいクライアントは `claimId` を比べる（§11 の決めること 2）。
+- イベントが終わった後の送り直し（終わる直前に送り、届かず終わった後に送り直す）は、手順 3 の `isOpen` で 409 `EVENT_NOT_ACTIVE` になる（同じ本文の 200 にはならない）。クライアントは 409 を受けたら `GET /v1/inventory/history` で `sourceType: "event-claim"` の行を見て、受け取れていたかを確かめる。終わった後の受け取りを通さないことを、送り直しの楽さより先にする（期間の判定をサーバーの時刻だけで決めるため）。
 - 区切りをまたいだ送り直し（デイリーの 0 時の前に送り、届かず 0 時の後に送り直す）は、新しい区切りの受け取りになる（その区切りの報酬は正しく受け取れるものなので、二重取りではない）。
 - `Idempotency-Key` は読まない（送られても無視）。受け取りは一意の鍵で冪等になり、`abuse-protection-design.md` §5 の後から足す形（表 `idempotency_keys`）は、自然な鍵の無い書き込み（§6 の消費）を足すときに使う。
 - DB の失敗は入口の `try/catch` で 500 `INTERNAL_ERROR`（中身を返さない。CLAUDE.md の守るもの）。
@@ -335,7 +336,7 @@ INSERT INTO inventory_balances (game_id, player_id, item_id, amount, updated_at)
 | 文書 | E1 | E2 |
 | --- | --- | --- |
 | `docs/api-contract.md` | `GET /v1/inventory`・`GET /v1/inventory/history` の節。「利用制限」の表に `rewards` の行 | `GET /v1/events`・`POST /v1/events/{eventId}/claim` の節。エラーコードの表に 2 つ |
-| `openapi/rpg-online.v1.json` | 2 つの操作（`getInventory`・`listInventoryHistory`）と 429 | 2 つの操作（`listEvents`・`claimEventReward`）と `ErrorCode` の 2 つ |
+| `openapi/rpg-online.v1.json` | 2 つの操作（`getInventory`・`listInventoryHistory`）と 429・`Retry-After` | 2 つの操作（`listEvents`・`claimEventReward`）と 429・`Retry-After`・`ErrorCode` の 2 つ |
 | `docs/guides/working/architecture.md` | 所持品の表と `src/modules/inventory/` の置き場 | イベントの置き場。「冪等性」の行を「報酬の受け取りは一意の鍵（プレイヤー・イベント・区切り）で冪等にする。自然な鍵の無い状態の更新（消費・購入）に `Idempotency-Key` を使う」に置き換える |
 | `docs/guides/working/abuse-protection-design.md` | §2 の表に `rewards` の行（定数と同じコミット） | — |
 | `docs/guides/working/failure-case-test-plan.md` | — | ケース 6 の `UEクライアントは端末の時刻がずれていても期間の判定にサーバーの時刻を使う` の「イベントの API は Phase 2」を、この設計の口（`GET /v1/events` の `serverTime`・受け取りの 409）を指す形に置き換える |
@@ -352,12 +353,14 @@ INSERT INTO inventory_balances (game_id, player_id, item_id, amount, updated_at)
 - 試験のゲームは専用（`inv-game`・`evt-game` など。`registerGame` と品目・イベントの行を `beforeEach` で入れる）。demo-rpg の手本の行は CLI の流れの試験だけが使う。
 - 期間はいまの時刻の前後に置く（開いている: `starts_at = now - 3600`・`ends_at = now + 86400`。終わった: `ends_at = now - 1`）。区切りの境目の挙動は L1 の関数で、固定の `now` を渡して確かめる。
 - 書き込みをするファイルの `beforeEach` で `resetRateLimits(db)` と、所持品・受け取りの表の `DELETE`（いまの試験の作りと同じ）。
+- 残高・履歴・報酬の行を直に入れる試験は、先に `inventory_items` に品目の行を入れる（外部キー。無いと `CHECK` でなく外部キーで落ちて、見たいものを見ていない試験になる）。
 - 上限の試験は残高の行に `MAX_ITEM_AMOUNT` に近い値を入れてから受け取る。利用制限の試験は `rate_limit_counters` に `count = 60` を入れてから 1 回送る（`abuse-protection-design.md` §7 と同じ）。
 
 | 束 | テストの名前 | 層 | 入力（要求） | 期待する結果 |
 | --- | --- | --- | --- | --- |
 | E1 | `所持品の応答は通貨と所持品に分けて品目のIDの順に並べる` | L1 | `shapeInventory` に `potion`(item)・`gold`(currency)・`elixir`(item) の行 | `currencies: [gold]`・`items: [elixir, potion]` |
 | E1 | `受領の履歴のlimitは1から100で既定は20` | L1 | `parseHistoryQuery` に `limit` 無し・`1`・`100`・`0`・`101`・`abc` | 20・1・100・外れ・外れ・外れ |
+| E1 | `受領の履歴のbeforeは1以上の整数だけ受け付ける` | L1 | `parseHistoryQuery` に `before` 無し・`42`・`0`・`-1`・`1.5`・`abc` | 無し・42・外れ・外れ・外れ・外れ（外れは 400 `INVALID_ARGUMENT`） |
 | E1 | `所持品を読むとトークンのプレイヤーの通貨と所持品だけが返る` | L2 | `p1` と `p2` の残高の行を入れ、`p1` のトークンで `GET /v1/inventory` | 200。`p1` の行だけ |
 | E1 | `何も受け取っていないプレイヤーの所持品は空の一覧で返る` | L2 | 行の無いプレイヤーで `GET` | 200・`currencies: []`・`items: []` |
 | E1 | `受領の履歴は新しい順に返りlimitで区切って続きを読める` | L2 | 履歴を 3 行入れ、`limit=2` → `before=<nextBefore>` | 1 回目は新しい 2 行と `nextBefore`、2 回目は残りの 1 行で `nextBefore` が無い |
@@ -366,7 +369,7 @@ INSERT INTO inventory_balances (game_id, player_id, item_id, amount, updated_at)
 | E1 | `inventoryを使わない設定のゲームの所持品はNOT_FOUNDの404を返す` | L2 | `inventory` の無いゲームのトークンで `GET` | 404・`NOT_FOUND` |
 | E1 | `本番の設定では所持品の読み取りにNOT_READY_FOR_PRODUCTIONの403を返す` | L2 | `APP_ENV=disabled` で 2 つの `GET` | どちらも 403・`NOT_READY_FOR_PRODUCTION` |
 | E1 | `報酬の操作を上限より多く呼ぶと429とRetry-Afterを返す` | L2 | `rewards`・`inv-game:p1` に `count = 60` を入れて `GET /v1/inventory` | 429・`RATE_LIMITED`・`Retry-After` |
-| E1 | `所持品の残高はマイナスにも上限より大きくもできない` | L2 | `inventory_balances` に `amount = -1` と `MAX_ITEM_AMOUNT + 1` を直に入れる | どちらも D1 が断る（`CHECK`） |
+| E1 | `所持品の残高はマイナスにも上限より大きくもできない` | L2 | 品目の行を入れてから、`inventory_balances` に `amount = -1` と `MAX_ITEM_AMOUNT + 1` を直に入れる | どちらも D1 が断る（`CHECK`） |
 | E1 | `所持品と受領の履歴の応答はスキーマに合う` | L2 | 2 つの `GET` の 200 と 401 | `openapi/rpg-online.v1.json` の応答の形に合う |
 | E1 | `報酬の利用制限の回数と窓は定数のモジュールにある` | L1 | `RATE_LIMITS.rewards` | `{ scope: 'rewards', limit: 60, period: 60 }` |
 | E1 | `スキーマのファイルはOpenAPI 3.1で13個の操作を持つ` | L1 | スキーマの操作 | いまの 11 個と `getInventory`・`listInventoryHistory` |
@@ -398,7 +401,7 @@ INSERT INTO inventory_balances (game_id, player_id, item_id, amount, updated_at)
 | E2 | `モジュールの一覧はannouncementsとrankingsとsavesとconfigとinventoryとeventsでルートが重ならない` | L1 | `modules` | 6 つの名前・ルートが重ならない |
 | E2 | `demo-rpgはannouncementsとrankingsとsavesとconfigとinventoryとeventsを使う設定で登録される` | L2 | demo-rpg の `game_modules` | 6 つ（名前の順） |
 
-数（行）: E1 が 16・E2 が 25。
+数（行）: E1 が 17・E2 が 25。
 
 ### 失敗ケースの計画の試験との関係
 
@@ -423,7 +426,7 @@ INSERT INTO inventory_balances (game_id, player_id, item_id, amount, updated_at)
 
 ## 10. `scripts/cli-mock.mjs` の通しのシナリオ（E2）
 
-API を変えたら CLI モックも合わせる（`CLAUDE.md` のプロジェクトの決まり）。いまの流れ（健康 → 設定 → お知らせ → ゲスト → スコア → セーブ）は**変えず、セーブを消した後に足す**ので、いまの `npm run cli:smoke` は壊れない（手本のイベントが無い・`events` を使わないゲームでは、一覧が空なら `events: none (skipped)` と出して飛ばす。マスターデータの飛ばし方と同じ）。
+API を変えたら CLI モックも合わせる（`CLAUDE.md` のプロジェクトの決まり）。いまの流れ（健康 → 設定 → お知らせ → ゲスト → スコア → セーブ）は**変えず、セーブを消した後に足す**ので、いまの `npm run cli:smoke` は壊れない（一覧が空なら `events: none (skipped)` と出して後ろの手順を飛ばす。マスターデータの飛ばし方と同じ。`events` を使わない設定のゲーム・`0010` を当てていない DB で一覧が 404 になったときは飛ばさず `HTTP 404` で止まる。CLI モックは demo-rpg だけを使い、demo-rpg は `0010` で `events` を使う設定になるので、404 はマイグレーションの当て忘れを知らせる失敗として扱う）。
 
 足す手順（同じゲストのトークン）:
 
@@ -490,6 +493,7 @@ runTests();
 requireTests([
   '所持品の応答は通貨と所持品に分けて品目のIDの順に並べる',
   '受領の履歴のlimitは1から100で既定は20',
+  '受領の履歴のbeforeは1以上の整数だけ受け付ける',
   '所持品を読むとトークンのプレイヤーの通貨と所持品だけが返る',
   '何も受け取っていないプレイヤーの所持品は空の一覧で返る',
   '受領の履歴は新しい順に返りlimitで区切って続きを読める',
@@ -568,9 +572,11 @@ requireTests([
   '今のCLIモックと同じ形の要求を受け付ける',
   'マイグレーションを2回当ててもデータは壊れない',
 ]);
-// 所持品の表（0009）・守り・利用制限の数え方・ほかのモジュールを変えない
-const keep = ['migrations/0009_inventory.sql', 'src/core/guards.ts', 'src/core/rate-limit.ts', 'src/core/rate-limit-policy.ts',
-  'src/modules/saves/', 'src/modules/config/', 'src/modules/rankings/', 'wrangler.jsonc', 'vitest.config.ts', pkg];
+// 既存のマイグレーション（0009 まで）・守り・利用制限の数え方・ほかのモジュールを変えない
+const migrations = ['0001_initial', '0002_games', '0003_game_modules', '0004_accounts', '0005_saves', '0006_config', '0007_config_master_data',
+  '0008_rate_limits', '0009_inventory'].map((m) => `migrations/${m}.sql`);
+const keep = [...migrations, 'src/core/guards.ts', 'src/core/rate-limit.ts', 'src/core/rate-limit-policy.ts',
+  'src/modules/saves/', 'src/modules/config/', 'src/modules/rankings/', 'src/modules/announcements/', 'wrangler.jsonc', 'vitest.config.ts', pkg];
 gitClean(keep, { base });
 done();
 ```
