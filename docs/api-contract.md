@@ -149,7 +149,7 @@
 
 ## GET /v1/config?gameId=demo-rpg&clientVersion=…
 
-ゲームの設定（機能フラグとクライアントの版）を読む。クライアントは起動時に 1 回読む。設計の正は`docs/guides/working/config-design.md`。
+ゲームの設定（機能フラグ・クライアントの版・マスターデータのキーと大きさの一覧）を読む。クライアントは起動時に 1 回読む。設計の正は`docs/guides/working/config-design.md`。
 
 レスポンス例（200）:
 
@@ -157,14 +157,37 @@
 {"gameId":"demo-rpg","clientVersion":{"minimum":"1.0.0","latest":"1.0.0","update":"none"},"flags":{"demo-flag":true}}
 ```
 
+マスターデータのあるゲームの例（200。`my-rpg`は説明のための名前）:
+
+```json
+{"gameId":"my-rpg","clientVersion":{"minimum":"1.0.0","latest":"1.0.0","update":"none"},"flags":{"demo-flag":true},"masterData":[{"key":"items","size":24}]}
+```
+
 - `clientVersion`（問い合わせ）はクライアントのビルドの版。形は`1`・`1.2`・`1.2.3`（数字の区切りが 1〜3 つ。各区切り 1〜9 桁）。英字の付いた版（`1.2.3-beta`）・空の`clientVersion=`は**400 `INVALID_ARGUMENT`**（`message`は`Invalid clientVersion`）。版はドットの区切りごとに数として比べ（`1.10`は`1.9`より新しい）、足りない区切りは 0 とみなす（`1`と`1.0.0`は同じ）。
 - `clientVersion.minimum`・`latest`（応答）はゲームごとの最低の版・最新の版。決まりが無ければ`null`。
 - `clientVersion.update`: 送った版が最低の版より古ければ`"required"`、最新の版より古ければ`"available"`、ほか（決まりが無いときも）は`"none"`。`clientVersion`を送らなければ`"unknown"`。`"required"`でもエラーにせず 200 で設定を返す（更新の画面を出すかはクライアントが決める）。ほかの API は版で断らない。
 - `flags`は機能フラグ（名前 → 真偽値。名前の昇順）。名前も意味もゲームが決め、サーバーの挙動はフラグで変わらない。無ければ`{}`。
+- `masterData`はマスターデータのキーとバイト数（`size`。UTF-8）の一覧（キーの昇順）。中身は入らず、キーごとに`GET /v1/config/master/{key}`で読む。マスターデータが 1 つも無いゲームでは`masterData`の欄そのものが載らない（`demo-rpg`はいまマスターデータを持たないので載らない）。マスターデータが変わると`size`が変わりうるので、設定の`ETag`も変わる。
 - 応答の見出しに`ETag`（本文の SHA-256 の 16 進を`"`で囲んだもの）と`Cache-Control: no-cache`が付く。次から前の`ETag`を`If-None-Match`に付けて読むと、設定が変わっていなければ**304**（本文なし。見出しは`ETag`と`Cache-Control: no-cache`だけ）。変わっていれば 200 と新しい本文・新しい`ETag`。`If-None-Match`は`*`・`,`で区切った複数・`W/`の弱い印を受ける。エラーの応答は`no-store`のまま。
 - 読むだけの API なので、**トークンは要らず、`APP_ENV`が`local`でなくても読める**（`Authorization`が付いていても見ない）。設定を書き換える API は無い。設定はマイグレーションで入れる（`migrations/0006_config.sql`。`demo-rpg`は最低の版・最新の版が`1.0.0`、フラグ`demo-flag`が`true`）。
-- 設定はだれでも読めるので、**秘密（鍵・内部の URL・未発表の情報）を機能フラグに入れない**。
+- 設定はだれでも読めるので、**秘密（鍵・内部の URL・未発表の情報）を機能フラグ・マスターデータに入れない**。
 - 登録の無い`gameId`は**404 `NOT_FOUND`**（`message`は`Unknown game`）。設定配信の機能（`config`）を使わない設定のゲームも**404 `NOT_FOUND`**（`message`は`Feature not enabled for this game`）。確かめの順: `gameId`の形（400）→ `clientVersion`の形（400）→ ゲームの登録と機能の設定（404）→ 読む → `If-None-Match`（304）。`GET`のほかのメソッドは**404 `NOT_FOUND`**（`Endpoint not found`）。
+
+## GET /v1/config/master/{key}?gameId=…
+
+マスターデータを 1 キー読む。キーは設定（`GET /v1/config`）の`masterData`に載ったもの。設計の正は`docs/guides/working/config-design.md`。
+
+レスポンス例（200）:
+
+```json
+{"gameId":"my-rpg","key":"items","data":"{\"potion\":{\"price\":50}}"}
+```
+
+- `data`は入れた文字列そのまま。**サーバーは中身を解釈しない**（JSON として読まない・欄を見ない）。送った物と返る物のバイト列は変わらない。中身の形はゲームが決める。
+- 1 キーの`data`は UTF-8 で **65,536 バイト（64 KiB）まで**（表の`CHECK`と`src/modules/config/limits.ts`の`MAX_MASTER_DATA_BYTES`）。マスターデータを書き換える API は無く、マイグレーションで入れる（表は`migrations/0007_config_master_data.sql`の`config_master_data`。超える行はマイグレーションが断られる）。
+- 応答の見出しに`ETag`（本文の SHA-256 の 16 進を`"`で囲んだもの）と`Cache-Control: no-cache`が付く。前の`ETag`を`If-None-Match`に付けて読むと、変わっていなければ**304**（本文なし。見出しは`ETag`と`Cache-Control: no-cache`だけ）。`ETag`はキーごとなので、変わったキーだけ取り直せる。
+- **トークンは要らず、`APP_ENV`が`local`でなくても読める**（設定と同じ）。秘密を入れない。
+- 確かめの順: キーの形（`^[a-zA-Z0-9_-]{1,64}$`。外れは**404 `NOT_FOUND`**・`Endpoint not found`）→ `gameId`の形（**400 `INVALID_ARGUMENT`**）→ ゲームの登録と機能の設定（**404 `NOT_FOUND`**・`Unknown game`・`Feature not enabled for this game`）→ そのゲームにキーが無ければ**404 `NOT_FOUND`**（`message`は`Master data not found`。他のゲームのキーも読めない）→ `If-None-Match`（304）。`GET`のほかのメソッドは**404 `NOT_FOUND`**（`Endpoint not found`）。
 
 ## エラーレスポンス
 

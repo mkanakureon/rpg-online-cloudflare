@@ -1335,7 +1335,7 @@
     "/v1/config": {
       "get": {
         "operationId": "getConfig",
-        "summary": "ゲームの設定（機能フラグとクライアントの版）。トークンは要らない",
+        "summary": "ゲームの設定（機能フラグ・クライアントの版・マスターデータのキーと大きさの一覧）。トークンは要らない",
         "parameters": [
           {
             "name": "gameId",
@@ -1462,6 +1462,160 @@
           },
           "500": {
             "description": "想定外の失敗（DB の失敗・表の版の形の外れなど）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/config/master/{key}": {
+      "get": {
+        "operationId": "getMasterData",
+        "summary": "ゲームのマスターデータを 1 キー読む（中身はサーバーが解釈しない文字列）。トークンは要らない",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "description": "マスターデータのキー（GET /v1/config の masterData に載るもの）。形が外れたキーはルートに当たらず 404（Endpoint not found）。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "前に受け取った ETag。合えば本文の無い 304。* と , で区切った複数と W/ の弱い印を受ける。",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "そのキーのマスターデータ（入れた文字列そのまま）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "マスターデータの応答は no-cache（保存してよいが、使う前に毎回 If-None-Match で確かめる）。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-cache"
+                }
+              },
+              "ETag": {
+                "description": "応答の本文（UTF-8）の SHA-256 の小文字の 16 進を引用符で囲んだ強い ETag。次の要求の If-None-Match に送る。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^\"[0-9a-f]{64}\"$"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MasterData"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "If-None-Match が ETag に合った（マスターデータが変わっていない）。本文は無い。",
+            "headers": {
+              "Cache-Control": {
+                "description": "マスターデータの応答は no-cache（保存してよいが、使う前に毎回 If-None-Match で確かめる）。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-cache"
+                }
+              },
+              "ETag": {
+                "description": "応答の本文（UTF-8）の SHA-256 の小文字の 16 進を引用符で囲んだ強い ETag。次の要求の If-None-Match に送る。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^\"[0-9a-f]{64}\"$"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "gameId の形が外れている。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "登録の無いゲーム（message は Unknown game）・設定配信の機能（config）を使わない設定のゲーム（message は Feature not enabled for this game）・そのゲームに無いキー（message は Master data not found）・形の外れたキー（message は Endpoint not found）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗など）。中身は返さない。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -1972,6 +2126,53 @@
               "type": "boolean"
             },
             "description": "機能フラグ（名前 → 真偽値。名前の昇順）。名前も意味もゲームが決める。無ければ {}。"
+          },
+          "masterData": {
+            "type": "array",
+            "description": "マスターデータのキーと大きさの一覧（キーの昇順）。中身は GET /v1/config/master/{key} で読む。マスターデータが 1 つも無いゲームでは載らない。",
+            "items": {
+              "$ref": "#/components/schemas/MasterDataEntry"
+            }
+          }
+        }
+      },
+      "MasterDataEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "size"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65536,
+            "description": "data の UTF-8 のバイト数（上限は 65,536 バイト＝64 KiB）。"
+          }
+        }
+      },
+      "MasterData": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "key",
+          "data"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "key": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "data": {
+            "type": "string",
+            "description": "入れた文字列そのまま（サーバーは JSON として読まない）。UTF-8 で 65,536 バイト（64 KiB）まで。"
           }
         }
       },
