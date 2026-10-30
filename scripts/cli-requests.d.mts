@@ -6,6 +6,8 @@
 
 export declare const SMOKE_BOARD_ID: string;
 
+export declare function smokeBoardId(now?: number): string;
+
 export declare function scoreSubmission(playerId?: string): {
   gameId: string;
   playerId: string;

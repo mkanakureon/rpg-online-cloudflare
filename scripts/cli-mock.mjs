@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /** CLI モック（将来の UE・Unity・ブラウザの HTTP クライアントの代わり。ローカル専用）: 設定とマスターデータ → スコア → セーブの流れを通す。 */
 import {
-  SMOKE_BOARD_ID, SMOKE_SLOT_ID, authHeaders, configPath, guestRequest, masterDataPath, saveData, saveWrite, scoreSubmission, sha256Hex,
-  utf8Bytes
+  SMOKE_SLOT_ID, authHeaders, configPath, guestRequest, masterDataPath, saveData, saveWrite, scoreSubmission, sha256Hex,
+  smokeBoardId, utf8Bytes
 } from './cli-requests.mjs';
 
 const base = process.env.API_BASE_URL || 'http://127.0.0.1:8787';
@@ -57,13 +57,15 @@ try {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(guestRequest())
   });
+  // 回すたびに別のボードに送る（同点の前の回の行が上位 10 件を埋めていても、自分の行が見つかる）
+  const boardId = smokeBoardId(Date.now());
   const submission = scoreSubmission(guest.playerId);
-  await call(`/v1/rankings/${SMOKE_BOARD_ID}`, {
+  await call(`/v1/rankings/${boardId}`, {
     method: 'POST',
     headers: authHeaders(guest.token),
     body: JSON.stringify(submission)
   });
-  const result = await call(`/v1/rankings/${SMOKE_BOARD_ID}?gameId=${submission.gameId}&limit=10`);
+  const result = await call(`/v1/rankings/${boardId}?gameId=${submission.gameId}&limit=10`);
   if (!result.items.some((entry) => entry.playerId === submission.playerId && entry.score >= submission.score)) {
     throw new Error('Submitted score not found in top 10');
   }

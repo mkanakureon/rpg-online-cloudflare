@@ -9,12 +9,22 @@
 // （CLI_CLIENT_VERSION・configPath。テスト「CLIモックと同じ流れで設定を読み変わっていなければ304を受け取る」）。
 // 設定の masterData に載った最初のキーのマスターデータを読み、data のバイト数が一覧の size と同じことを見る
 // （masterDataPath・utf8Bytes。テスト「CLIモックと同じ流れで設定に載ったマスターデータを読める」）。
+// スコアはローカルの D1 に積み上がっても上位 10 件に入るよう、回すたびに smokeBoardId(now) の別のボードに送る
+// （テスト「CLIモックの通しは同点のスコアが上位10件を埋めていても自分の投稿を見つける」）。
 // Node.js と Workers のランタイムの両方で読めるよう、Node.js の API を使わない（チェックサムは crypto.subtle）。型は cli-requests.d.mts。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
 
 /** CLI モックのスモークでスコアを送るときの盤の ID。 */
 export const SMOKE_BOARD_ID = 'boss-score';
+
+/**
+ * CLI モックが 1 回の通しでスコアを送るボードの ID（SMOKE_BOARD_ID の後ろに now〔ミリ秒〕の 36 進を付ける。例: boss-score-mh0abc12）。
+ * 同点なら先に記録した行が上に並ぶので、前の回の行と重ならないボードに送る。ボード ID の形 ^[a-zA-Z0-9_-]{1,64}$ に合う。
+ */
+export function smokeBoardId(now = Date.now()) {
+  return `${SMOKE_BOARD_ID}-${Math.floor(now).toString(36)}`;
+}
 
 /** CLI モックのスモークで送るスコア投稿の本文（POST /v1/rankings/:boardId）。 */
 export function scoreSubmission(playerId = 'cli-smoke-player') {

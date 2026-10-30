@@ -4,6 +4,7 @@
  * `CLIモックと同じ流れでセーブの一覧に出たスロットを消せる` は
  * docs/guides/working/save-design.md §7 が正、`CLIモックと同じ流れで設定を読み変わっていなければ304を受け取る`・
  * `CLIモックと同じ流れで設定に載ったマスターデータを読める` は docs/guides/working/config-design.md §7 が正（互換の試験の隣に置く）。
+ * `CLIモックの通しは同点のスコアが上位10件を埋めていても自分の投稿を見つける` は Issue #28（CLI モックは回すたびに別のボードに投稿する）。
  * src/worker.ts の default.fetch を直に呼ぶ L2 の試験。DB の失敗は prepare が投げる偽の DB で起こす。
  */
 import { env } from 'cloudflare:workers';
@@ -14,7 +15,7 @@ import { bearerForBody } from './support/auth';
 import { registerGame } from './support/games';
 import {
   CLI_CLIENT_VERSION, SMOKE_BOARD_ID, SMOKE_SLOT_ID, authHeaders, configPath, guestRequest, masterDataPath, saveData, saveWrite, scoreSubmission,
-  sha256Hex, utf8Bytes,
+  sha256Hex, smokeBoardId, utf8Bytes,
 } from '../scripts/cli-requests.mjs';
 
 type Migration = { name: string; queries: string[] };
@@ -309,6 +310,44 @@ describe('ケース 7: マイグレーションと互換', () => {
       await send(`${savePath}&baseRevision=1`, { method: 'DELETE', headers });
     }
     expect(statuses).toEqual(Array(12).fill(200));
+  });
+
+  it('CLIモックの通しは同点のスコアが上位10件を埋めていても自分の投稿を見つける', async () => {
+    // ローカルの D1 に前の回の CLI モックの同点の行がたまった状態を作る（同点は先に記録した行が上。2026-10-30 の観測）。
+    // SMOKE_BOARD_ID と、前の回の smokeBoardId のボードの両方を、ほかのプレイヤーの 1200 点の古い行 12 行で埋める
+    const now = Date.parse('2026-10-30T12:00:00Z');
+    const earlier = smokeBoardId(now - 60_000);
+    const boardId = smokeBoardId(now);
+    expect(boardId).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
+    expect(boardId).not.toBe(SMOKE_BOARD_ID);
+    expect(boardId).not.toBe(earlier);
+    expect(smokeBoardId(now)).toBe(boardId);
+    const fill = [SMOKE_BOARD_ID, earlier].flatMap((board) => Array.from({ length: 12 }, (_, i) =>
+      baseEnv.DB.prepare(
+        "INSERT INTO ranking_entries (game_id, board_id, player_id, display_name, score, updated_at) VALUES ('demo-rpg', ?, ?, 'old', 1200, '2000-01-01 00:00:00')",
+      ).bind(board, `old-${i}`)));
+    await baseEnv.DB.batch(fill);
+    // CLI モックと同じ関数で、ゲストを発行して smokeBoardId(now) のボードに送り、limit=10 で読む
+    const guest = await worker.fetch(new Request(`${base}/v1/accounts/guest`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(guestRequest()),
+    }), localEnv as never);
+    expect(guest.status).toBe(200);
+    const { playerId, token } = await guest.json<{ playerId: string; token: string }>();
+    const submission = scoreSubmission(playerId);
+    const res = await worker.fetch(new Request(`${base}/v1/rankings/${boardId}`, {
+      method: 'POST',
+      headers: authHeaders(token),
+      body: JSON.stringify(submission),
+    }), localEnv as never);
+    expect(res.status).toBe(200);
+    const list = await items(await get(`/v1/rankings/${boardId}?gameId=${submission.gameId}&limit=10`));
+    expect(list.some((e) => e.playerId === submission.playerId && e.score >= submission.score)).toBe(true);
+    // 決まったボードに送っていたら見つからない（直す前の落ち方）
+    const fixed = await items(await get(`/v1/rankings/${SMOKE_BOARD_ID}?gameId=${submission.gameId}&limit=10`));
+    expect(fixed).toHaveLength(10);
+    expect(fixed.every((e) => e.playerId.startsWith('old-'))).toBe(true);
   });
 
   it('知らない欄が付いた要求も受け付ける', async () => {

@@ -227,7 +227,7 @@ CREATE TABLE IF NOT EXISTS game_players (
 API を変えたら CLI モックも合わせる決まり（CLAUDE.md）なので、スコアの投稿にトークンが要るようになる A2 で変える。A1 では変えない（足した API を使わなくても、いまの通しの確かめは通る）。
 
 1. `scripts/cli-requests.mjs` に `guestRequest()`（`{ gameId: 'demo-rpg' }` を返す）と `authHeaders(token)`（`{ 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }`）を足し、`scripts/cli-requests.d.mts` に型を足す。`scoreSubmission(playerId)` は変えない。
-2. `scripts/cli-mock.mjs` は `/health` → お知らせ → **`POST /v1/accounts/guest`（`guestRequest()`）** → `POST /v1/rankings/boss-score`（本文は `scoreSubmission(発行された playerId)`・見出しは `authHeaders(発行された token)`）→ `GET` で載っているかを見る、の順にする。トークンは画面に出さない（`operations-security.md` の「トークンを記録しない」。応答の表示から `token` を伏せる）。
+2. `scripts/cli-mock.mjs` は `/health` → お知らせ → **`POST /v1/accounts/guest`（`guestRequest()`）** → `POST /v1/rankings/{smokeBoardId(now)}`（回すたびに別のボード `boss-score-<時刻の36進>`。同点の前の回の行が上位 10 件を埋めても自分の行が見つかるように。Issue #28）（本文は `scoreSubmission(発行された playerId)`・見出しは `authHeaders(発行された token)`）→ `GET` で載っているかを見る、の順にする。トークンは画面に出さない（`operations-security.md` の「トークンを記録しない」。応答の表示から `token` を伏せる）。
 3. `npm run cli:smoke` は `npm run dev`（`APP_ENV=local`・既定の鍵）に対して通る。
 
 ## 6. 試験の名前の表
