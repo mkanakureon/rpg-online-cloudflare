@@ -125,8 +125,9 @@ CREATE TABLE IF NOT EXISTS config_master_data (
   data TEXT NOT NULL CHECK (length(CAST(data AS BLOB)) <= 65536),  -- MAX_MASTER_DATA_BYTES（UTF-8 のバイト数）
   PRIMARY KEY (game_id, key)
 );
-INSERT OR IGNORE INTO config_master_data (game_id, key, data) VALUES ('demo-rpg', 'items', '{"potion":{"price":50}}');
 ```
+
+- `demo-rpg` には手本の行を入れない（C2 の実装で決めた）。C1 の試験（`test/config.test.ts`）が `demo-rpg` の設定の応答の全体を `toEqual` で比べていて、手本を入れると `masterData` の欄が載って落ちるため。マスターデータの試験は専用のゲーム（`cfg-master` など）に行を入れて行う。
 
 - 大きさの上限は `CHECK` で表に持たせる（書き込みの API が無いので、入れる側＝マイグレーションで断られるのが一番早い）。`length(CAST(data AS BLOB))` は UTF-8 のバイト数（D1 の文字の符号化は UTF-8）。64 KiB にした理由は §10 の決めること 3。
 - マイグレーションの `INSERT` に値をそのまま書くので、D1 の「SQL の文の長さ 100,000 バイト」が先に効くことがある（`'` を `''` に逃がすと膨らむ）。長すぎる文はマイグレーションが失敗するので、黙って切れることは無い。そのときはキーを分ける。
@@ -162,16 +163,16 @@ INSERT OR IGNORE INTO config_master_data (game_id, key, data) VALUES ('demo-rpg'
 {"gameId":"demo-rpg","clientVersion":{"minimum":"1.0.0","latest":"1.0.0","update":"none"},"flags":{"demo-flag":true}}
 ```
 
-C2 からは `masterData` を足す（`/v1/` の中では欄を足すだけ。`docs/api-contract.md` の互換の決まり）:
+C2 からは、マスターデータのあるゲームに `masterData` を足す（`/v1/` の中では欄を足すだけ。`docs/api-contract.md` の互換の決まり）。例は `items` に `{"potion":{"price":50}}`（23 バイト）を入れたゲーム `my-rpg`:
 
 ```json
-{"gameId":"demo-rpg","clientVersion":{"minimum":"1.0.0","latest":"1.0.0","update":"none"},"flags":{"demo-flag":true},"masterData":[{"key":"items","size":24}]}
+{"gameId":"my-rpg","clientVersion":{"minimum":"1.0.0","latest":"1.0.0","update":"none"},"flags":{"demo-flag":true},"masterData":[{"key":"items","size":23}]}
 ```
 
 - `clientVersion.minimum`・`latest`: 表の値。行が無い・`NULL` なら `null`。
 - `clientVersion.update`: 問い合わせの `clientVersion` を `updateStatus` で比べた結果。`clientVersion` を送らなければ `"unknown"`。最低の版より古い → `"required"`、最新の版より古い → `"available"`、ほか（決まりが無いときも）→ `"none"`（§5）。
 - `flags`: 名前 → 真偽値。名前の昇順に並べる（同じ設定なら同じ本文 → 同じ `ETag`）。無ければ `{}`。
-- `masterData`（C2）: キーとバイト数の一覧（キーの昇順）。中身は入れない（§10 の決めること 3）。
+- `masterData`（C2）: キーとバイト数の一覧（キーの昇順）。中身は入れない（§10 の決めること 3）。マスターデータが 1 つも無いゲームでは欄ごと載せない（C1 の形の応答のまま。スキーマで必須にしない）。
 
 検査の順（上から。最初に当たったもので返す）:
 
@@ -186,12 +187,12 @@ C2 からは `masterData` を足す（`/v1/` の中では欄を足すだけ。`d
 
 304 の応答: 本文なし・見出しは `etag`・`cache-control: no-cache` だけ。
 
-### `GET /v1/config/master/{key}?gameId=demo-rpg`（C2）
+### `GET /v1/config/master/{key}?gameId=my-rpg`（C2）
 
 応答（200。見出しは上と同じ形の `cache-control: no-cache`・`etag`）:
 
 ```json
-{"gameId":"demo-rpg","key":"items","data":"{\"potion\":{\"price\":50}}"}
+{"gameId":"my-rpg","key":"items","data":"{\"potion\":{\"price\":50}}"}
 ```
 
 - `data` は入れた文字列そのまま（サーバーは JSON として読まない。`save-design.md` の決めること 3 と同じ理由で、送った物と返る物のバイト列を変えない）。
@@ -259,7 +260,7 @@ C2（マスターデータ）:
 
 置き場は C1 が `test/config.test.ts`、C2 が `test/config-master.test.ts`。ただし、§8 で置き換える試験の後を継ぐものは置き換える試験と同じファイルに置く（機能の一覧は `test/modules.test.ts`、機能の設定は `test/game-modules.test.ts`、操作の数は `test/schema-conformance.test.ts`）。スキーマに合うかを見る試験（`設定の応答はスキーマに合う`・`マスターデータの応答はスキーマに合う`）は `expectConforms` がある `test/schema-conformance.test.ts` に置く。CLI モックの流れの試験は、互換の試験と並べて `test/failure-server.test.ts` に置く。試験のゲームは `test/support/games.ts` の `registerGame(db, id, ['config'])` で登録する（`test/support/games.ts` は変えない。既定の機能は `announcements`・`rankings` のまま）。設定の行は試験の中で `prepare().bind()` で入れる。テストの名前は表の文そのまま `it('…')` に書く。名前を変えるときは、この表も同じコミットで直す（`docs/guides/procedures/node-test-procedure.md`）。
 
-- **設定を書き換える試験は専用のゲームで行う**（`registerGame(db, 'cfg-etag', ['config'])` などに行を入れる）。`demo-rpg` の手本（`demo-flag`・`items`）は書き換えない。同じファイルの中では D1 の中身が引き継がれるので、手本を書き換えると後に走る試験が順番しだいで落ちる。ファイルの `beforeEach` は試験のゲームの行（`games` の `demo-rpg` 以外）を消す。
+- **設定を書き換える試験は専用のゲームで行う**（`registerGame(db, 'cfg-etag', ['config'])` などに行を入れる）。`demo-rpg` の手本（`demo-flag`）は書き換えない。同じファイルの中では D1 の中身が引き継がれるので、手本を書き換えると後に走る試験が順番しだいで落ちる。ファイルの `beforeEach` は試験のゲームの行（`games` の `demo-rpg` 以外）を消す。
 - **304 は `expectConforms` に通さない**（いまの手伝いは本文が JSON であることを必ず見るので、本文の無い 304 で落ちる）。スキーマに合うかの試験の中で、状態が 304・本文が空・スキーマに 304 の応答があり、その `headers` の `ETag` の形に合う、を直に見る。手伝い（`expectConforms`）は変えない。
 
 | 束 | テストの名前 | 入力 | 期待する結果 | 層 |
@@ -290,7 +291,7 @@ C2（マスターデータ）:
 | C1 | `demo-rpgはannouncementsとrankingsとsavesとconfigを使う設定で登録される` | `game_modules` の `demo-rpg` の行 | `['announcements', 'config', 'rankings', 'saves']`（§8 で置き換える試験の後を継ぐ） | L2 |
 | C1 | `モジュールの一覧はannouncementsとrankingsとsavesとconfigでルートが重ならない` | `modules` | 名前が 4 つ・`メソッド パターン` が重ならない・どれも `/health` に当たらない（§8 で置き換える試験の後を継ぐ） | L1 |
 | C1 | `CLIモックと同じ流れで設定を読み変わっていなければ304を受け取る` | `scripts/cli-requests.mjs` の `configPath`・`CLI_CLIENT_VERSION` で読み、`etag` を付けてもう一度（`scripts/cli-mock.mjs` の C1 の流れ。§6） | 200・`update` が `required` でない・2 回目が 304 | L2 |
-| C2 | `マスターデータを読むと入れた文字列がそのまま返る` | `demo-rpg` の `items`（`0007` の手本）と、改行・`'`・絵文字を含む文字列を入れたキー | 200・`data` が入れた文字列とバイト列まで同じ | L2 |
+| C2 | `マスターデータを読むと入れた文字列がそのまま返る` | 専用のゲーム `cfg-master` に入れた `items`（`{"potion":{"price":50}}`）と、改行・`'`・絵文字を含む文字列を入れたキー | 200・`data` が入れた文字列とバイト列まで同じ | L2 |
 | C2 | `マスターデータの応答にはETagが付き同じETagなら304を返す` | 専用のゲームのキーで、1 回目の `etag` を `If-None-Match` に付けてもう一度・`data` を変えて古い `etag` で | 304 で本文なし・200 で新しい `data` と違う `etag`。`cache-control` は `no-cache` | L2 |
 | C2 | `設定の応答にマスターデータのキーと大きさの一覧が載る` | キーを 2 つ入れたゲームの `GET /v1/config` | `masterData` がキーの昇順で `size` が UTF-8 のバイト数。`data` は入らない | L2 |
 | C2 | `マスターデータが変わると設定のETagも変わる` | 専用のゲームで、大きさの違う `data` に書き換えて `GET /v1/config` | `etag` が変わる（`size` が本文に入るため） | L2 |
@@ -337,6 +338,7 @@ C2（マスターデータ）:
 | 最低の版でほかの API（セーブ・スコア）を断る | 版を偽れない形（署名つきのビルドの証明など）ができてから。いまは 200 の `update: "required"` で促すだけ |
 | SHA-256 の手伝いを `src/core/` に一つにまとめる | `src/modules/saves/checksum.ts` と `src/modules/config/etag.ts` の SHA-256 を core の 1 関数にする片付け。挙動は変わらない |
 | 64 KiB を超えるマスターデータ | R2 に置き、`config_master_data` に置き場の列を新しいマイグレーションで足す。API の形（`data`）は変えない |
+| `demo-rpg` のマスターデータの手本（`npm run cli:smoke` でマスターデータの流れも通す） | C1 の試験（`test/config.test.ts`）の `demo-rpg` の応答の比べ方を、見る欄だけの `toMatchObject` に直す Issue の後で、新しい番号のマイグレーションに手本の `INSERT` を書く。API は変えない |
 | ブラウザから読むときの CORS（`ETag` を読ませる `Access-Control-Expose-Headers`） | Phase 3 のブラウザのクライアントで、全部の API の CORS と一緒に決める |
 
 ## 10. 決めること
@@ -511,7 +513,7 @@ done();
 
 - 確認コマンドの案は、実装の Issue を作る前に 1 回回し、「まだ作っていないから」落ちることを確かめる（CLAUDE.md の進め方の決まり）。
 - C1 の `base` の試験の名前は、2026-10-30 の main `492f688` のもの（上の `namesIn` で数える）。C2 の `base` は C1 が入った後の main なので、C1 の試験も自動で入る。
-- C2 は `test/config.test.ts` を守る（C1 の試験の中身を C2 で変えない）。`masterData` の欄を足しても C1 の試験が通るよう、C1 の試験は応答の全体を `toEqual` で比べず、見る欄を `toMatchObject` で比べる。
+- C2 は `test/config.test.ts` を守る（C1 の試験の中身を C2 で変えない）。C1 の試験は `demo-rpg` と空のゲームの設定の応答の全体を `toEqual` で比べているので、C2 は `demo-rpg` に手本を入れず、マスターデータの無いゲームでは `masterData` の欄を載せない（§2・§3）。`npm run cli:smoke` でマスターデータの流れも通すには、C1 の試験の比べ方を直してから新しい番号のマイグレーションで手本を入れる（§9 の後の片付け）。
 - `今のCLIモックと同じ形の要求を受け付ける` の**期待する結果の行**が変わっていないか（§8 の「名前も中身も変えない」）は、名前までしか確認コマンドで見きれない。判定役が差分で見る。
 
 ## 12. 指示の表
