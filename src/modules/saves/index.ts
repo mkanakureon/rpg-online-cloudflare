@@ -1,6 +1,7 @@
 // saves/index.ts — セーブのモジュール（PUT・GET・DELETE /v1/saves/{slotId} と一覧の GET /v1/saves）。
 //
-// どれも APP_ENV=local の門 → トークン → gameId の形 → トークンのゲームとの突き合わせの順に確かめる（本文を読む前）。
+// どれも APP_ENV=local の門 → トークン → プレイヤーの利用制限（4 つの操作を合わせて RATE_LIMITS.saves。429）→ gameId の形 →
+// トークンのゲームとの突き合わせの順に確かめる（本文を読む前。制限の順の正は docs/guides/working/abuse-protection-design.md §3）。
 // PUT はその後に本文の大きさ → JSON → 形（validate.ts）→ data の大きさ → チェックサム（checksum.ts）→ ゲームの登録と
 // 機能の設定 → 書き込み（リビジョンを比べて書く 1 つの文。合わなければ 409 SAVE_CONFLICT、新しいスロットで MAX_SLOTS を
 // 超えれば 409 SLOT_LIMIT_EXCEEDED）。GET・一覧は登録と設定の後に読む。DELETE は baseRevision の形の後に、行を消さず
@@ -15,6 +16,8 @@ import { requireLocalWrite } from '../../core/guards';
 import { error, json } from '../../core/http';
 import { validId } from '../../core/ids';
 import type { GameModule } from '../../core/module';
+import { consume } from '../../core/rate-limit';
+import { RATE_LIMITS } from '../../core/rate-limit-policy';
 import type { TokenClaims } from '../../core/token';
 import { sha256Hex } from './checksum';
 import { MAX_REQUEST_BYTES, MAX_SAVE_BYTES, MAX_SLOTS } from './limits';
@@ -57,12 +60,15 @@ const liveSlot = 'SELECT 1 AS live FROM saves WHERE game_id = ? AND player_id = 
 
 type Checked = { ok: true; claims: TokenClaims; gameId: string } | { ok: false; response: Response };
 
-/** 本文を読む前の確かめ（門 → トークン → gameId → トークンのゲーム）。どのルートでも同じ。 */
+/** 本文を読む前の確かめ（門 → トークン → プレイヤーの利用制限 → gameId → トークンのゲーム）。どのルートでも同じ。 */
 async function checkAccess(req: Request, env: Env, url: URL): Promise<Checked> {
   const blocked = requireLocalWrite(env);
   if (blocked) return { ok: false, response: blocked };
   const auth = await requireAuth(req, env);
   if (!auth.ok) return auth;
+  // 4 つの操作を合わせて、トークンのプレイヤーで数える（偽れない鍵。断った要求は書かない・消さない）
+  const limited = await consume(env.DB, RATE_LIMITS.saves, `${auth.claims.gameId}:${auth.claims.playerId}`);
+  if (limited) return { ok: false, response: limited };
   const gameId = url.searchParams.get('gameId');
   if (!validId(gameId)) return { ok: false, response: error('INVALID_ARGUMENT', 'Invalid gameId', 400) };
   if (auth.claims.gameId !== gameId) {

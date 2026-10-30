@@ -14,6 +14,7 @@ import { MAX_REQUEST_BYTES, MAX_SAVE_BYTES } from '../src/modules/saves/limits';
 import { parseSaveWrite, utf8Size } from '../src/modules/saves/validate';
 import { bearer } from './support/auth';
 import { registerGame } from './support/games';
+import { resetRateLimits } from './support/rate-limits';
 
 type TestEnv = { DB: D1Database; APP_ENV: string };
 const baseEnv = env as unknown as TestEnv;
@@ -75,6 +76,7 @@ beforeEach(async () => {
     baseEnv.DB.prepare("DELETE FROM game_modules WHERE game_id <> 'demo-rpg'"),
     baseEnv.DB.prepare("DELETE FROM games WHERE game_id <> 'demo-rpg'"),
   ]);
+  await resetRateLimits(baseEnv.DB);
 });
 
 describe('V1 セーブの関数', () => {

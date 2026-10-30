@@ -13,6 +13,7 @@ import worker from '../src/worker';
 import { sha256Hex } from '../src/modules/saves/checksum';
 import { MAX_SLOTS } from '../src/modules/saves/limits';
 import { bearer } from './support/auth';
+import { resetRateLimits } from './support/rate-limits';
 
 type TestEnv = { DB: D1Database; APP_ENV: string };
 const baseEnv = env as unknown as TestEnv;
@@ -65,6 +66,7 @@ async function ok<T>(res: Response): Promise<T> {
 // 試験の間で前のデータに頼らない
 beforeEach(async () => {
   await baseEnv.DB.prepare('DELETE FROM saves').run();
+  await resetRateLimits(baseEnv.DB);
 });
 
 describe('V2 セーブの一覧', () => {
