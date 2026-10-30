@@ -50,7 +50,7 @@
 ```
 
 - `limit`: 1～50、デフォルト10。
-- 登録の無い`gameId`は**404 `NOT_FOUND`**（`message`は`Unknown game`）。その機能を使わない設定のゲームも**404 `NOT_FOUND`**（`message`は`Feature not enabled for this game`。ランキングの機能は`rankings`、お知らせは`announcements`）。お知らせ（`GET /v1/announcements`）・スコアの投稿（`POST`）も同じ。登録済みで機能を使う設定のゲームなら、ボードにデータが無くても（存在しないボードでも）**200と空の`items`**を返す。ゲームの登録と使う機能の設定はマイグレーションで入れる（`migrations/0002_games.sql`・`migrations/0003_game_modules.sql`・`migrations/0005_saves.sql`。`demo-rpg`は登録済みで`announcements`・`rankings`・`saves`を使う）。
+- 登録の無い`gameId`は**404 `NOT_FOUND`**（`message`は`Unknown game`）。その機能を使わない設定のゲームも**404 `NOT_FOUND`**（`message`は`Feature not enabled for this game`。ランキングの機能は`rankings`、お知らせは`announcements`）。お知らせ（`GET /v1/announcements`）・スコアの投稿（`POST`）も同じ。登録済みで機能を使う設定のゲームなら、ボードにデータが無くても（存在しないボードでも）**200と空の`items`**を返す。ゲームの登録と使う機能の設定はマイグレーションで入れる（`migrations/0002_games.sql`・`migrations/0003_game_modules.sql`・`migrations/0005_saves.sql`・`migrations/0006_config.sql`。`demo-rpg`は登録済みで`announcements`・`rankings`・`saves`・`config`を使う）。
 - 現PoCの順位は**高スコア優先のみ**。タイムアタックなど昇順ボードは将来追加。
 
 ## POST /v1/rankings/boss-score
@@ -146,6 +146,25 @@
 - そのスロットにセーブが無い（消した後も同じ）・他のプレイヤーのスロットは**404 `NOT_FOUND`**（`message`は`Save not found`）。`baseRevision`が無い・1 以上の整数でなければ**400 `INVALID_ARGUMENT`**。
 - 消した後は`GET`が 404・一覧に出ない・スロットの数に数えない。同じスロットに`baseRevision: 0`で書き直せるが、`revision`は 1 に戻らず消す前より先へ進む（サーバーは消した印を残す）。だから消す前のリビジョンを覚えた古い端末の書き込みは 409 `SAVE_CONFLICT`になる。
 - 書込み系 API なので`APP_ENV=local`の時だけ・トークンがある時だけ通る（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順: `APP_ENV`の守り → トークン → `gameId`の形 → トークンのゲームとの突き合わせ → `baseRevision`の形（400）→ ゲームの登録と機能の設定（404）→ 消す（409・404）。
+
+## GET /v1/config?gameId=demo-rpg&clientVersion=…
+
+ゲームの設定（機能フラグとクライアントの版）を読む。クライアントは起動時に 1 回読む。設計の正は`docs/guides/working/config-design.md`。
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","clientVersion":{"minimum":"1.0.0","latest":"1.0.0","update":"none"},"flags":{"demo-flag":true}}
+```
+
+- `clientVersion`（問い合わせ）はクライアントのビルドの版。形は`1`・`1.2`・`1.2.3`（数字の区切りが 1〜3 つ。各区切り 1〜9 桁）。英字の付いた版（`1.2.3-beta`）・空の`clientVersion=`は**400 `INVALID_ARGUMENT`**（`message`は`Invalid clientVersion`）。版はドットの区切りごとに数として比べ（`1.10`は`1.9`より新しい）、足りない区切りは 0 とみなす（`1`と`1.0.0`は同じ）。
+- `clientVersion.minimum`・`latest`（応答）はゲームごとの最低の版・最新の版。決まりが無ければ`null`。
+- `clientVersion.update`: 送った版が最低の版より古ければ`"required"`、最新の版より古ければ`"available"`、ほか（決まりが無いときも）は`"none"`。`clientVersion`を送らなければ`"unknown"`。`"required"`でもエラーにせず 200 で設定を返す（更新の画面を出すかはクライアントが決める）。ほかの API は版で断らない。
+- `flags`は機能フラグ（名前 → 真偽値。名前の昇順）。名前も意味もゲームが決め、サーバーの挙動はフラグで変わらない。無ければ`{}`。
+- 応答の見出しに`ETag`（本文の SHA-256 の 16 進を`"`で囲んだもの）と`Cache-Control: no-cache`が付く。次から前の`ETag`を`If-None-Match`に付けて読むと、設定が変わっていなければ**304**（本文なし。見出しは`ETag`と`Cache-Control: no-cache`だけ）。変わっていれば 200 と新しい本文・新しい`ETag`。`If-None-Match`は`*`・`,`で区切った複数・`W/`の弱い印を受ける。エラーの応答は`no-store`のまま。
+- 読むだけの API なので、**トークンは要らず、`APP_ENV`が`local`でなくても読める**（`Authorization`が付いていても見ない）。設定を書き換える API は無い。設定はマイグレーションで入れる（`migrations/0006_config.sql`。`demo-rpg`は最低の版・最新の版が`1.0.0`、フラグ`demo-flag`が`true`）。
+- 設定はだれでも読めるので、**秘密（鍵・内部の URL・未発表の情報）を機能フラグに入れない**。
+- 登録の無い`gameId`は**404 `NOT_FOUND`**（`message`は`Unknown game`）。設定配信の機能（`config`）を使わない設定のゲームも**404 `NOT_FOUND`**（`message`は`Feature not enabled for this game`）。確かめの順: `gameId`の形（400）→ `clientVersion`の形（400）→ ゲームの登録と機能の設定（404）→ 読む → `If-None-Match`（304）。`GET`のほかのメソッドは**404 `NOT_FOUND`**（`Endpoint not found`）。
 
 ## エラーレスポンス
 

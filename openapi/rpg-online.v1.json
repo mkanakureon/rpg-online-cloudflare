@@ -3,7 +3,7 @@
   "info": {
     "title": "RPG Online Backend (local PoC)",
     "version": "1.0.0",
-    "description": "ローカル専用の PoC。認証はゲストのトークン（POST /v1/accounts/guest が返す Bearer）だけで、ログイン・レート制限・不正対策は未実装。形（欄・型・範囲・状態コードとエラーコードの組）の正はこのファイル、挙動の説明の正は docs/api-contract.md。応答はどれも content-type: application/json; charset=utf-8。状態ごとに返りうるエラーコードは各応答の x-error-codes に書く。スキーマに無いパスとメソッドは 404 NOT_FOUND。"
+    "description": "ローカル専用の PoC。認証はゲストのトークン（POST /v1/accounts/guest が返す Bearer）だけで、ログイン・レート制限・不正対策は未実装。形（欄・型・範囲・状態コードとエラーコードの組）の正はこのファイル、挙動の説明の正は docs/api-contract.md。本文のある応答はどれも content-type: application/json; charset=utf-8（本文の無い 304 は除く）。状態ごとに返りうるエラーコードは各応答の x-error-codes に書く。スキーマに無いパスとメソッドは 404 NOT_FOUND。"
   },
   "servers": [
     {
@@ -1331,6 +1331,160 @@
           }
         }
       }
+    },
+    "/v1/config": {
+      "get": {
+        "operationId": "getConfig",
+        "summary": "ゲームの設定（機能フラグとクライアントの版）。トークンは要らない",
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "clientVersion",
+            "in": "query",
+            "required": false,
+            "description": "クライアントのビルドの版。送らなければ update は unknown。",
+            "schema": {
+              "$ref": "#/components/schemas/Version"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "前に受け取った ETag。合えば本文の無い 304。* と , で区切った複数と W/ の弱い印を受ける。",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "そのゲームの設定。",
+            "headers": {
+              "Cache-Control": {
+                "description": "設定の応答は no-cache（保存してよいが、使う前に毎回 If-None-Match で確かめる）。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-cache"
+                }
+              },
+              "ETag": {
+                "description": "応答の本文（UTF-8）の SHA-256 の小文字の 16 進を引用符で囲んだ強い ETag。次の要求の If-None-Match に送る。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^\"[0-9a-f]{64}\"$"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Config"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "If-None-Match が ETag に合った（設定が変わっていない）。本文は無い。",
+            "headers": {
+              "Cache-Control": {
+                "description": "設定の応答は no-cache（保存してよいが、使う前に毎回 If-None-Match で確かめる）。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-cache"
+                }
+              },
+              "ETag": {
+                "description": "応答の本文（UTF-8）の SHA-256 の小文字の 16 進を引用符で囲んだ強い ETag。次の要求の If-None-Match に送る。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^\"[0-9a-f]{64}\"$"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "gameId か clientVersion の形が外れている（空の clientVersion も）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "登録の無いゲーム（message は Unknown game）か、設定配信の機能（config）を使わない設定のゲーム（message は Feature not enabled for this game）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・表の版の形の外れなど）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1753,6 +1907,71 @@
           },
           "slotId": {
             "$ref": "#/components/schemas/Id"
+          }
+        }
+      },
+      "Version": {
+        "type": "string",
+        "pattern": "^\\d{1,9}(\\.\\d{1,9}){0,2}$",
+        "description": "クライアントの版（1・1.2・1.2.3）。区切りごとに数として比べ、足りない区切りは 0。"
+      },
+      "ClientVersion": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "minimum",
+          "latest",
+          "update"
+        ],
+        "properties": {
+          "minimum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^\\d{1,9}(\\.\\d{1,9}){0,2}$",
+            "description": "これより古いクライアントは update が required。決まりが無ければ null。"
+          },
+          "latest": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^\\d{1,9}(\\.\\d{1,9}){0,2}$",
+            "description": "これより古いクライアントは update が available。決まりが無ければ null。"
+          },
+          "update": {
+            "type": "string",
+            "enum": [
+              "none",
+              "available",
+              "required",
+              "unknown"
+            ]
+          }
+        }
+      },
+      "Config": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "clientVersion",
+          "flags"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "clientVersion": {
+            "$ref": "#/components/schemas/ClientVersion"
+          },
+          "flags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "description": "機能フラグ（名前 → 真偽値。名前の昇順）。名前も意味もゲームが決める。無ければ {}。"
           }
         }
       },
