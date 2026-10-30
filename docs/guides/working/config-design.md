@@ -179,7 +179,7 @@ C2 からは `masterData` を足す（`/v1/` の中では欄を足すだけ。`d
 | --- | --- | --- |
 | 1 | ルート（`^/v1/config$` と `GET`） | 404 `NOT_FOUND`（`Endpoint not found`。`POST` などほかのメソッドも） |
 | 2 | 問い合わせの `gameId` が `validId` | 400 `INVALID_ARGUMENT`（`Invalid gameId`） |
-| 3 | `clientVersion` があれば `parseVersion` が通る | 400 `INVALID_ARGUMENT`（`Invalid clientVersion`） |
+| 3 | 問い合わせに `clientVersion` があれば（空の `clientVersion=` も含む）`parseVersion` が通る | 400 `INVALID_ARGUMENT`（`Invalid clientVersion`） |
 | 4 | `requireGame(env, gameId, 'config', known)` | 404 `NOT_FOUND`（`Unknown game`・`Feature not enabled for this game`） |
 | 5 | `game_configs`・`config_flags`（C2 は `config_master_data` の `key` と `length(CAST(data AS BLOB))` も）を `prepare().bind()` で引く。表の版が `parseVersion` に通らなければ `throw` | 500 `INTERNAL_ERROR`（入口の `try/catch`。中身を返さない） |
 | 6 | 本文を作り、`etagOf(本文)` を計算する。`matchesIfNoneMatch(If-None-Match, etag)` なら 304 | — |
@@ -214,7 +214,7 @@ C1:
 
 - `docs/api-contract.md`: `## GET /v1/config?gameId=demo-rpg&clientVersion=…` の節を足す（上の応答・`update` の決まり・`ETag` と `If-None-Match` と 304・トークンが要らないこと・設定に秘密を入れないこと）。エラーコードの一覧は変えない。
 - `openapi/rpg-online.v1.json`: 操作 `getConfig`・`Config`・`ClientVersion` を足す。200 の `headers` に `ETag`、304（本文なし）、400・404・500 の `x-error-codes`。`security` は付けない（`listAnnouncements` と同じ）。
-- `docs/guides/working/api-schema-design.md` §4 の `スキーマのファイルはOpenAPI 3.1で9つの操作を持つ` を、§7 の C1 の名前に置き換える。`test/modules.test.ts`・`test/game-modules.test.ts`・`test/schema-conformance.test.ts` の頭書きの「名前の正」に、C1 で置き換えた試験はこの設計書 §7 が正だと書き足す（`save-design.md` §7・§11 の名前は V1・V2 の確認コマンドの記録なので変えない）。
+- `docs/guides/working/api-schema-design.md` §4 の `スキーマのファイルはOpenAPI 3.1で9つの操作を持つ` を、§7 の C1 の名前に置き換える。`test/modules.test.ts`・`test/game-modules.test.ts`・`test/schema-conformance.test.ts` の頭書きの「名前の正」の、置き換える旧い名前を挙げた文を、C1 で置き換えた試験はこの設計書 §7 が正だという文に**置き換える**（旧い名前を頭書きに残さない。§11 の確認コマンドは `it('…')` の名前だけを見るが、正の文書と試験を食い違わせないため。`save-design.md` §7・§11 の名前は V1・V2 の確認コマンドの記録なので変えない）。
 - `docs/guides/working/architecture.md` の「4. データ境界」に `game_configs`・`config_flags` を足す（作っている表の一覧を置き換える）。
 
 C2:
@@ -259,6 +259,9 @@ C2（マスターデータ）:
 
 置き場は C1 が `test/config.test.ts`、C2 が `test/config-master.test.ts`。ただし、§8 で置き換える試験の後を継ぐものは置き換える試験と同じファイルに置く（機能の一覧は `test/modules.test.ts`、機能の設定は `test/game-modules.test.ts`、操作の数は `test/schema-conformance.test.ts`）。スキーマに合うかを見る試験（`設定の応答はスキーマに合う`・`マスターデータの応答はスキーマに合う`）は `expectConforms` がある `test/schema-conformance.test.ts` に置く。CLI モックの流れの試験は、互換の試験と並べて `test/failure-server.test.ts` に置く。試験のゲームは `test/support/games.ts` の `registerGame(db, id, ['config'])` で登録する（`test/support/games.ts` は変えない。既定の機能は `announcements`・`rankings` のまま）。設定の行は試験の中で `prepare().bind()` で入れる。テストの名前は表の文そのまま `it('…')` に書く。名前を変えるときは、この表も同じコミットで直す（`docs/guides/procedures/node-test-procedure.md`）。
 
+- **設定を書き換える試験は専用のゲームで行う**（`registerGame(db, 'cfg-etag', ['config'])` などに行を入れる）。`demo-rpg` の手本（`demo-flag`・`items`）は書き換えない。同じファイルの中では D1 の中身が引き継がれるので、手本を書き換えると後に走る試験が順番しだいで落ちる。ファイルの `beforeEach` は試験のゲームの行（`games` の `demo-rpg` 以外）を消す。
+- **304 は `expectConforms` に通さない**（いまの手伝いは本文が JSON であることを必ず見るので、本文の無い 304 で落ちる）。スキーマに合うかの試験の中で、状態が 304・本文が空・スキーマに 304 の応答があり、その `headers` の `ETag` の形に合う、を直に見る。手伝い（`expectConforms`）は変えない。
+
 | 束 | テストの名前 | 入力 | 期待する結果 | 層 |
 | --- | --- | --- | --- | --- |
 | C1 | `版の文字列の検証関数は数字とドットの1から3つの組だけを通す` | `parseVersion` に `1`・`1.2`・`1.2.3`・`0.0.0`、外れとして `''`・`1.`・`.1`・`1.2.3.4`・`1.2.3-beta`・`v1`・`1.a`・10 桁の数・`null` | 正しいものだけ数の配列。外れは `null` | L1 |
@@ -269,7 +272,7 @@ C2（マスターデータ）:
 | C1 | `設定を読むとそのゲームの機能フラグとクライアントの版が返る` | `demo-rpg` の `GET /v1/config?gameId=demo-rpg&clientVersion=1.0.0`（`0006` の手本のまま） | 200・`clientVersion` が `{minimum:'1.0.0', latest:'1.0.0', update:'none'}`・`flags` が `{'demo-flag': true}`。手本の版が `parseVersion` に通る | L2 |
 | C1 | `設定の応答にはETagとno-cacheのcache-controlが付く` | 同じ要求 | `etag` が `^"[0-9a-f]{64}"$`・`cache-control` が `no-cache`・`content-type` が JSON | L2 |
 | C1 | `同じETagをIf-None-Matchで送ると本文の無い304を返す` | 1 回目の `etag` を `If-None-Match` に付けてもう一度 | 304・本文が空・同じ `etag` | L2 |
-| C1 | `設定が変わるとETagが変わり古いETagでは200と新しい本文を返す` | 1 回目の後に `config_flags` を `UPDATE` し、古い `etag` を付けて読む | 200・新しい `flags`・`etag` が 1 回目と違う | L2 |
+| C1 | `設定が変わるとETagが変わり古いETagでは200と新しい本文を返す` | 専用のゲームで 1 回目の後に `config_flags` を `UPDATE` し、古い `etag` を付けて読む | 200・新しい `flags`・`etag` が 1 回目と違う | L2 |
 | C1 | `最低の版より古いクライアントの版を送るとupdateがrequiredの200を返す` | 最低 `1.2.0`・最新 `1.3.0` のゲームに `clientVersion=1.1.9` | 200・`update: 'required'`・`flags` も返る | L2 |
 | C1 | `最新の版より古く最低の版以上のクライアントにはupdateがavailableを返す` | 同じゲームに `clientVersion=1.2.0`・`1.3.0`・`1.10.0` | `available`・`none`・`none` | L2 |
 | C1 | `クライアントの版を送らなければupdateがunknownを返す` | `clientVersion` 無し | 200・`update: 'unknown'`・`minimum`・`latest` は表の値 | L2 |
@@ -282,20 +285,20 @@ C2（マスターデータ）:
 | C1 | `設定のパスへのGETのほかのメソッドはNOT_FOUNDの404を返す` | `APP_ENV=local` で `/v1/config` に `POST`・`PUT`・`DELETE` | どれも 404 `Endpoint not found`・表が変わらない | L2 |
 | C1 | `ゲームの行を消すとそのゲームの設定も消える` | `other-rpg` を `config` つきで登録して版とフラグを入れ、`games` から消す | `game_configs`・`config_flags` に `other-rpg` の行が残らない。`demo-rpg` の行は残る | L2 |
 | C1 | `設定の読み取りでDBが失敗するとINTERNAL_ERRORの500を返し中身を漏らさない` | `prepare` が投げる偽の DB・表に形の外れた版（`1.x`）を入れたゲーム | どちらも 500・`INTERNAL_ERROR`・本文に SQL が入らない | L2 |
-| C1 | `設定の応答はスキーマに合う` | 200・304・400・404 を起こす | 本文が `getConfig` の応答のスキーマに合い、`x-error-codes` にコードがある。200 のスキーマに `ETag` の見出しがある | L2 |
+| C1 | `設定の応答はスキーマに合う` | 200・400・404 と 304 を起こす | 200・400・404 の本文が `getConfig` の応答のスキーマに合い（`expectConforms`）、`x-error-codes` にコードがある。200 のスキーマに `ETag` の見出しがある。304 は本文が空で、`etag` がスキーマの 304 の見出しの形に合う（`expectConforms` に通さない） | L2 |
 | C1 | `スキーマのファイルはOpenAPI 3.1で10個の操作を持つ` | `openapi/rpg-online.v1.json` | いまの 9 つと `getConfig`・`$ref` が全部解ける（§8 で置き換える試験の後を継ぐ） | L1 |
 | C1 | `demo-rpgはannouncementsとrankingsとsavesとconfigを使う設定で登録される` | `game_modules` の `demo-rpg` の行 | `['announcements', 'config', 'rankings', 'saves']`（§8 で置き換える試験の後を継ぐ） | L2 |
 | C1 | `モジュールの一覧はannouncementsとrankingsとsavesとconfigでルートが重ならない` | `modules` | 名前が 4 つ・`メソッド パターン` が重ならない・どれも `/health` に当たらない（§8 で置き換える試験の後を継ぐ） | L1 |
 | C1 | `CLIモックと同じ流れで設定を読み変わっていなければ304を受け取る` | `scripts/cli-requests.mjs` の `configPath`・`CLI_CLIENT_VERSION` で読み、`etag` を付けてもう一度（`scripts/cli-mock.mjs` の C1 の流れ。§6） | 200・`update` が `required` でない・2 回目が 304 | L2 |
 | C2 | `マスターデータを読むと入れた文字列がそのまま返る` | `demo-rpg` の `items`（`0007` の手本）と、改行・`'`・絵文字を含む文字列を入れたキー | 200・`data` が入れた文字列とバイト列まで同じ | L2 |
-| C2 | `マスターデータの応答にはETagが付き同じETagなら304を返す` | 1 回目の `etag` を `If-None-Match` に付けてもう一度・`data` を変えて古い `etag` で | 304 で本文なし・200 で新しい `data` と違う `etag`。`cache-control` は `no-cache` | L2 |
+| C2 | `マスターデータの応答にはETagが付き同じETagなら304を返す` | 専用のゲームのキーで、1 回目の `etag` を `If-None-Match` に付けてもう一度・`data` を変えて古い `etag` で | 304 で本文なし・200 で新しい `data` と違う `etag`。`cache-control` は `no-cache` | L2 |
 | C2 | `設定の応答にマスターデータのキーと大きさの一覧が載る` | キーを 2 つ入れたゲームの `GET /v1/config` | `masterData` がキーの昇順で `size` が UTF-8 のバイト数。`data` は入らない | L2 |
-| C2 | `マスターデータが変わると設定のETagも変わる` | 大きさの違う `data` に書き換えて `GET /v1/config` | `etag` が変わる（`size` が本文に入るため） | L2 |
+| C2 | `マスターデータが変わると設定のETagも変わる` | 専用のゲームで、大きさの違う `data` に書き換えて `GET /v1/config` | `etag` が変わる（`size` が本文に入るため） | L2 |
 | C2 | `無いキーのマスターデータはNOT_FOUNDの404を返す` | `GET /v1/config/master/no-such-key?gameId=demo-rpg`・形の外れたキー `bad.key` | 404 `NOT_FOUND`（`Master data not found`）・404 `NOT_FOUND`（`Endpoint not found`） | L2 |
 | C2 | `他のゲームのマスターデータは読めない` | `other-rpg` だけにある `secret-table` を `gameId=demo-rpg` で読む | 404・`NOT_FOUND` | L2 |
 | C2 | `configを使わない設定のゲームのマスターデータはNOT_FOUNDの404を返す` | `registerGame(db, 'no-config', ['rankings'])` に行を入れて読む | 404・`NOT_FOUND`（`Feature not enabled for this game`） | L2 |
 | C2 | `上限を超えるマスターデータは表に入らず上限ちょうどは入る` | `MAX_MASTER_DATA_BYTES` バイトと 1 バイト多い文字列（`あ` で 3 バイトずつ数えるものも）を `INSERT` | ちょうどは入り、超えると `CHECK` で断られる（行が増えない） | L2 |
-| C2 | `マスターデータの応答はスキーマに合う` | 200・304・404 と、`masterData` のある `getConfig` の 200 | `getMasterData`・`getConfig` の応答のスキーマに合う | L2 |
+| C2 | `マスターデータの応答はスキーマに合う` | 200・304・404 と、`masterData` のある `getConfig` の 200 | 200・404 が `getMasterData`・`getConfig` の応答のスキーマに合う。304 は本文が空で `etag` がスキーマの 304 の見出しの形に合う（`expectConforms` に通さない） | L2 |
 | C2 | `スキーマのファイルはOpenAPI 3.1で11個の操作を持つ` | `openapi/rpg-online.v1.json` | C1 の 10 個と `getMasterData`（C1 の 10 個の操作の試験の後を継ぐ） | L1 |
 | C2 | `CLIモックと同じ流れで設定に載ったマスターデータを読める` | 同じ関数で設定を読み、`masterData` の最初のキーを読む（`scripts/cli-mock.mjs` の C2 の流れ。§6） | 200・`data` のバイト数が一覧の `size` と同じ | L2 |
 
@@ -312,6 +315,7 @@ C2（マスターデータ）:
 | `今のCLIモックと同じ形の要求を受け付ける`（`test/failure-server.test.ts`） | C1・C2 | **変わらない**。スコアの流れ（ゲストの発行 → トークン付きの投稿 → `GET`）は変えない。`scripts/cli-requests.mjs` の `guestRequest`・`authHeaders`・`scoreSubmission` も変えない | 名前も中身も変えない。CLI モックに足す設定の流れは、§7 の新しい試験 `CLIモックと同じ流れで設定を読み変わっていなければ304を受け取る`（C1）・`CLIモックと同じ流れで設定に載ったマスターデータを読める`（C2）で見る（互換の試験を広げて中身を変えるより、黙って弱める道を作らない） |
 | `CLIモックと同じ流れでゲストのセーブを書いて読み直せる`・`CLIモックと同じ流れでセーブの一覧に出たスロットを消せる`（同上） | C1・C2 | 変わらない（セーブの関数を変えない） | 変えない |
 | `登録の無いゲームのNOT_FOUNDの応答はスキーマに合う`（`test/games.test.ts`） | C1 | 変わらない（試すパスを手で並べた表で、設定のパスは入らない。エラーの応答は `no-store` のまま） | 変えない。設定の 404 は §7 の `configを使わない設定のゲームの設定はNOT_FOUNDの404を返す` で見る |
+| `test/schema-conformance.test.ts` の手伝い `expectConforms` を使う試験 | C1・C2 | 変わらない（304 は手伝いに通さず試験の中で見る。§7） | 手伝いも試験も変えない |
 | `マイグレーションを2回当ててもデータは壊れない` | C1・C2 | 変わらない（`0006`・`0007` は `IF NOT EXISTS` と `INSERT OR IGNORE` だけ） | 変えない |
 | `機能の設定はゲームごとで他のゲームの設定に引きずられない` ほか、`registerGame` で登録するゲームの試験 | C1・C2 | 変わらない（`test/support/games.ts` の既定の機能は `announcements`・`rankings` のままで、試験のゲームは `config` を使わない） | 変えない（`test/support/games.ts` も変えない） |
 
@@ -400,7 +404,7 @@ check(mock.includes('/v1/config') && /If-None-Match/i.test(read('scripts/cli-moc
 const replaced = ['demo-rpgはannouncementsとrankingsとsavesを使う設定で登録される', 'モジュールの一覧はannouncementsとrankingsとsavesでルートが重ならない',
   'スキーマのファイルはOpenAPI 3.1で9つの操作を持つ'];
 const all = readdirSync('test').filter((f) => f.endsWith('.ts')).map((f) => readFileSync('test/' + f, 'utf8')).join('\n');
-for (const n of replaced) check(!all.includes(n), '置き換えた試験が残っていない: ' + n);
+for (const n of replaced) check(!namesIn(all).includes(n), '置き換えた試験が残っていない: ' + n);
 const baseTests = execSync(`git ls-tree --name-only ${base} test/`, { encoding: 'utf8' }).split('\n').filter((f) => f.endsWith('.ts'))
   .flatMap((f) => namesIn(execSync(`git show ${base}:${f}`, { encoding: 'utf8' })));
 check(baseTests.length > 0, 'base の試験の名前を読めた');
@@ -472,7 +476,7 @@ check(/config\/master/.test(read('scripts/cli-mock.mjs') + read('scripts/cli-req
 // 置き換えた 1 本が残っていない（§8）・残りの既存の試験は全部ある（下の requireTests）
 const replaced = ['スキーマのファイルはOpenAPI 3.1で10個の操作を持つ'];
 const all = readdirSync('test').filter((f) => f.endsWith('.ts')).map((f) => readFileSync('test/' + f, 'utf8')).join('\n');
-for (const n of replaced) check(!all.includes(n), '置き換えた試験が残っていない: ' + n);
+for (const n of replaced) check(!namesIn(all).includes(n), '置き換えた試験が残っていない: ' + n);
 const baseTests = execSync(`git ls-tree --name-only ${base} test/`, { encoding: 'utf8' }).split('\n').filter((f) => f.endsWith('.ts'))
   .flatMap((f) => namesIn(execSync(`git show ${base}:${f}`, { encoding: 'utf8' })));
 check(baseTests.length > 0, 'base の試験の名前を読めた');
