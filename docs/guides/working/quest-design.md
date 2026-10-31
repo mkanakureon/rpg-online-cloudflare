@@ -32,7 +32,7 @@
 - 束ごとに、§14 の確認コマンドの案が exit 0 になる（`runTests()` が `Result: PASS`・`requireTests` の名前が全部ある・通る）。
 - 挙動の変わる既存の試験は §11 の手続きだけで直す。テストを挙動に合わせて弱めない（`docs/guides/decisions/test-plan.md` §11）。
 - `package.json`・`wrangler.jsonc` を変えない（全部の束）。`migrations/` の既存のファイルを書き換えない。`APP_ENV === 'local'` の守り（`src/core/guards.ts` の `requireLocalWrite`）と `wrangler.jsonc` の既定 `APP_ENV=disabled` を外さない（§9）。
-- Q1 の後、会話の側で `npm run db:migrate:local && npm run dev` と `npm run cli:smoke` を回し、§12 のシナリオが `PASS` で通るのを見る。Q3 の後、会話の側で人が管理の鍵をファイルに書かずに `npm run dev -- --var ADMIN_API_KEY:<鍵>` で起動し（`--var` を足して渡せることは `package.json` の `dev` が既に `--var APP_ENV:local` を渡している形からの見込みで、**要確認**）、同じ鍵を環境変数で渡して `node scripts/admin-cli.mjs smoke` と §8 の `put-quest` を回す（無人の回では開発サーバーを起動しない。`.dev.vars` に書く手順にしない）。
+- Q1 の後、会話の側で `npm run db:migrate:local && npm run dev` と `npm run cli:smoke` を回し、§12 のシナリオが `PASS` で通るのを見る。Q3 の後、会話の側で人が管理の鍵をファイルに書かずに `wrangler dev --local --var APP_ENV:local --var ADMIN_API_KEY:<鍵>` で起動し（`--var` を 2 つ並べて渡せることは、2026-10-31 の Issue #34〜#41 の会話の側の通しで確かめた）、同じ鍵を環境変数で渡して `node scripts/admin-cli.mjs smoke` と §8 の `put-quest` を回す（無人の回では開発サーバーを起動しない。`.dev.vars` に書く手順にしない）。
 
 ## 1. 元の文書と、いまの挙動（ソースで確かめた事実）
 
