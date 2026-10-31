@@ -1,0 +1,722 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "RPG Online Backend 管理の API（local PoC）",
+    "version": "1.0.0",
+    "description": "運営する人のための管理の口（/v1/admin/...）。ゲームのクライアント（CLI モック・UE・Unity・ブラウザ）は使わず、管理の鍵を持たせない。ゲームのクライアントのスキーマは openapi/rpg-online.v1.json。管理の鍵は ADMIN_API_KEY（32 文字以上。local でも既定の鍵を持たない）で、Authorization: Bearer <管理の鍵> で渡す。どの口も APP_ENV=local のときだけ受け付ける。確かめの順: APP_ENV の守り（403）→ 管理の鍵の有無（無ければ 500）→ 管理の利用制限（IP ごと 429）→ 管理の鍵（401）→ gameId の形（400）→ ゲームの登録（404）→ 口ごとの確かめ。形の正はこのファイル、挙動の説明の正は docs/api-contract.md の「管理の API」、設計の正は docs/guides/working/admin-design.md。本文のある応答はどれも content-type: application/json; charset=utf-8。状態ごとに返りうるエラーコードは各応答の x-error-codes に書く。"
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8787",
+      "description": "npm run dev（APP_ENV=local・.dev.vars に ADMIN_API_KEY を人が書く）"
+    }
+  ],
+  "paths": {
+    "/v1/admin/players/{playerId}": {
+      "get": {
+        "operationId": "adminGetPlayer",
+        "summary": "1 人のプレイヤーの所持品・受領の履歴（新しい順に 20 行）・セーブの一覧・スコアを読む。セーブの本文とチェックサムは返さない。監査に残さない",
+        "security": [
+          {
+            "adminKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "playerId",
+            "in": "path",
+            "required": true,
+            "description": "ゲームのプレイヤー（game_players の playerId）。形が外れればどのルートにも当たらず 404 NOT_FOUND（Endpoint not found）。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": true,
+            "description": "登録のあるゲーム。形が外れれば 400 INVALID_ARGUMENT、登録が無ければ 404 NOT_FOUND（Unknown game）。機能の設定は見ない。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "プレイヤーの状態。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminPlayer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "gameId の形が外れている。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization が無い・Bearer でない・管理の鍵と違う（プレイヤーのトークンも含む）。外れた理由は返さない（message は Invalid admin credentials）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（正しい管理の鍵があっても断る。鍵を見る前・数える前）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "登録の無いゲーム（Unknown game）か、そのゲームに無いプレイヤー（Unknown player）か、形の外れたパス（Endpoint not found）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "管理の口の利用制限を超えた（IP ごと。正しい鍵でも数え、鍵を確かめる前に断る）。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・管理の鍵 ADMIN_API_KEY が無いか 32 文字未満）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/audit": {
+      "get": {
+        "operationId": "adminListAudit",
+        "summary": "ゲームの監査のログ（管理の書き込みの操作 1 回で 1 行）を新しい順に読む（limit と before で区切る）",
+        "security": [
+          {
+            "adminKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": true,
+            "description": "登録のあるゲーム。形が外れれば 400 INVALID_ARGUMENT、登録が無ければ 404 NOT_FOUND（Unknown game）。機能の設定は見ない。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "1 回に返す行の数（1〜100。既定 20）。外れは 400 INVALID_ARGUMENT。",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "description": "この auditId より古い行だけを返す（1 以上の整数。前の応答の nextBefore）。外れは 400 INVALID_ARGUMENT。",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "監査のログ（auditId の降順）。続きがあれば nextBefore、無ければ欄ごと載せない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAuditList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "gameId・limit・before の形が外れている。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization が無い・Bearer でない・管理の鍵と違う（プレイヤーのトークンも含む）。外れた理由は返さない（message は Invalid admin credentials）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（正しい管理の鍵があっても断る。鍵を見る前・数える前）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "登録の無いゲーム（Unknown game）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "管理の口の利用制限を超えた（IP ごと。正しい鍵でも数え、鍵を確かめる前に断る）。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・管理の鍵 ADMIN_API_KEY が無いか 32 文字未満）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "adminKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "管理の鍵 ADMIN_API_KEY（Worker ごとに 1 つ・32 文字以上）。ローカルは人が .dev.vars に書き、staging・production は wrangler secret put で渡す。プレイヤーのトークンでは通らない。"
+      }
+    },
+    "schemas": {
+      "Id": {
+        "type": "string",
+        "pattern": "^[a-zA-Z0-9_-]{1,64}$",
+        "description": "gameId・playerId・itemId・boardId・slotId で共通の ID の形。"
+      },
+      "AdminBalance": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "itemId",
+          "kind",
+          "amount"
+        ],
+        "properties": {
+          "itemId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "currency",
+              "item"
+            ]
+          },
+          "amount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000
+          }
+        }
+      },
+      "AdminHistoryEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entryId",
+          "itemId",
+          "delta",
+          "sourceType",
+          "sourceId",
+          "createdAt"
+        ],
+        "properties": {
+          "entryId": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "itemId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "delta": {
+            "type": "integer"
+          },
+          "sourceType": {
+            "type": "string",
+            "description": "増減の元の種類（event-claim など）。"
+          },
+          "sourceId": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$"
+          }
+        }
+      },
+      "AdminSave": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "slotId",
+          "revision",
+          "size",
+          "deleted",
+          "updatedAt"
+        ],
+        "properties": {
+          "slotId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deleted": {
+            "type": "boolean",
+            "description": "消した印（墓石）があれば true。"
+          },
+          "updatedAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$"
+          }
+        }
+      },
+      "AdminRanking": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "boardId",
+          "score",
+          "displayName"
+        ],
+        "properties": {
+          "boardId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000000
+          },
+          "displayName": {
+            "type": "string"
+          }
+        }
+      },
+      "AdminPlayer": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "playerId",
+          "createdAt",
+          "balances",
+          "history",
+          "saves",
+          "rankings"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "playerId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "createdAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$"
+          },
+          "balances": {
+            "type": "array",
+            "description": "残高のある品目（品目の ID の昇順）。",
+            "items": {
+              "$ref": "#/components/schemas/AdminBalance"
+            }
+          },
+          "history": {
+            "type": "array",
+            "maxItems": 20,
+            "description": "受領の履歴（新しい順に 20 行まで）。",
+            "items": {
+              "$ref": "#/components/schemas/AdminHistoryEntry"
+            }
+          },
+          "saves": {
+            "type": "array",
+            "description": "セーブの一覧（スロットの ID の昇順。消した印のある行も含む）。本文とチェックサムは返さない。",
+            "items": {
+              "$ref": "#/components/schemas/AdminSave"
+            }
+          },
+          "rankings": {
+            "type": "array",
+            "description": "ボードごとのスコア（ボードの ID の昇順）。",
+            "items": {
+              "$ref": "#/components/schemas/AdminRanking"
+            }
+          }
+        }
+      },
+      "AdminAuditEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "auditId",
+          "actor",
+          "action",
+          "target",
+          "before",
+          "after",
+          "reason",
+          "createdAt"
+        ],
+        "properties": {
+          "auditId": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "actor": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_.@-]{1,64}$",
+            "description": "X-Admin-Actor（自己申告のラベル）。"
+          },
+          "action": {
+            "type": "string",
+            "description": "player.ban・inventory.adjust など。"
+          },
+          "target": {
+            "type": "string",
+            "description": "player:<id> など。"
+          },
+          "before": {
+            "description": "前の状態（保存した JSON を読み直した値。無ければ null）。"
+          },
+          "after": {
+            "description": "後の状態（同じ）。"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "createdAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$"
+          }
+        }
+      },
+      "AdminAuditList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "items"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/AdminAuditEntry"
+            }
+          },
+          "nextBefore": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "続きを読むときの before（最後の行の auditId）。続きが無ければ載せない。"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              "message": {
+                "type": "string",
+                "description": "人が読むための文。文は決めない（code で分ける）。"
+              }
+            }
+          }
+        }
+      },
+      "ErrorCode": {
+        "type": "string",
+        "enum": [
+          "INVALID_ARGUMENT",
+          "UNAUTHENTICATED",
+          "NOT_READY_FOR_PRODUCTION",
+          "NOT_FOUND",
+          "RATE_LIMITED",
+          "INTERNAL_ERROR"
+        ]
+      }
+    }
+  }
+}

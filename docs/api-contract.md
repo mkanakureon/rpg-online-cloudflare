@@ -1,8 +1,8 @@
 # 初期API仕様（検討版）
 
-この仕様はMacでの**ローカルPoC**向け。ログインは未実装（認証はゲストのトークンだけ）。書き込みの口（ゲストの発行・スコアの投稿）とセーブの操作と所持品の読み取りとイベントの一覧・報酬の受け取りに回数の制限（**429 `RATE_LIMITED`**と`Retry-After`。下の「利用制限」）がある。スコアは値の範囲と回数までしか確かめない（ゲームの中で取れるスコアかは見ない）。書込み系APIは公開用に使用しない。
+この仕様はMacでの**ローカルPoC**向け。ログインは未実装（認証はゲストのトークンだけ）。書き込みの口（ゲストの発行・スコアの投稿）とセーブの操作と所持品の読み取りとイベントの一覧・報酬の受け取りと管理の API に回数の制限（**429 `RATE_LIMITED`**と`Retry-After`。下の「利用制限」）がある。スコアは値の範囲と回数までしか確かめない（ゲームの中で取れるスコアかは見ない）。書込み系APIは公開用に使用しない。
 
-形（欄・型・範囲・状態コードとエラーコードの組）の正はスキーマ（`openapi/rpg-online.v1.json`）、挙動の説明の正はこの文書。
+形（欄・型・範囲・状態コードとエラーコードの組）の正はスキーマ（ゲームのクライアントの口は`openapi/rpg-online.v1.json`、管理の口は`openapi/rpg-online-admin.v1.json`）、挙動の説明の正はこの文書。
 
 ## GET /health
 
@@ -260,6 +260,46 @@
 - **トークンは要らず、`APP_ENV`が`local`でなくても読める**（設定と同じ）。秘密を入れない。
 - 確かめの順: キーの形（`^[a-zA-Z0-9_-]{1,64}$`。外れは**404 `NOT_FOUND`**・`Endpoint not found`）→ `gameId`の形（**400 `INVALID_ARGUMENT`**）→ ゲームの登録と機能の設定（**404 `NOT_FOUND`**・`Unknown game`・`Feature not enabled for this game`）→ そのゲームにキーが無ければ**404 `NOT_FOUND`**（`message`は`Master data not found`。他のゲームのキーも読めない）→ `If-None-Match`（304）。`GET`のほかのメソッドは**404 `NOT_FOUND`**（`Endpoint not found`）。
 
+## 管理の API（ゲームのクライアントは使わない）
+
+運営する人が 1 人のプレイヤーの状態と監査のログを読む口。**ゲームのクライアント（CLI モック・UE・Unity・ブラウザ）は使わず、管理の鍵を持たせない**。形の正は`openapi/rpg-online-admin.v1.json`（ゲームのクライアントのスキーマ`openapi/rpg-online.v1.json`には入れない）、設計の正は`docs/guides/working/admin-design.md`。
+
+- 見出しは`Authorization: Bearer <管理の鍵>`。管理の鍵は Worker ごとに 1 つの`ADMIN_API_KEY`（32 文字以上）。ローカルは人が`.dev.vars`（git に入らない）に`ADMIN_API_KEY=<32 文字以上>`を書き、staging・production は`wrangler secret put ADMIN_API_KEY`で渡す。鍵の値をファイル（`wrangler.jsonc`・ソース・試験・文書）に書かない。
+- **`local`でも既定の鍵を持たない**。`ADMIN_API_KEY`が無いか 32 文字未満の環境では、管理の口はどれも**500 `INTERNAL_ERROR`**（鍵の名前・値は返さない）。
+- 鍵が無い・`Bearer`でない・違う（プレイヤーのトークンも含む）は、どれも**401 `UNAUTHENTICATED`**（`message`は`Invalid admin credentials`。外れた理由は返さない）。鍵は SHA-256 にしてから時間の一定な比べで確かめる。鍵を取り替えると、前の鍵はその時から 401（前の鍵を並べて受ける期間は無い）。
+- 読むのも`APP_ENV=local`の時だけ（ほかは正しい鍵があっても**403 `NOT_READY_FOR_PRODUCTION`**）。
+- 確かめの順（どの口も同じ）: `APP_ENV`の守り（403）→ 管理の鍵の有無（500）→ 管理の利用制限（IP ごと。**429 `RATE_LIMITED`**と`Retry-After`。正しい鍵でも数え、鍵を確かめる前に断る）→ 管理の鍵（401）→ `gameId`の形（**400 `INVALID_ARGUMENT`**）→ ゲームの登録（**404 `NOT_FOUND`**・`Unknown game`。機能の設定は見ない）→ 口ごとの確かめ。
+- 読み取りの口は監査のログに残さない。
+
+### GET /v1/admin/players/{playerId}?gameId=demo-rpg
+
+1 人のプレイヤーの所持品・受領の履歴・セーブの一覧・スコアを読む。
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","playerId":"<playerId>","createdAt":"2026-10-31T01:02:03Z","balances":[{"itemId":"gold","kind":"currency","amount":100}],"history":[{"entryId":7,"itemId":"gold","delta":100,"sourceType":"event-claim","sourceId":"<claimId>","createdAt":"2026-10-31T01:05:00Z"}],"saves":[{"slotId":"auto","revision":3,"size":120,"deleted":false,"updatedAt":"2026-10-31T01:06:00.123Z"}],"rankings":[{"boardId":"boss-score","score":1200,"displayName":"Hero"}]}
+```
+
+- `createdAt`はプレイヤーを作った時刻（ISO 8601・UTC・秒まで）。
+- `balances`は残高のある品目（品目の ID の昇順。`kind`は`currency`か`item`）。`history`は受領の履歴の新しい順に 20 行まで（`GET /v1/inventory/history`の行と同じ欄）。`saves`はスロットの ID の昇順で、消した印のある行も`deleted: true`で載る（`updatedAt`はセーブの API と同じ値）。`rankings`はボードの ID の昇順。
+- **セーブの本文（`data`）とチェックサムは返さない**。
+- そのゲームに無いプレイヤー（`game_players`に行が無い）は**404 `NOT_FOUND`**（`message`は`Unknown player`）。`playerId`の形（`^[a-zA-Z0-9_-]{1,64}$`）が外れていればどのルートにも当たらず**404 `NOT_FOUND`**（`Endpoint not found`）。
+
+### GET /v1/admin/audit?gameId=demo-rpg&limit=20&before=42
+
+ゲームの監査のログ（管理の書き込みの操作 1 回で 1 行）を新しい順に読む。
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","items":[{"auditId":42,"actor":"local-admin","action":"inventory.adjust","target":"player:<playerId>","before":{"itemId":"gold","amount":120},"after":{"itemId":"gold","amount":100},"reason":"二重に配った分を戻す","createdAt":"2026-10-31T01:10:00Z"}],"nextBefore":42}
+```
+
+- 並びは`auditId`の降順（新しい順）。`limit`は 1〜100 の整数（無ければ 20）。`before`は 1 以上の整数で、付けるとその`auditId`より古い行だけを返す。外れは**400 `INVALID_ARGUMENT`**。続きがあれば`nextBefore`（最後の行の`auditId`）が載り、無ければ欄ごと載らない（受領の履歴と同じ）。
+- `actor`は書き込みの口の`X-Admin-Actor`（自己申告のラベル）。`before`・`after`は操作の前と後の状態（保存した JSON を読み直した値。無ければ`null`）。`createdAt`はサーバーの時刻（ISO 8601・UTC・秒まで）。トークン・管理の鍵・セーブの本文・IP は記録しない。
+- 監査のログは API から書き換えも消しもしない。保持の期間は 365 日（消す仕組みは後で足す。それまでは残る）。いまは監査に行を書く口が無い（BAN・データ修正・イベントの定義の口と一緒に足す）。
+
 ## エラーレスポンス
 
 ```json
@@ -270,7 +310,7 @@
 
 ## 利用制限
 
-ゲストの発行・スコアの投稿・セーブの操作・所持品の読み取り・イベントの一覧と報酬の受け取りは、決めた秒の窓（固定。窓の始まりは UNIX 秒を窓の長さで割り切った時刻）の中の回数を数え、上限を超えると断る。設計の正は`docs/guides/working/abuse-protection-design.md`。
+ゲストの発行・スコアの投稿・セーブの操作・所持品の読み取り・イベントの一覧と報酬の受け取り・管理の API は、決めた秒の窓（固定。窓の始まりは UNIX 秒を窓の長さで割り切った時刻）の中の回数を数え、上限を超えると断る。設計の正は`docs/guides/working/abuse-protection-design.md`。
 
 | 口 | 数える単位 | 上限 |
 | --- | --- | --- |
@@ -279,6 +319,7 @@
 | `POST /v1/rankings/{boardId}` | プレイヤー（トークンのゲームとプレイヤー） | 60 秒に 30 回 |
 | `PUT`・`GET`・`DELETE /v1/saves/{slotId}`と`GET /v1/saves` | プレイヤー（トークンのゲームとプレイヤー。4 つの操作を合わせて数え、スコアの投稿とは別に数える） | 60 秒に 60 回 |
 | `GET /v1/inventory`・`GET /v1/inventory/history`・`GET /v1/events`・`POST /v1/events/{eventId}/claim` | プレイヤー（トークンのゲームとプレイヤー。報酬の操作として 4 つを合わせて数え、セーブの操作とは別に数える） | 60 秒に 60 回 |
+| 管理の API（`/v1/admin/...`。単位の名前`admin`） | IP（`CF-Connecting-IP`。見出しが無ければ全員で 1 つ。管理の口を全部合わせて数え、正しい鍵でも数える） | 60 秒に 60 回 |
 
 レスポンス例（429。見出し`Retry-After: 37`）:
 

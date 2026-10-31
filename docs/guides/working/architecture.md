@@ -62,12 +62,13 @@ CLIモック（Node.js）                Unreal（C++）・Unity（C#）・ブ�
 - `announcements`: お知らせの内容、有効期間
 - `inventory_items`・`inventory_balances`・`inventory_ledger`: ゲームごとの品目（ID と種類〔通貨か所持品か〕だけ。名前・効果・値段はマスターデータ）・プレイヤーと品目ごとの残高・受領の履歴（増減 1 回で 1 行。`migrations/0009_inventory.sql`。置き場は`src/core/inventory.ts`〔残高の上限〕と`src/modules/inventory/`〔所持品と受領の履歴の 2 つの`GET`〕。設計の正は`docs/guides/working/event-reward-design.md`）
 - `rate_limit_counters`: 利用制限の数（単位の名前・鍵・窓の始まりごとに 1 行。IP はハッシュにして持つ。`docs/guides/working/abuse-protection-design.md` §3）
+- `admin_audit_log`: 管理の操作の記録（監査のログ。管理の書き込みの操作 1 回で 1 行。誰が〔`X-Admin-Actor`〕・何を・前と後・理由・時刻と、二重の止めの`Idempotency-Key`。API からは書き換えない・消さない。保持は 365 日。`migrations/0011_admin.sql`。置き場は`src/core/admin/`〔管理の鍵・監査・管理の口。ゲームごとの機能にしない〕。トークン・管理の鍵・セーブの本文・IP は入れない。設計の正は`docs/guides/working/admin-design.md`）
 - `messages`: 酒場投稿、削除・通報状態
 - `events`・`event_rewards`・`event_claims`: ゲームごとのイベント（区切り〔一度きり・デイリー・週間〕・期間・区切りの時差）・イベントごとの報酬（品目と数）・プレイヤー・イベント・区切りごとの受け取り（二重を止める一意の鍵。`migrations/0010_events.sql`。置き場は`src/modules/events/`〔一覧の`GET`と受け取りの`POST`。期間と区切りの関数は`period.ts`〕。期間はサーバーの時刻だけで決め、Cron Triggers は使わない。設計の正は`docs/guides/working/event-reward-design.md`）
 - `event_progress`: プレイヤーごとの達成度（クエスト。Phase 2 の残り）
 - `adventurer_profiles`: 公開可能なゴースト用プロフィール
 
-PoCで実際に作るのは`games`（登録だけ。公開状態の欄はまだ無い）と`game_modules`と`accounts`と`game_players`と`ranking_entries`と`saves`と`announcements`と`rate_limit_counters`と`inventory_items`・`inventory_balances`・`inventory_ledger`と`events`・`event_rewards`・`event_claims`のみ。`accounts`と`game_players`の境目は`docs/guides/working/account-design.md` §2。
+PoCで実際に作るのは`games`（登録だけ。公開状態の欄はまだ無い）と`game_modules`と`accounts`と`game_players`と`ranking_entries`と`saves`と`announcements`と`rate_limit_counters`と`inventory_items`・`inventory_balances`・`inventory_ledger`と`events`・`event_rewards`・`event_claims`と`admin_audit_log`のみ。`accounts`と`game_players`の境目は`docs/guides/working/account-design.md` §2。
 
 ## 5. クライアントとの将来の境界
 

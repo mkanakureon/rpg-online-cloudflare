@@ -74,6 +74,7 @@ Cloudflare の機能（**公式の文書と、リポジトリに入っている 
 | `POST /v1/rankings/{boardId}` | プレイヤー（トークンの `g`・`p`） | 60 秒に 30 回 | D1 | R1 |
 | `/v1/saves` の 4 つの操作（`PUT`・`GET`・一覧・`DELETE`） | プレイヤー（トークンの `g`・`p`） | 60 秒に 60 回（4 つで合わせて） | D1 | R2 |
 | `GET /v1/inventory`・`GET /v1/inventory/history`（E2 でイベントの一覧・受け取りも合わせる） | プレイヤー（トークンの `g`・`p`） | 60 秒に 60 回（報酬の操作で合わせて。`RATE_LIMITS.rewards`） | D1 | E1（`event-reward-design.md`） |
+| 管理の API（`/v1/admin/...` の全部の口） | IP（`CF-Connecting-IP` のハッシュ。正しい管理の鍵でも数え、鍵を確かめる前に数える） | 60 秒に 60 回（管理の口で合わせて。`RATE_LIMITS.admin`・単位の名前 `admin-ip`） | D1 | O1（`admin-design.md`） |
 | 公開の読み取り（`/health`・お知らせ・ランキングの `GET`・設定・マスターデータ） | — | 掛けない（Worker の中では） | 公開するときに WAF の規則で（§10 の決めること 1 の D） | — |
 
 - 数・窓・単位の名前は**定数のモジュール 1 か所**（`src/core/rate-limit-policy.ts`）に置く（design-cycle §2）。上の表の数はそこの初期値で、変えるときは定数とこの表を同じコミットで直す。
