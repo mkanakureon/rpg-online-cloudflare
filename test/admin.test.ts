@@ -1,10 +1,12 @@
 /**
  * 管理 O1: 管理の鍵（adminSecret・requireAdmin）と、プレイヤーを読む口（GET /v1/admin/players/{playerId}）・監査を読む口
  * （GET /v1/admin/audit）と、管理のスキーマ（openapi/rpg-online-admin.v1.json）の試験。
- * 名前と期待する結果の正は docs/guides/working/admin-design.md §8 の O1 の行。L1 は関数を直に呼ぶ。L2 は src/worker.ts の
+ * 管理 O3: データ修正（所持品と通貨の増減 POST /v1/admin/players/{playerId}/inventory・Idempotency-Key・スコアを消す
+ * DELETE /v1/admin/rankings/{boardId}/entries/{playerId}・src/core/ledger.ts の LEDGER_SOURCES）の試験。
+ * 名前と期待する結果の正は docs/guides/working/admin-design.md §8 の O1・O3 の行。L1 は関数を直に呼ぶ。L2 は src/worker.ts の
  * default.fetch を直に呼ぶ。管理の鍵は試験の中で作る秘密でない値（'a'.repeat(32)）で、鍵の無い場合は ADMIN_API_KEY: undefined を
  * env に明示する（試験のランタイムが .dev.vars を読み込んでも、人の鍵に頼らない）。試験のゲームは専用の adm-game。
- * 監査の行を書く口は O1 に無いので、監査を読む試験の行は表に直に入れる。
+ * O1 の監査を読む試験の行は表に直に入れる（O1 の時点で監査の行を書く口が無かったため）。
  *
  * 概要記述: Claude Opus 5.5 — 2026-10-31
  */
@@ -12,7 +14,10 @@ import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
 import { adminSecret, requireAdmin } from '../src/core/admin/key';
+import { parseAdjustment } from '../src/core/admin/parse';
 import { adminRoutes } from '../src/core/admin/routes';
+import { MAX_ITEM_AMOUNT } from '../src/core/inventory';
+import { LEDGER_SOURCES } from '../src/core/ledger';
 import { NO_IP_SUBJECT } from '../src/core/rate-limit';
 import { RATE_LIMITS } from '../src/core/rate-limit-policy';
 import adminSpecJson from '../openapi/rpg-online-admin.v1.json';
@@ -376,5 +381,294 @@ describe('O1 管理のスキーマ', () => {
     }
     expect([...declared].sort()).toEqual([...used].sort());
     expect(new Set(declared).size).toBe(declared.length);
+  });
+});
+
+// ---- O3 データ修正 ----
+
+type AdjustBody = { gameId: string; playerId: string; itemId: string; delta: number; amount: number; auditId: number };
+type WriteOptions = { key?: string | null; actor?: string | null; gameId?: string; e?: TestEnv };
+
+/** 管理の増減の口に送る（既定の鍵は試験ごとに作る）。key を null にすると Idempotency-Key を付けない。 */
+function adjust(playerId: string, body: unknown, options: WriteOptions = {}): Promise<Response> {
+  const headers: Record<string, string> = { authorization: `Bearer ${adminKey}`, 'content-type': 'application/json' };
+  const actor = options.actor === undefined ? 'local-admin' : options.actor;
+  if (actor !== null) headers['X-Admin-Actor'] = actor;
+  const key = options.key === undefined ? crypto.randomUUID() : options.key;
+  if (key !== null) headers['Idempotency-Key'] = key;
+  return worker.fetch(new Request(`${base}/v1/admin/players/${playerId}/inventory?gameId=${options.gameId ?? game}`, {
+    method: 'POST', headers, body: typeof body === 'string' ? body : JSON.stringify(body),
+  }), (options.e ?? adminEnv) as never);
+}
+const grant = (playerId: string, itemId: string, delta: number, options: WriteOptions = {}) =>
+  adjust(playerId, { itemId, delta, reason: '試験の修正' }, options);
+/** 管理でスコアを消す口に送る。 */
+function deleteScore(boardId: string, playerId: string, body: unknown = { reason: '不正なスコア' }): Promise<Response> {
+  return worker.fetch(new Request(`${base}/v1/admin/rankings/${boardId}/entries/${playerId}?gameId=${game}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${adminKey}`, 'content-type': 'application/json', 'X-Admin-Actor': 'local-admin' },
+    body: JSON.stringify(body),
+  }), adminEnv as never);
+}
+async function balanceOf(playerId: string, itemId: string): Promise<number | null> {
+  const row = await baseEnv.DB.prepare('SELECT amount FROM inventory_balances WHERE game_id = ? AND player_id = ? AND item_id = ?')
+    .bind(game, playerId, itemId).first<{ amount: number }>();
+  return row?.amount ?? null;
+}
+async function countRows(table: 'inventory_ledger' | 'inventory_balances' | 'admin_audit_log' | 'ranking_entries'): Promise<number> {
+  return (await baseEnv.DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>())?.n ?? 0;
+}
+async function ledgerRows(playerId: string): Promise<Array<{ delta: number; sourceType: string; sourceId: string }>> {
+  return (await baseEnv.DB.prepare('SELECT delta, source_type AS sourceType, source_id AS sourceId FROM inventory_ledger '
+    + 'WHERE game_id = ? AND player_id = ? ORDER BY entry_id').bind(game, playerId).all<{ delta: number; sourceType: string; sourceId: string }>()).results;
+}
+/** 管理のスキーマの、そのメソッドとパスの操作の応答の形に当てる。 */
+async function expectAdminConforms(res: Response, specPath: string, method: 'post' | 'delete'): Promise<unknown> {
+  const r = adminSpec.paths[specPath][method].responses[String(res.status)];
+  expect(r, `${method} ${specPath} の応答に状態 ${res.status} がある`).toBeDefined();
+  const body = await res.json();
+  expect(validate(body, r.content!['application/json'].schema, adminSpec), `${specPath} ${res.status} の本文`).toEqual([]);
+  if (r['x-error-codes']) expect(r['x-error-codes']).toContain((body as ErrorBody).error.code);
+  return body;
+}
+const adjustSpec = '/v1/admin/players/{playerId}/inventory';
+const deleteSpec = '/v1/admin/rankings/{boardId}/entries/{playerId}';
+/** 何も書いていないことを見るための行の数。 */
+async function snapshot(): Promise<number[]> {
+  return [await countRows('inventory_ledger'), await countRows('inventory_balances'), await countRows('admin_audit_log')];
+}
+
+describe('O3 データ修正の関数', () => {
+  it('管理の増減の本文はdeltaが0でない整数で上限の内のときだけ通す', () => {
+    for (const delta of [1, -1, 50, -20, MAX_ITEM_AMOUNT, -MAX_ITEM_AMOUNT]) {
+      expect(parseAdjustment({ itemId: 'gold', delta }), String(delta)).toEqual({ ok: true, value: { itemId: 'gold', delta } });
+    }
+    for (const delta of [0, -0, 1.5, -0.5, MAX_ITEM_AMOUNT + 1, -MAX_ITEM_AMOUNT - 1, Number.NaN, Infinity, '10', null, undefined, true]) {
+      expect(parseAdjustment({ itemId: 'gold', delta }).ok, String(delta)).toBe(false);
+    }
+    for (const itemId of [undefined, '', 'bad id', 'x'.repeat(65), 7]) {
+      expect(parseAdjustment({ itemId, delta: 1 }).ok, String(itemId)).toBe(false);
+    }
+  });
+
+  it('受領の履歴の種類の名前は台帳のモジュールの1か所にある', () => {
+    expect(LEDGER_SOURCES).toEqual({ eventClaim: 'event-claim', admin: 'admin' });
+  });
+});
+
+describe('O3 所持品と通貨の増減', () => {
+  it('管理の付与で所持品が増え受領の履歴にadminの行が残る', async () => {
+    await addPlayer('p1');
+    const res = await grant('p1', 'gold', 50);
+    expect(res.status).toBe(200);
+    const body = await expectAdminConforms(res, adjustSpec, 'post') as AdjustBody;
+    expect(body).toMatchObject({ gameId: game, playerId: 'p1', itemId: 'gold', delta: 50, amount: 50 });
+    expect(await balanceOf('p1', 'gold')).toBe(50);
+    const rows = await ledgerRows('p1');
+    expect(rows).toHaveLength(1);
+    const audit = await baseEnv.DB.prepare('SELECT audit_ref AS ref FROM admin_audit_log WHERE audit_id = ?').bind(body.auditId)
+      .first<{ ref: string }>();
+    expect(rows[0]).toEqual({ delta: 50, sourceType: 'admin', sourceId: audit?.ref });
+    // プレイヤーを読む口の履歴にも出る
+    const player = await (await adminGet(playerPath('p1'))).json<{ balances: unknown[]; history: Array<Record<string, unknown>> }>();
+    expect(player.balances).toEqual([{ itemId: 'gold', kind: 'currency', amount: 50 }]);
+    expect(player.history[0]).toMatchObject({ itemId: 'gold', delta: 50, sourceType: 'admin', sourceId: audit?.ref });
+  });
+
+  it('管理の取り消しは負の増減で履歴に残り残高を減らす', async () => {
+    await addPlayer('p1');
+    expect((await grant('p1', 'gold', 50)).status).toBe(200);
+    const res = await grant('p1', 'gold', -20);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ itemId: 'gold', delta: -20, amount: 30 });
+    expect(await balanceOf('p1', 'gold')).toBe(30);
+    expect((await ledgerRows('p1')).map((r) => [r.delta, r.sourceType])).toEqual([[50, 'admin'], [-20, 'admin']]);
+  });
+
+  it('残高より多い取り消しはINSUFFICIENT_BALANCEの409を返し何も書かない', async () => {
+    await addPlayer('p1');
+    expect((await grant('p1', 'gold', 30)).status).toBe(200);
+    const before = await snapshot();
+    const res = await grant('p1', 'gold', -31);
+    await expectAdminConforms(res.clone(), adjustSpec, 'post');
+    await expectError(res, 409, 'INSUFFICIENT_BALANCE');
+    expect(await balanceOf('p1', 'gold')).toBe(30);
+    expect(await snapshot()).toEqual(before);
+    // 残高の行が無い品目の取り消しも同じ
+    await expectError(await grant('p1', 'potion', -1), 409, 'INSUFFICIENT_BALANCE');
+    expect(await balanceOf('p1', 'potion')).toBeNull();
+    expect(await snapshot()).toEqual(before);
+  });
+
+  it('上限を超える管理の付与はINVENTORY_LIMIT_EXCEEDEDの409を返し何も書かない', async () => {
+    await addPlayer('p1');
+    await baseEnv.DB.prepare('INSERT INTO inventory_balances (game_id, player_id, item_id, amount, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .bind(game, 'p1', 'gold', MAX_ITEM_AMOUNT - 10, 1).run();
+    const before = await snapshot();
+    const res = await grant('p1', 'gold', 11);
+    await expectAdminConforms(res.clone(), adjustSpec, 'post');
+    await expectError(res, 409, 'INVENTORY_LIMIT_EXCEEDED');
+    expect(await balanceOf('p1', 'gold')).toBe(MAX_ITEM_AMOUNT - 10);
+    expect(await snapshot()).toEqual(before);
+    // ちょうど上限までは通る
+    const ok = await grant('p1', 'gold', 10);
+    expect(ok.status).toBe(200);
+    expect(await balanceOf('p1', 'gold')).toBe(MAX_ITEM_AMOUNT);
+  });
+
+  it('取り消して残高が0になった品目は所持品の一覧から消える', async () => {
+    await addPlayer('p1');
+    expect((await grant('p1', 'gold', 30)).status).toBe(200);
+    expect((await grant('p1', 'potion', 2)).status).toBe(200);
+    const res = await grant('p1', 'gold', -30);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ itemId: 'gold', delta: -30, amount: 0 });
+    expect(await balanceOf('p1', 'gold')).toBeNull();
+    const player = await (await adminGet(playerPath('p1'))).json<{ balances: unknown[] }>();
+    expect(player.balances).toEqual([{ itemId: 'potion', kind: 'item', amount: 2 }]);
+    // 履歴には付与と取り消しの両方が残る
+    expect((await ledgerRows('p1')).map((r) => r.delta)).toEqual([30, 2, -30]);
+  });
+
+  it('同じIdempotency-Keyの付与を2回送っても1回分で同じ本文を返す', async () => {
+    await addPlayer('p1');
+    const key = 'retry-key-0001';
+    const first = await grant('p1', 'gold', 50, { key });
+    expect(first.status).toBe(200);
+    const firstBody = await first.json();
+    // 別の人が流し直しても（actor は比べない）二重にならない
+    const second = await grant('p1', 'gold', 50, { key, actor: 'other-admin' });
+    expect(second.status).toBe(200);
+    expect(await second.json()).toEqual(firstBody);
+    expect(await balanceOf('p1', 'gold')).toBe(50);
+    expect(await ledgerRows('p1')).toHaveLength(1);
+    expect(await countRows('admin_audit_log')).toBe(1);
+    // 後で残高が動いても、2 回目以降の本文は 1 回目と同じ
+    expect((await grant('p1', 'gold', -5)).status).toBe(200);
+    expect(await (await grant('p1', 'gold', 50, { key })).json()).toEqual(firstBody);
+    expect(await balanceOf('p1', 'gold')).toBe(45);
+  });
+
+  it('同じIdempotency-Keyの付与を並べて送っても1回分', async () => {
+    await addPlayer('p1');
+    const key = 'parallel-key-01';
+    const results = await Promise.all([grant('p1', 'gold', 50, { key }), grant('p1', 'gold', 50, { key })]);
+    expect(results.map((r) => r.status)).toEqual([200, 200]);
+    const [a, b] = await Promise.all(results.map((r) => r.json()));
+    expect(a).toEqual(b);
+    expect(await ledgerRows('p1')).toHaveLength(1);
+    expect(await balanceOf('p1', 'gold')).toBe(50);
+    expect(await countRows('admin_audit_log')).toBe(1);
+  });
+
+  it('同じIdempotency-Keyで違う中身の付与はIDEMPOTENCY_KEY_REUSEDの422を返す', async () => {
+    await addPlayer('p1');
+    await addPlayer('p2');
+    const key = 'reused-key-0001';
+    expect((await grant('p1', 'gold', 50, { key })).status).toBe(200);
+    const before = await snapshot();
+    const changed = [
+      () => grant('p1', 'gold', 60, { key }),
+      () => grant('p1', 'potion', 50, { key }),
+      () => grant('p2', 'gold', 50, { key }),
+      () => adjust('p1', { itemId: 'gold', delta: 50, reason: '別の理由' }, { key }),
+    ];
+    for (const send of changed) {
+      const res = await send();
+      await expectAdminConforms(res.clone(), adjustSpec, 'post');
+      await expectError(res, 422, 'IDEMPOTENCY_KEY_REUSED');
+    }
+    expect(await snapshot()).toEqual(before);
+    expect(await balanceOf('p1', 'gold')).toBe(50);
+    expect(await balanceOf('p2', 'gold')).toBeNull();
+  });
+
+  it('Idempotency-Keyの無い管理の付与はINVALID_ARGUMENTの400を返す', async () => {
+    await addPlayer('p1');
+    for (const key of [null, '', 'short', 'has space key', 'x'.repeat(65), 'bad*key*0001']) {
+      const res = await grant('p1', 'gold', 50, { key });
+      await expectAdminConforms(res.clone(), adjustSpec, 'post');
+      await expectError(res, 400, 'INVALID_ARGUMENT');
+    }
+    // 本文の外れも 400（delta が 0・X-Admin-Actor が無い）と、JSON でない本文は INVALID_JSON
+    await expectError(await grant('p1', 'gold', 0), 400, 'INVALID_ARGUMENT');
+    await expectError(await grant('p1', 'gold', 5, { actor: null }), 400, 'INVALID_ARGUMENT');
+    await expectError(await adjust('p1', '{bad'), 400, 'INVALID_JSON');
+    expect(await snapshot()).toEqual([0, 0, 0]);
+  });
+
+  it('知らない品目か知らないプレイヤーへの管理の付与はNOT_FOUNDの404を返す', async () => {
+    await addPlayer('p1');
+    await addPlayer('p9', 'demo-rpg');
+    for (const [playerId, itemId, message] of [['p1', 'no-item', 'Unknown item'], ['nobody', 'gold', 'Unknown player'],
+      ['p9', 'gold', 'Unknown player']]) {
+      const res = await grant(playerId, itemId, 10);
+      await expectAdminConforms(res.clone(), adjustSpec, 'post');
+      const body = await expectError(res, 404, 'NOT_FOUND');
+      expect(body.error.message).toBe(message);
+    }
+    expect(await snapshot()).toEqual([0, 0, 0]);
+  });
+
+  it('管理の付与は監査のログに前と後の残高が残る', async () => {
+    await addPlayer('p1');
+    expect((await grant('p1', 'gold', 120, { actor: 'ops.alice' })).status).toBe(200);
+    expect((await adjust('p1', { itemId: 'gold', delta: -20, reason: '二重に配った分を戻す' })).status).toBe(200);
+    const audit = await (await adminGet(auditPath())).json<AuditBody>();
+    expect(audit.items).toHaveLength(2);
+    expect(audit.items[0]).toMatchObject({ actor: 'local-admin', action: 'inventory.adjust', target: 'player:p1',
+      before: { itemId: 'gold', amount: 120 }, after: { itemId: 'gold', amount: 100 }, reason: '二重に配った分を戻す' });
+    expect(audit.items[1]).toMatchObject({ actor: 'ops.alice', action: 'inventory.adjust', target: 'player:p1',
+      before: { itemId: 'gold', amount: 0 }, after: { itemId: 'gold', amount: 120 }, reason: '試験の修正' });
+    // 鍵と中身のハッシュは監査の行の列に入る（応答には出さない）
+    const rows = (await baseEnv.DB.prepare('SELECT request_key AS k, request_hash AS h FROM admin_audit_log ORDER BY audit_id')
+      .all<{ k: string; h: string }>()).results;
+    for (const r of rows) {
+      expect(r.k).toMatch(/^[a-zA-Z0-9_-]{8,64}$/);
+      expect(r.h).toMatch(/^[0-9a-f]{64}$/);
+    }
+    expect(JSON.stringify(audit)).not.toContain(rows[0].h);
+  });
+});
+
+describe('O3 スコアを消す', () => {
+  it('管理でスコアを消すとランキングから消え監査に前のスコアが残る', async () => {
+    await registerGame(baseEnv.DB, game, ['rankings']);
+    await addPlayer('p2');
+    const score = baseEnv.DB.prepare('INSERT INTO ranking_entries (game_id, board_id, player_id, display_name, score) VALUES (?, ?, ?, ?, ?)');
+    // p1 は game_players に無いプレイヤーの行（ランキングの行だけを見て消せる）
+    await baseEnv.DB.batch([score.bind(game, 'boss-score', 'p1', 'Cheater', 99999), score.bind(game, 'boss-score', 'p2', 'Hero', 1200),
+      score.bind(game, 'arena', 'p1', 'Cheater', 5)]);
+    const res = await deleteScore('boss-score', 'p1');
+    expect(res.status).toBe(200);
+    const body = await expectAdminConforms(res, deleteSpec, 'delete');
+    expect(body).toMatchObject({ gameId: game, boardId: 'boss-score', playerId: 'p1', deleted: true });
+    const board = await (await worker.fetch(new Request(`${base}/v1/rankings/boss-score?gameId=${game}`), adminEnv as never))
+      .json<{ items: Array<{ playerId: string }> }>();
+    expect(board.items.map((i) => i.playerId)).toEqual(['p2']);
+    // ほかのボードの行は残る
+    expect(await countRows('ranking_entries')).toBe(2);
+    const audit = await (await adminGet(auditPath())).json<AuditBody>();
+    expect(audit.items).toHaveLength(1);
+    expect(audit.items[0]).toMatchObject({ action: 'ranking.delete', target: 'ranking:boss-score:p1', actor: 'local-admin',
+      before: { score: 99999, displayName: 'Cheater' }, after: null, reason: '不正なスコア' });
+    expect(audit.items[0].auditId).toBe((body as { auditId: number }).auditId);
+  });
+
+  it('無いスコアを消すとNOT_FOUNDの404を返し監査に残さない', async () => {
+    await baseEnv.DB.prepare("INSERT INTO ranking_entries (game_id, board_id, player_id, display_name, score) VALUES (?, 'boss-score', 'p1', 'Hero', 10)")
+      .bind(game).run();
+    for (const [boardId, playerId] of [['boss-score', 'p2'], ['arena', 'p1']]) {
+      const res = await deleteScore(boardId, playerId);
+      await expectAdminConforms(res.clone(), deleteSpec, 'delete');
+      const body = await expectError(res, 404, 'NOT_FOUND');
+      expect(body.error.message).toBe('Unknown ranking entry');
+    }
+    expect(await countRows('admin_audit_log')).toBe(0);
+    // 2 回目は 404（もう無い）で、監査は 1 回目の 1 行だけ
+    expect((await deleteScore('boss-score', 'p1')).status).toBe(200);
+    await expectError(await deleteScore('boss-score', 'p1'), 404, 'NOT_FOUND');
+    expect(await countRows('admin_audit_log')).toBe(1);
+    expect(await countRows('ranking_entries')).toBe(0);
   });
 });

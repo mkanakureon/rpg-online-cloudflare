@@ -4,7 +4,8 @@
 // 止めた印（403 PLAYER_BANNED）→ gameId の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定 → 口ごとの確かめ の順（所持品の checkAccess と同じ形）。
 // 期間と区切りはサーバーの時刻だけで決める（period.ts。本文・問い合わせ・Date の見出しの時刻は読まない）。受け取りは、受け取りの行・
 // 受領の履歴・残高の 3 文を 1 つの batch で書き、一意の鍵（プレイヤー・イベント・区切り）で二重を止める。2 回目は 200 で 1 回目と同じ本文。
-// 所持品の表にも書くが、inventory のモジュールは読み込まない（モジュールどうしは読み込まない）。順と SQL の正は
+// 所持品の表にも書くが、inventory のモジュールは読み込まない（モジュールどうしは読み込まない）。受領の履歴の種類の名前は
+// src/core/ledger.ts の LEDGER_SOURCES から読む（定数を文に埋める。3 文の中身は変えない。admin-design.md §6）。順と SQL の正は
 // docs/guides/working/event-reward-design.md §4・§5。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
@@ -16,6 +17,7 @@ import { requireLocalWrite } from '../../core/guards';
 import { error, json } from '../../core/http';
 import { validId } from '../../core/ids';
 import { MAX_ITEM_AMOUNT } from '../../core/inventory';
+import { LEDGER_SOURCES } from '../../core/ledger';
 import type { GameModule } from '../../core/module';
 import { consume } from '../../core/rate-limit';
 import { RATE_LIMITS } from '../../core/rate-limit-policy';
@@ -38,7 +40,7 @@ const rewardsOf = `SELECT event_id AS eventId, item_id AS itemId, amount FROM ev
 const claimOf = `SELECT claim_id AS claimId, claimed_at AS claimedAt FROM event_claims
   WHERE game_id = ? AND player_id = ? AND event_id = ? AND period_key = ?`;
 const grantsOf = `SELECT item_id AS itemId, delta AS amount FROM inventory_ledger
-  WHERE game_id = ? AND player_id = ? AND source_type = 'event-claim' AND source_id = ? ORDER BY item_id`;
+  WHERE game_id = ? AND player_id = ? AND source_type = '${LEDGER_SOURCES.eventClaim}' AND source_id = ? ORDER BY item_id`;
 
 // §5 の batch の 3 文。D1 の ?NNN（番号つきの引数）は要確認なので、? を順に bind する（中身は §5 と同じ）
 // 1. 受け取りの行。期間の内で、付与しても上限を超えないときだけ。同じ区切りの行があれば何もしない
@@ -52,7 +54,7 @@ const insertClaim = `INSERT INTO event_claims (game_id, player_id, event_id, per
   ON CONFLICT (game_id, player_id, event_id, period_key) DO NOTHING`;
 // 2. 受領の履歴（この要求の claim_id が入ったときだけ）
 const insertLedger = `INSERT INTO inventory_ledger (game_id, player_id, item_id, delta, source_type, source_id, created_at)
-  SELECT r.game_id, ?, r.item_id, r.amount, 'event-claim', ?, ? FROM event_rewards r
+  SELECT r.game_id, ?, r.item_id, r.amount, '${LEDGER_SOURCES.eventClaim}', ?, ? FROM event_rewards r
   WHERE r.game_id = ? AND r.event_id = ? AND EXISTS (SELECT 1 FROM event_claims c WHERE c.claim_id = ?)`;
 // 3. 残高（同じ条件）
 const upsertBalance = `INSERT INTO inventory_balances (game_id, player_id, item_id, amount, updated_at)

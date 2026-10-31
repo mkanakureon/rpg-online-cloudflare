@@ -4,9 +4,11 @@
 // （RATE_LIMITS.admin・IP ごと。正しい鍵でも数え、鍵を確かめる前に 429）→ 管理の鍵（401）→ gameId の形（400）→
 // ゲームの登録（404 Unknown game。機能の設定は見ない）→ 書き込みの口は X-Admin-Actor・本文の JSON・reason（400）→ 口ごとの確かめ。管理はゲームごとの機能にせず、機能のモジュールを
 // 読み込まない（表を SQL で読み書きするだけ）。どのプレイヤーのトークンも読まない。読み取りの口は監査に残さない。
-// 書き込みの口（BAN・BAN を解く）は、監査の行を 1 文目・書き込みを 2 文目にした 1 つの batch で書く（片方だけ残らない）。
+// 書き込みの口（BAN・BAN を解く・所持品と通貨の増減・スコアを消す）は、監査の行を 1 文目にし、続く文は「この要求の監査の行が
+// 入ったとき」だけ書く 1 つの batch で書く（片方だけ残らない）。増減の続く文と受領の履歴の種類の名前は src/core/ledger.ts。
+// 増減は Idempotency-Key が必須で、鍵と中身のハッシュを監査の行の列に入れて二重を止める（同じ中身は 200 で 1 回目と同じ本文・違う中身は 422）。
 // ルートの一覧はルーター（src/core/router.ts）がゲストの発行の後・機能のルートの前に当てる。形の正は openapi/rpg-online-admin.v1.json、
-// 挙動の説明の正は docs/api-contract.md の「管理の API」、設計の正は docs/guides/working/admin-design.md §2・§4・§5。
+// 挙動の説明の正は docs/api-contract.md の「管理の API」、設計の正は docs/guides/working/admin-design.md §2・§4〜§6。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
 import { isBanActive } from '../bans';
@@ -15,12 +17,14 @@ import { loadGame } from '../games';
 import { requireLocalWrite } from '../guards';
 import { error, json } from '../http';
 import { validId } from '../ids';
+import { MAX_ITEM_AMOUNT } from '../inventory';
+import { adjustStatements, LEDGER_SOURCES } from '../ledger';
 import type { Route } from '../module';
 import { consume, ipSubject } from '../rate-limit';
 import { RATE_LIMITS } from '../rate-limit-policy';
-import { isoSeconds, listAuditSql, parseActor, parseReason, shapeAuditRow, type AuditRow } from './audit';
+import { isoSeconds, listAuditSql, parseActor, parseIdempotencyKey, parseReason, requestHash, shapeAuditRow, type AuditRow } from './audit';
 import { adminSecret, requireAdmin } from './key';
-import { parseAuditQuery, parseExpiresAt, PLAYER_HISTORY_ROWS } from './parse';
+import { parseAdjustment, parseAuditQuery, parseExpiresAt, PLAYER_HISTORY_ROWS } from './parse';
 
 type Checked = { ok: true; gameId: string } | { ok: false; response: Response };
 
@@ -99,6 +103,35 @@ type SaveRow = { slotId: string; revision: number; size: number; deleted: number
 
 const banPath = /^\/v1\/admin\/players\/([a-zA-Z0-9_-]{1,64})\/ban$/;
 
+// 増減の 1 文目（監査の行）。品目とプレイヤーがあり、増減の後が 0 以上・上限以下のときだけ。同じゲームの同じ Idempotency-Key があれば何もしない。
+// 前と後の残高は同じ文の中で読む（json_object）。続く文は src/core/ledger.ts の adjustStatements
+const insertAdjustAudit = `INSERT INTO admin_audit_log (audit_ref, game_id, request_key, request_hash, actor, action, target,
+    before_json, after_json, reason, created_at)
+  SELECT ?, ?, ?, ?, ?, 'inventory.adjust', 'player:' || ?,
+         json_object('itemId', ?, 'amount', cur), json_object('itemId', ?, 'amount', cur + ?), ?, ?
+  FROM (SELECT COALESCE((SELECT amount FROM inventory_balances WHERE game_id = ? AND player_id = ? AND item_id = ?), 0) AS cur)
+  WHERE cur + ? BETWEEN 0 AND ?
+    AND EXISTS (SELECT 1 FROM inventory_items WHERE game_id = ? AND item_id = ?)
+    AND EXISTS (SELECT 1 FROM game_players WHERE game_id = ? AND player_id = ?)
+  ON CONFLICT (game_id, request_key) DO NOTHING`;
+// batch の後に引く: この要求の行か、同じ鍵の前の要求の行
+const auditByKey = `SELECT audit_ref AS ref, request_hash AS hash, after_json AS afterJson, audit_id AS auditId FROM admin_audit_log
+  WHERE game_id = ? AND request_key = ?`;
+// 行が無いときの見分け（品目・プレイヤーの有無といまの残高）
+const adjustDiagnosis = `SELECT (SELECT 1 FROM inventory_items WHERE game_id = ? AND item_id = ?) AS item,
+    (SELECT 1 FROM game_players WHERE game_id = ? AND player_id = ?) AS player,
+    COALESCE((SELECT amount FROM inventory_balances WHERE game_id = ? AND player_id = ? AND item_id = ?), 0) AS cur`;
+
+// スコアを消す 1 文目（監査の行。前は消す行のスコアと表示名。行があるときだけ入る）と 2 文目
+const insertRankingAudit = `INSERT INTO admin_audit_log (audit_ref, game_id, actor, action, target, before_json, after_json, reason, created_at)
+  SELECT ?, ?, ?, 'ranking.delete', ?, json_object('score', score, 'displayName', display_name), NULL, ?, ?
+  FROM ranking_entries WHERE game_id = ? AND board_id = ? AND player_id = ?`;
+const deleteRanking = `DELETE FROM ranking_entries WHERE game_id = ? AND board_id = ? AND player_id = ?
+  AND EXISTS (SELECT 1 FROM admin_audit_log WHERE audit_ref = ?)`;
+const auditByRef = 'SELECT audit_id AS auditId FROM admin_audit_log WHERE audit_ref = ?';
+
+type KeyRow = { ref: string; hash: string; afterJson: string; auditId: number };
+
 export const adminRoutes: Route[] = [
   {
     method: 'GET',
@@ -171,6 +204,69 @@ export const adminRoutes: Route[] = [
         env.DB.prepare(deleteBan).bind(gameId, playerId, ref),
       ]);
       return json({ gameId, playerId, banned: false });
+    },
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/admin\/players\/([a-zA-Z0-9_-]{1,64})\/inventory$/,
+    async handle(req, env, match, url, known) {
+      const access = await checkAdminWrite(req, env, url, known);
+      if (!access.ok) return access.response;
+      const { gameId, actor, reason, body } = access;
+      const playerId = match[1];
+      const key = parseIdempotencyKey(req.headers.get('Idempotency-Key'));
+      if (key === null) return error('INVALID_ARGUMENT', 'Invalid Idempotency-Key', 400);
+      const parsed = parseAdjustment(body);
+      if (!parsed.ok) return error('INVALID_ARGUMENT', parsed.message, 400);
+      const { itemId, delta } = parsed.value;
+      const hash = await requestHash({ action: 'inventory.adjust', gameId, playerId, itemId, delta, reason });
+      const ref = crypto.randomUUID();
+      const now = serverNow();
+      await env.DB.batch([
+        env.DB.prepare(insertAdjustAudit).bind(ref, gameId, key, hash, actor, playerId, itemId, itemId, delta, reason, now,
+          gameId, playerId, itemId, delta, MAX_ITEM_AMOUNT, gameId, itemId, gameId, playerId),
+        ...adjustStatements(env.DB, { gameId, playerId, itemId, delta, sourceType: LEDGER_SOURCES.admin, sourceId: ref, now }),
+      ]);
+      const row = (await env.DB.prepare(auditByKey).bind(gameId, key).all<KeyRow>()).results[0];
+      if (row) {
+        // この要求の行か、同じ中身の前の要求（二重）。どちらも監査の行から同じ本文を作る
+        if (row.ref !== ref && row.hash !== hash) {
+          return error('IDEMPOTENCY_KEY_REUSED', 'Idempotency-Key was used for a different request', 422);
+        }
+        const after = JSON.parse(row.afterJson) as { amount: number };
+        return json({ gameId, playerId, itemId, delta, amount: after.amount, auditId: row.auditId });
+      }
+      // 何も書いていない。品目・プレイヤー（404）→ 残高の下限（409）→ 上限（409）の順で見分ける
+      const found = (await env.DB.prepare(adjustDiagnosis).bind(gameId, itemId, gameId, playerId, gameId, playerId, itemId)
+        .all<{ item: number | null; player: number | null; cur: number }>()).results[0];
+      if (!found || found.item === null) return error('NOT_FOUND', 'Unknown item', 404);
+      if (found.player === null) return error('NOT_FOUND', 'Unknown player', 404);
+      const next = found.cur + delta;
+      // 0 以上・上限以下なら、batch と読み直しの間に別の修正で残高が動いた。増減の向きで決める（同じ鍵で流し直せる）
+      const insufficient = next < 0 || (next <= MAX_ITEM_AMOUNT && delta < 0);
+      return insufficient
+        ? error('INSUFFICIENT_BALANCE', 'Adjustment would make the balance negative', 409)
+        : error('INVENTORY_LIMIT_EXCEEDED', 'Adjustment would exceed the inventory limit', 409);
+    },
+  },
+  {
+    method: 'DELETE',
+    pattern: /^\/v1\/admin\/rankings\/([a-zA-Z0-9_-]{1,64})\/entries\/([a-zA-Z0-9_-]{1,64})$/,
+    async handle(req, env, match, url, known) {
+      const access = await checkAdminWrite(req, env, url, known);
+      if (!access.ok) return access.response;
+      const { gameId, actor, reason } = access;
+      const [, boardId, playerId] = match;
+      const ref = crypto.randomUUID();
+      // ランキングの行だけを見る（game_players に無いプレイヤーの行も消せる）
+      await env.DB.batch([
+        env.DB.prepare(insertRankingAudit).bind(ref, gameId, actor, `ranking:${boardId}:${playerId}`, reason, serverNow(),
+          gameId, boardId, playerId),
+        env.DB.prepare(deleteRanking).bind(gameId, boardId, playerId, ref),
+      ]);
+      const written = (await env.DB.prepare(auditByRef).bind(ref).all<{ auditId: number }>()).results[0];
+      if (!written) return error('NOT_FOUND', 'Unknown ranking entry', 404);
+      return json({ gameId, boardId, playerId, deleted: true, auditId: written.auditId });
     },
   },
   {

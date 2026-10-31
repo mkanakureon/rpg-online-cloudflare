@@ -1,7 +1,8 @@
 // audit.ts — 監査のログ（表 admin_audit_log）の保持の期間・読む文・応答の 1 行の形。入出力を持たない。
 //
-// 監査の行は管理の書き込みの操作 1 回で 1 行（いま書く口は BAN と BAN を解く口。データ修正・イベントの定義の束で足す）。読み取りの口は監査に残さない。
-// 書き込みの口の共通の確かめ（X-Admin-Actor の parseActor・本文の reason の parseReason）もここに置く。
+// 監査の行は管理の書き込みの操作 1 回で 1 行（いま書く口は BAN・BAN を解く・所持品と通貨の増減・スコアを消す口。イベントの定義の束で足す）。
+// 読み取りの口は監査に残さない。書き込みの口の共通の確かめ（X-Admin-Actor の parseActor・本文の reason の parseReason）と、
+// 増減の二重の止め（Idempotency-Key の parseIdempotencyKey・中身のハッシュ requestHash。鍵とハッシュは監査の行の列に入る）もここに置く。
 // before_json・after_json は保存した JSON を読み直して返す。トークン・管理の鍵・セーブの本文・IP は入れない。
 // 表は migrations/0011_admin.sql、形と決まりの正は docs/guides/working/admin-design.md §5。
 //
@@ -24,6 +25,25 @@ export function parseActor(raw: string | null): string | null {
 export function parseReason(value: unknown): string | null {
   if (typeof value !== 'string' || value.length < 1 || value.length > MAX_REASON_LENGTH || value.trim() === '') return null;
   return value;
+}
+
+/** Idempotency-Key の形（増減だけ必須。監査の行の request_key に入る）。 */
+export const IDEMPOTENCY_KEY_PATTERN = /^[a-zA-Z0-9_-]{8,64}$/;
+
+/** Idempotency-Key の値を確かめる。外れ（無い・形の誤り）は null。 */
+export function parseIdempotencyKey(raw: string | null): string | null {
+  return raw !== null && IDEMPOTENCY_KEY_PATTERN.test(raw) ? raw : null;
+}
+
+/** request_hash に入れる中身（actor は入れない。同じ修正を別の人が流し直しても二重にしない）。 */
+export type HashedRequest = { action: string; gameId: string; playerId: string; itemId: string; delta: number; reason: string };
+
+/** 中身を決まった順（action・gameId・playerId・itemId・delta・reason）の JSON にして SHA-256（16 進）にする。 */
+export async function requestHash(r: HashedRequest): Promise<string> {
+  // 欄を書いた順に並べ直す（呼ぶ側の object の欄の順に左右されない）
+  const text = JSON.stringify({ action: r.action, gameId: r.gameId, playerId: r.playerId, itemId: r.itemId, delta: r.delta, reason: r.reason });
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /** before が無ければ（NULL）全部から。続きがあるかを知るために limit + 1 行を引く。 */
