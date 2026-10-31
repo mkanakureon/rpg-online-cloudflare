@@ -179,6 +179,11 @@ describe('O1 管理の口の守りと鍵', () => {
   });
 
   it('管理の口を上限より多く呼ぶと鍵を確かめる前に429を返す', async () => {
+    // 正しい鍵の要求も数える
+    expect((await adminGet(auditPath())).status).toBe(200);
+    const counted = await baseEnv.DB.prepare('SELECT SUM(count) AS n FROM rate_limit_counters WHERE scope = ? AND subject = ?')
+      .bind(RATE_LIMITS.admin.scope, NO_IP_SUBJECT).first<{ n: number }>();
+    expect(counted?.n).toBe(1);
     await fillRateLimit(baseEnv.DB, RATE_LIMITS.admin, NO_IP_SUBJECT);
     for (const authorization of [`Bearer ${adminKey}`, `Bearer ${'b'.repeat(32)}`, null]) {
       const res = await adminGet(auditPath(), { authorization });
@@ -248,6 +253,12 @@ describe('O1 プレイヤーと監査を読む', () => {
     for (const leaked of ['"data"', '"checksum"', 'secret', 'hp', 'c'.repeat(64), 'd'.repeat(64)]) expect(text).not.toContain(leaked);
     // O1 の応答は ban の欄を持たない（O2 で足す）
     expect('ban' in body).toBe(false);
+    // 受領の履歴は新しい順に 20 行まで
+    const many = Array.from({ length: 25 }, (_, i) => ledger.bind(game, 'p1', 'gold', 1, `bulk-${i}`, now));
+    await db.batch(many);
+    const full = await (await adminGet(playerPath('p1'))).json<{ history: Array<{ sourceId: string }> }>();
+    expect(full.history).toHaveLength(20);
+    expect(full.history[0].sourceId).toBe('bulk-24');
     // 読み取りは監査に残さない
     expect((await baseEnv.DB.prepare('SELECT COUNT(*) AS n FROM admin_audit_log').first<{ n: number }>())?.n).toBe(0);
   });
