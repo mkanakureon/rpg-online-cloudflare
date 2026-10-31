@@ -294,7 +294,7 @@ INSERT INTO inventory_balances (game_id, player_id, item_id, amount, updated_at)
     amount = inventory_balances.amount + excluded.amount, updated_at = excluded.updated_at;
 ```
 
-バインドの数（D1 の 1 つの文の上限 100 の内。§1 の**要確認**の前提）: 文 1 は名前つきで書いた値を `?` に直して 18 前後（`:g` が 5 回・`:p` が 4 回など）、文 2・3 は 6〜7。報酬の行の数はバインドに関わらない（`quest_rewards` から SQL で読む）。共通の値を派生表で 1 回だけバインドする形（プレイヤーデータの U1 の形）に直さなくても上限から遠いので、イベントの文と同じ素直な形にする。
+バインドの数（D1 の 1 つの文の上限 100 の内。§1 の**要確認**の前提）: 文 1 は名前つきで書いた値を `?` に直して 18 前後（`:g` が 5 回・`:p` が 4 回など）、文 2 は 6・文 3 は 5。報酬の行の数はバインドに関わらない（`quest_rewards` から SQL で読む）。共通の値を派生表で 1 回だけバインドする形（プレイヤーデータの U1 の形）に直さなくても上限から遠いので、イベントの文と同じ素直な形にする。
 
 `batch` の後に `SELECT claim_id, claimed_at FROM quest_claims WHERE game_id = :g AND player_id = :p AND quest_id = :q AND period_key = :pk` を引く:
 
@@ -329,7 +329,7 @@ INSERT INTO player_data_period_values (game_id, player_id, key, kind, period_key
 ```
 
 - バインドは 1 文で 8。文の数は 1 回の書き込みで最大 `MAX_CHANGES_PER_WRITE` × 2（デイリーと週間）= 40 増える（いまの最大 23 文 → 63 文。D1 の 1 回の `batch` の文の数の上限は**要確認**。上限が足りないと分かったら `MAX_CHANGES_PER_WRITE` を下げる前に、区切りの値の文を 1 文の `INSERT … SELECT … FROM (VALUES …)` にまとめる）。
-- 文 1 の上限の条件（`player_data` の書いた後の値が `max_value` 以下）を通った書き込みだけが書き、管理の値の直しは区切りの値を新しい値で頭打ちにする（§8）ので、区切りの値は合計の値を超えず、`CHECK` の上限に当たらない。
+- 文 1 の上限の条件（`player_data` の書いた後の値が `max_value` 以下）を通った書き込みだけが書き、管理の値の直しは区切りの値を新しい値で頭打ちにする（§8。Q3 で入る）ので、区切りの値は合計の値を超えず、`CHECK` の上限に当たらない。Q2 から Q3 までの間は、管理で合計を下げると区切りの値が合計を超えうる（ローカル専用の間の一時の穴。Q3 で閉じる）。
 - 同じ `Idempotency-Key` の送り直しは文 1 で止まり、区切りの値も増えない（二重に数えない）。409 `PLAYER_DATA_LIMIT_EXCEEDED` の書き込みも区切りの値を書かない。
 - 書き込みの応答（`result_json`）と `GET /v1/player-data` の形は変えない（区切りの値はクエストの一覧の `progress` で見せる）。
 - `max`・`set`・`flag` のキーは区切りで数えない（区切りの中の「増えた分」の意味が無い。§16）。
@@ -520,7 +520,7 @@ API を変えたら CLI モックも合わせる（`CLAUDE.md` のプロジェ�
 | 束 | 中身 | 前の束 | 既存の試験 | パッケージ |
 | --- | --- | --- | --- | --- |
 | Q1 | 一度きりのクエストと受け取り: `migrations/` の新しい `0015_quests.sql`・`src/modules/quests/`（`index.ts`・`shape.ts`）・`src/modules/index.ts` に足す・`RATE_LIMITS.quests`・`LEDGER_SOURCES.questClaim`・2 つのエラーコード・§12 の CLI モックと `scripts/cli-requests.mjs`・§9 の Q1 の文書と契約・§10 の Q1 の試験 | U3（`player-data-design.md`） | §11 の手続きで 4 本を置き換え・4 本に行を足す | 足さない |
-| Q2 | デイリー・週間: `migrations/` の新しい `0016_player_data_periods.sql`・`src/core/period.ts`（events から移す）・プレイヤーデータの書き込みの区切りの値の文・クエストの一覧と受け取りの区切り・§9 の Q2 の文書と契約・§10 の Q2 の試験 | Q1 | 変えない（イベントの区切りの試験は読み込み先だけ） | 足さない |
+| Q2 | デイリー・週間: `migrations/` の新しい `0016_player_data_periods.sql`・`src/core/period.ts`（events から移す。管理の口の写し `EVENT_DEFINITION_KINDS` を core を読む形に置き換える）・プレイヤーデータの書き込みの区切りの値の文・クエストの一覧と受け取りの区切り・§9 の Q2 の文書と契約・§10 の Q2 の試験 | Q1 | 変えない（イベントの区切りの試験は読み込み先だけ） | 足さない |
 | Q3 | 管理: `src/core/admin/` にクエストの定義の口とプレイヤーを読む口の欄・値の直しの区切りの値の頭打ち（§8）・`src/core/quests.ts` の `MAX_QUESTS`・`scripts/admin-cli.mjs` と `scripts/admin-requests.mjs` に `put-quest`・管理のスキーマ・§9 の Q3 の文書・§10 の Q3 の試験 | Q2 | 変えない | 足さない |
 
 範囲の外（後の設計書）: §16。
