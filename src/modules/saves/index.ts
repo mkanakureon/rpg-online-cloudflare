@@ -1,6 +1,6 @@
 // saves/index.ts — セーブのモジュール（PUT・GET・DELETE /v1/saves/{slotId} と一覧の GET /v1/saves）。
 //
-// どれも APP_ENV=local の門 → トークン → プレイヤーの利用制限（4 つの操作を合わせて RATE_LIMITS.saves。429）→ gameId の形 →
+// どれも APP_ENV=local の門 → トークン → プレイヤーの利用制限（4 つの操作を合わせて RATE_LIMITS.saves。429）→ 止めた印（403 PLAYER_BANNED）→ gameId の形 →
 // トークンのゲームとの突き合わせの順に確かめる（本文を読む前。制限の順の正は docs/guides/working/abuse-protection-design.md §3）。
 // PUT はその後に本文の大きさ → JSON → 形（validate.ts）→ data の大きさ → チェックサム（checksum.ts）→ ゲームの登録と
 // 機能の設定 → 書き込み（リビジョンを比べて書く 1 つの文。合わなければ 409 SAVE_CONFLICT、新しいスロットで MAX_SLOTS を
@@ -10,6 +10,7 @@
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
 import { requireAuth } from '../../core/auth';
+import { requireNotBanned } from '../../core/bans';
 import type { Env } from '../../core/env';
 import { requireGame } from '../../core/games';
 import { requireLocalWrite } from '../../core/guards';
@@ -69,6 +70,9 @@ async function checkAccess(req: Request, env: Env, url: URL): Promise<Checked> {
   // 4 つの操作を合わせて、トークンのプレイヤーで数える（偽れない鍵。断った要求は書かない・消さない）
   const limited = await consume(env.DB, RATE_LIMITS.saves, `${auth.claims.gameId}:${auth.claims.playerId}`);
   if (limited) return { ok: false, response: limited };
+  // 止めたプレイヤーは利用制限で数えた後に断る（トークンの g・p で引く。理由・期限は返さない）
+  const banned = await requireNotBanned(env, auth.claims);
+  if (banned) return { ok: false, response: banned };
   const gameId = url.searchParams.get('gameId');
   if (!validId(gameId)) return { ok: false, response: error('INVALID_ARGUMENT', 'Invalid gameId', 400) };
   if (auth.claims.gameId !== gameId) {

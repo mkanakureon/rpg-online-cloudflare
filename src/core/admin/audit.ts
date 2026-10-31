@@ -1,6 +1,7 @@
 // audit.ts — 監査のログ（表 admin_audit_log）の保持の期間・読む文・応答の 1 行の形。入出力を持たない。
 //
-// 監査の行は管理の書き込みの操作 1 回で 1 行（書く口は BAN・データ修正・イベントの定義の束で足す）。読み取りの口は監査に残さない。
+// 監査の行は管理の書き込みの操作 1 回で 1 行（いま書く口は BAN と BAN を解く口。データ修正・イベントの定義の束で足す）。読み取りの口は監査に残さない。
+// 書き込みの口の共通の確かめ（X-Admin-Actor の parseActor・本文の reason の parseReason）もここに置く。
 // before_json・after_json は保存した JSON を読み直して返す。トークン・管理の鍵・セーブの本文・IP は入れない。
 // 表は migrations/0011_admin.sql、形と決まりの正は docs/guides/working/admin-design.md §5。
 //
@@ -8,6 +9,22 @@
 
 /** 監査の行を残す日数（operations-security.md の 6。消す仕組みは分析の束で足し、それまでは残る）。 */
 export const AUDIT_RETENTION_DAYS = 365;
+
+/** X-Admin-Actor の形（自己申告のラベル。そのまま監査の actor に残す）。 */
+export const ACTOR_PATTERN = /^[a-zA-Z0-9_.@-]{1,64}$/;
+/** 本文の reason の長さ（UTF-16 の単位で数える）。 */
+export const MAX_REASON_LENGTH = 200;
+
+/** X-Admin-Actor の値を確かめる。外れ（無い・形の誤り）は null。 */
+export function parseActor(raw: string | null): string | null {
+  return raw !== null && ACTOR_PATTERN.test(raw) ? raw : null;
+}
+
+/** 本文の reason を確かめる。1〜MAX_REASON_LENGTH 文字の文字列で、空白だけでなければその値。外れは null。 */
+export function parseReason(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length < 1 || value.length > MAX_REASON_LENGTH || value.trim() === '') return null;
+  return value;
+}
 
 /** before が無ければ（NULL）全部から。続きがあるかを知るために limit + 1 行を引く。 */
 export const listAuditSql = `SELECT audit_id AS auditId, actor, action, target, before_json AS beforeJson, after_json AS afterJson,

@@ -1,7 +1,7 @@
 // events/index.ts — イベントのモジュール（GET /v1/events の一覧と POST /v1/events/{eventId}/claim の報酬の受け取り）。
 //
 // どちらも APP_ENV=local の門 → トークン → プレイヤーの利用制限（所持品・受領の履歴と合わせて RATE_LIMITS.rewards。429）→
-// gameId の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定 → 口ごとの確かめ の順（所持品の checkAccess と同じ形）。
+// 止めた印（403 PLAYER_BANNED）→ gameId の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定 → 口ごとの確かめ の順（所持品の checkAccess と同じ形）。
 // 期間と区切りはサーバーの時刻だけで決める（period.ts。本文・問い合わせ・Date の見出しの時刻は読まない）。受け取りは、受け取りの行・
 // 受領の履歴・残高の 3 文を 1 つの batch で書き、一意の鍵（プレイヤー・イベント・区切り）で二重を止める。2 回目は 200 で 1 回目と同じ本文。
 // 所持品の表にも書くが、inventory のモジュールは読み込まない（モジュールどうしは読み込まない）。順と SQL の正は
@@ -9,6 +9,7 @@
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
 import { requireAuth } from '../../core/auth';
+import { requireNotBanned } from '../../core/bans';
 import type { Env } from '../../core/env';
 import { requireGame } from '../../core/games';
 import { requireLocalWrite } from '../../core/guards';
@@ -71,6 +72,9 @@ async function checkAccess(req: Request, env: Env, url: URL, known: readonly str
   // 報酬の操作（所持品・受領の履歴・イベントの一覧・受け取り）を合わせて、トークンのプレイヤーで数える（偽れない鍵）
   const limited = await consume(env.DB, RATE_LIMITS.rewards, `${auth.claims.gameId}:${auth.claims.playerId}`);
   if (limited) return { ok: false, response: limited };
+  // 止めたプレイヤーは利用制限で数えた後に断る（トークンの g・p で引く。理由・期限は返さない）
+  const banned = await requireNotBanned(env, auth.claims);
+  if (banned) return { ok: false, response: banned };
   const gameId = url.searchParams.get('gameId');
   if (!validId(gameId)) return { ok: false, response: error('INVALID_ARGUMENT', 'Invalid gameId', 400) };
   if (auth.claims.gameId !== gameId) {

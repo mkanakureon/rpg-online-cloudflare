@@ -4,7 +4,9 @@
  * `設定の応答はスキーマに合う`・`マスターデータの応答はスキーマに合う` は設定配信の C1・C2 で足したもので docs/guides/working/config-design.md §7、
  * 操作の数の試験はイベントの E2 で置き換えたもので docs/guides/working/event-reward-design.md §8（エラーコードの数の試験も E2 で置き換え、
  * `エラーの応答はスキーマに書いた状態とエラーコードの組で返る` に E2 の 2 つの 409 の行を足した）、
- * `429の応答はスキーマに合う` とエラーコードの数の試験は利用制限の R1 で足し・置き換えたもので docs/guides/working/abuse-protection-design.md §7）。挙動（状態コード・データ）は
+ * `429の応答はスキーマに合う` とエラーコードの数の試験は利用制限の R1 で足し・置き換えたもので docs/guides/working/abuse-protection-design.md §7。
+ * エラーコードの数の試験は管理の O2 でも置き換え、`エラーの応答はスキーマに書いた状態とエラーコードの組で返る` に BAN したプレイヤーの行を足した。
+ * docs/guides/working/admin-design.md §9）。挙動（状態コード・データ）は
  * test/failure-*.test.ts が見る。ここはスキーマの側から見る。
  * L2 の試験は src/worker.ts の default.fetch を直に呼ぶ（docs/guides/working/failure-case-test-plan.md §2）。
  *
@@ -43,7 +45,7 @@ const spec = specJson as unknown as Spec;
 const methods = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'];
 const errorCodes = ['INVALID_ARGUMENT', 'NOT_FOUND', 'NOT_READY_FOR_PRODUCTION', 'INVALID_JSON', 'INTERNAL_ERROR',
   'UNAUTHENTICATED', 'TOKEN_EXPIRED', 'PERMISSION_DENIED', 'SAVE_CONFLICT', 'PAYLOAD_TOO_LARGE', 'SLOT_LIMIT_EXCEEDED', 'RATE_LIMITED',
-  'EVENT_NOT_ACTIVE', 'INVENTORY_LIMIT_EXCEEDED'];
+  'EVENT_NOT_ACTIVE', 'INVENTORY_LIMIT_EXCEEDED', 'PLAYER_BANNED'];
 
 // prepare が D1 のエラーに似た例外を投げる偽の DB（本物の D1 を壊さない）
 const brokenDB = {
@@ -237,7 +239,7 @@ describe('S1: スキーマのファイル', () => {
     expect(() => validate(1, { $ref: 'other.json#/X' }, root)).toThrow();
   });
 
-  it('スキーマのErrorCodeの列挙は14個のエラーコードと一致する', () => {
+  it('スキーマのErrorCodeの列挙は15個のエラーコードと一致する', () => {
     const codes = spec.components.schemas.ErrorCode.enum as string[];
     expect([...codes].sort()).toEqual([...errorCodes].sort());
   });
@@ -338,6 +340,14 @@ describe('S1: 応答がスキーマに合う', () => {
       ['SLOT_LIMIT_EXCEEDED', 'putSave', async () => putSave('one-more', await saveBody('x', 0), { authorization: await fillSlots('schema-slots') })],
       ['EVENT_NOT_ACTIVE', 'claimEventReward', async () => claimEvent('schema-ended')],
       ['INVENTORY_LIMIT_EXCEEDED', 'claimEventReward', async () => claimEvent('schema-big')],
+      ['PLAYER_BANNED', 'getInventory', async () => {
+        await baseEnv.DB.prepare("INSERT OR REPLACE INTO player_bans (game_id, player_id, reason, banned_at) VALUES ('demo-rpg', 'schema-banned', 'test', 1)").run();
+        const res = await worker.fetch(new Request(`${base}/v1/inventory?gameId=demo-rpg`, {
+          headers: { authorization: await bearer('demo-rpg', 'schema-banned') },
+        }), localEnv as never);
+        await baseEnv.DB.prepare("DELETE FROM player_bans WHERE game_id = 'demo-rpg' AND player_id = 'schema-banned'").run();
+        return res;
+      }],
       // p1 のスコアの数を上限まで埋めるので最後に置く（前の行の p1 の投稿を断らせない）
       ['RATE_LIMITED', 'submitScore', async () => { await fillRateLimit(baseEnv.DB, RATE_LIMITS.score, 'demo-rpg:p1'); return post('boss-score', valid); }],
     ];

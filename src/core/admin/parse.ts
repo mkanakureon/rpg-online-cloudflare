@@ -1,7 +1,8 @@
 // parse.ts — 管理の口の問い合わせと本文の確かめ。入出力を持たない（外れは使う側が 400 INVALID_ARGUMENT にする）。
 //
-// いまは監査を読む口の limit・before（受領の履歴の parseHistoryQuery と同じ形）と、プレイヤーを読む口の履歴の行の数。
-// BAN・増減・品目・イベントの定義の本文の確かめは、その束でここに足す。正は docs/guides/working/admin-design.md §2・§5。
+// いまは監査を読む口の limit・before（受領の履歴の parseHistoryQuery と同じ形）と、プレイヤーを読む口の履歴の行の数と、
+// BAN の本文の期限（expiresAt）。増減・品目・イベントの定義の本文の確かめは、その束でここに足す。
+// 書き込みの口に共通の X-Admin-Actor・reason は audit.ts。正は docs/guides/working/admin-design.md §2・§4・§5。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
 
@@ -32,4 +33,20 @@ export function parseAuditQuery(url: URL): PageQueryResult {
   const before = rawBefore === null ? null : positiveInteger(rawBefore);
   if (rawBefore !== null && before === null) return { ok: false, message: 'before must be a positive integer' };
   return { ok: true, value: { limit, before } };
+}
+
+export type ExpiresAtResult = { ok: true; value: number | null } | { ok: false; message: string };
+
+const isoUtc = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+
+/** BAN の本文の expiresAt を UNIX 秒にする（ミリ秒は切り捨て）。無いか null はずっと（null）。形の誤り・now より後でない値は外れ。 */
+export function parseExpiresAt(value: unknown, now: number): ExpiresAtResult {
+  if (value === undefined || value === null) return { ok: true, value: null };
+  const message = 'expiresAt must be a future ISO 8601 UTC time';
+  if (typeof value !== 'string' || !isoUtc.test(value)) return { ok: false, message };
+  const ms = Date.parse(value);
+  // 2026-02-30 のような日付は Date が繰り上げるので、読み直して同じ日時かで見分ける
+  if (!Number.isFinite(ms) || new Date(ms).toISOString().slice(0, 19) !== value.slice(0, 19)) return { ok: false, message };
+  const seconds = Math.floor(ms / 1000);
+  return seconds > now ? { ok: true, value: seconds } : { ok: false, message };
 }
