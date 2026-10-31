@@ -55,7 +55,7 @@
 
 Cloudflare の機能（2026-10-31 に公式の文書で確かめたものと、要確認のもの）:
 
-- **Cron Triggers**（`developers.cloudflare.com/workers/configuration/cron-triggers/` で確かめた）: Wrangler の設定ファイルの `triggers.crons` の配列に書く。入口は `scheduled(controller, env, ctx)`。**UTC の時刻で動く**。ローカルでは `wrangler dev` の起動中に `/cdn-cgi/local/scheduled` へ HTTP の要求を送ると動かせ、`?cron=...` で式を、`&time=...` で `scheduledTime` を渡せる（入れた wrangler 4.152.0 の本体にこの道の文字列があることも確かめた）。`--test-scheduled` の旗が要るかは**要確認**。アカウントあたりの Cron Triggers の数の上限は Workers の上限のページにあり、数は**要確認**（この設計は 1 つだけ使う）。
+- **Cron Triggers**（`developers.cloudflare.com/workers/configuration/cron-triggers/` で確かめた）: Wrangler の設定ファイルの `triggers.crons` の配列に書く。入口は `scheduled(controller, env, ctx)`。**UTC の時刻で動く**。ローカルでは `wrangler dev` の起動中に `/cdn-cgi/local/scheduled` へ HTTP の要求を送ると動かせ、`?cron=...` で式を、`&time=...` で `scheduledTime` を渡せる（入れた wrangler 4.152.0 の本体にこの道の文字列があることも確かめた）。`--test-scheduled` の旗は要らない（2026-10-31 に会話の側で、旗無しの `wrangler dev` の起動中に `/cdn-cgi/local/scheduled?cron=30+18+*+*+*` を送って動くことを確かめた）。アカウントあたりの Cron Triggers の数の上限は Workers の上限のページにあり、数は**要確認**（この設計は 1 つだけ使う）。
 - **D1 の上限**（`developers.cloudflare.com/d1/platform/limits/` で確かめた）: 1 つの文のバインドは 100 まで・1 つの文は 100 KB まで・1 つの文（と 1 つの `batch` 全体）は 30 秒まで・Worker の 1 回の起動で送れる文の数は Workers Paid で 1000・Free で 50（`batch` は 1 つと数える）。この数が `scheduled` の起動にも同じく効くかは**要確認**（§6 は Free の 50 に収める）。1 回の `batch` の文の数の上限は**要確認**のまま（`quest-design.md` §1）。
 - **D1 の料金の数え方**（`developers.cloudflare.com/workers/platform/pricing/` で確かめた）: 読んだ行（返した行でなく走査した行）・書いた行（`INSERT`・`UPDATE`・`DELETE`）・保存の量（表と索引）で数える。金額は書かない（`operations-security.md` の決まり）。衝突して何も入れなかった `INSERT OR IGNORE` を書いた行に数えるかは**要確認**。
 - **D1 の Time Travel**（`developers.cloudflare.com/d1/reference/time-travel/` で確かめた）: いつも有効で設定は要らない・追加の費用は無い・Workers Paid は 30 日・Free は 7 日まで分単位で戻せる。`wrangler d1 time-travel info` で印（bookmark）を見て、`wrangler d1 time-travel restore <DB> --timestamp=<UNIX 秒>` で戻す。**戻すのはその場で上書きする壊す操作**で、戻した時に返る印で取り消せる。30 日より長い保持は R2 への書き出しを案内している。ローカルの D1 で使えるかは**要確認**。
@@ -142,7 +142,7 @@ CREATE INDEX IF NOT EXISTS quest_claims_game_claimed ON quest_claims (game_id, c
 
 | 所 | 書き方 | いまの口への影響 |
 | --- | --- | --- |
-| トークンの要る 6 か所（saves・rankings の投稿・inventory・events・player-data・quests） | `consume(...)` を `consumeForPlayer(env.DB, RATE_LIMITS.<種類>, auth.claims)` に置き換える。今の 2 文（窓に足す・古い窓を消す）の `batch` の 3 文目に `INSERT OR IGNORE INTO player_activity_days (game_id, day, player_id) VALUES (?, ?, ?)` を足す（バインド 3） | **往復は増えない**（今の `batch` に 1 文足すだけ）。応答の形・状態・確かめの順は変えない。429 で断った要求も数える（数えてから断るのは `consume` と同じ） |
+| トークンの要る 6 か所（saves・rankings の投稿・inventory・events・player-data・quests） | `consume(...)` を `consumeForPlayer(env.DB, RATE_LIMITS.<種類>, auth.claims)` に置き換える。今の 2 文（窓に足す・古い窓を消す）の `batch` の 3 文目に `INSERT OR IGNORE INTO player_activity_days (game_id, day, player_id) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM games WHERE game_id = ?)` を足す（バインド 4。数えるのはゲームの登録を確かめる前なので、`games` への外部キーで登録の無いゲームのトークンが 404 でなく 500 にならないよう、登録のあるゲームだけに書く。Issue #47 で実装に合わせた） | **往復は増えない**（今の `batch` に 1 文足すだけ）。応答の形・状態・確かめの順は変えない。429 で断った要求も数える（数えてから断るのは `consume` と同じ） |
 | ゲストの発行（`src/core/accounts.ts`） | 今の `batch`（`accounts` → `game_players`）の 3 文目に `INSERT INTO player_activity_days (game_id, day, player_id, is_new) VALUES (?, ?, ?, 1)` | 往復は増えない。応答は変えない |
 
 - `consumeForPlayer` の鍵は今と同じ `'<gameId>:<playerId>'`（`rate_limit_counters` の行は変わらない）。
@@ -262,7 +262,7 @@ DELETE FROM <表> WHERE rowid IN (SELECT rowid FROM <表> WHERE <切り目の列
 ローカルでの確かめ:
 
 - 無人の回（試験）: `runCleanup(env.DB, now)` を `now` を渡して直に呼ぶ L2 と、`worker.scheduled(偽の controller, env, 偽の ctx)` を呼んで `ctx.waitUntil` に渡された約束を待つ L2 で確かめる（時計を動かさない。開発サーバーを起動しない）。
-- 会話の側（N2 の後）: `wrangler dev --local --var APP_ENV:local --var ADMIN_API_KEY:<鍵>` の起動中に `curl "http://127.0.0.1:8787/cdn-cgi/local/scheduled?cron=30+18+*+*+*"` を送り、ログに表ごとの消した数が出るのを見る（道は公式の文書で確かめた。`--test-scheduled` の旗が要るかは**要確認**で、要れば起動の旗に足す）。
+- 会話の側（N2 の後）: `wrangler dev --local --var APP_ENV:local --var ADMIN_API_KEY:<鍵>` の起動中に `curl "http://127.0.0.1:8787/cdn-cgi/local/scheduled?cron=30+18+*+*+*"` を送り、ログに表ごとの消した数が出るのを見る（道は公式の文書で確かめた。`--test-scheduled` の旗は要らないことを、2026-10-31 の N2 の後の通しで確かめた）。
 
 ## 8. バックアップと復元・費用アラート（コードにしない。手順書の置き場だけ）
 

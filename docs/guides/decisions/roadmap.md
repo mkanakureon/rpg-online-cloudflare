@@ -40,7 +40,7 @@
 - [x] 所持品・通貨・配布と受領の履歴（Issue #31・#32。消費の口は範囲の外）
 - [x] クエスト（達成条件・報酬・進捗）（`docs/guides/working/quest-design.md`。Issue #43〜#45。2026-10-31 に `npm run cli:smoke` と `node scripts/admin-cli.mjs smoke` と §8 の `put-quest`・値の直しの頭打ちで確認）
 - [x] 管理コマンドの最小機能（ログ・BAN・データ修正・イベントの定義）（`docs/guides/working/admin-design.md`。Issue #34〜#37。2026-10-31 に `node scripts/admin-cli.mjs smoke` と `npm run cli:smoke` で確認。管理画面は Phase 4）
-- [ ] 分析（DAU・継続率）・バックアップ・費用アラート
+- [x] 分析（DAU・継続率）・バックアップ・費用アラート（`docs/guides/working/analytics-design.md`。Issue #47〜#49。2026-10-31 に `npm run cli:smoke`・`node scripts/admin-cli.mjs smoke`・`analytics`・`analytics-grants`・`/cdn-cgi/local/scheduled` の掃除で確認。バックアップと費用アラートはコードにせず、手順は Phase 4 の説明書に置く）
 
 **完了条件:** MacとCLIだけで、イベントの開始から報酬の受け取りまでのシナリオを通せる。
 
