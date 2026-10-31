@@ -128,7 +128,7 @@ CREATE INDEX IF NOT EXISTS quest_claims_game_claimed ON quest_claims (game_id, c
 
 | ファイル | 中身 |
 | --- | --- |
-| `src/core/activity.ts`（N1） | `activityDay(now)`（`periodKey('daily', now, 0)` を読む）・`recordActivitySql`・`consumeForPlayer(db, rule, claims, now)`（`consume` と同じ 2 文に「遊んだ」の 1 文を足した 1 つの `batch`。断る・通すの決め方は `consume` と同じ関数 `decide` を使う） |
+| `src/core/activity.ts`（N1） | `activityDay(now)`（`periodKey('daily', now, 0)` を読む）・`recordActivitySql`・`consumeForPlayer(db, rule, claims, now)`（`consume` と同じ 2 文に「遊んだ」の 1 文を足した 1 つの `batch`。窓の 2 文は `src/core/rate-limit.ts` から書き出す 1 つの関数で作り、利用制限の SQL を 2 か所に書かない。断る・通すの決め方は `consume` と同じ関数 `decide` を使う） |
 | `src/core/analytics.ts`（N1・N3） | 入出力の無い関数: `parseAnalyticsRange(url, now)`（`from`・`to` の形と範囲）・`fillDays(from, to, rows)`（数の無い日を 0 で埋める）・`retentionCell(cohortDay, today, offset, count)`（まだ来ていない日は `null`）・SQL の文字列 |
 | `src/core/cleanup.ts`（N2） | `RETENTION_DAYS` の表・`cutoffFor(table, now)`（入出力の無い関数）・`cleanupStatements`・`runCleanup(db, now)`（表ごとに消して、消した数を返す） |
 | `src/core/admin/routes.ts`（N1・N3） | 読む口 2 つを足す（§5） |
@@ -138,7 +138,7 @@ CREATE INDEX IF NOT EXISTS quest_claims_game_claimed ON quest_claims (game_id, c
 
 ## 4. 「遊んだ」の記録（N1）
 
-**定義: その日（UTC）に、トークンの確かめ（`requireAuth`）を通った要求を 1 回でも送ったか、ゲストを発行した人を、その日に遊んだとする。** トークンの無い読み取り（お知らせ・ランキングの読み取り・設定）は誰か分からないので数えない。
+**定義: その日（UTC）に、トークンの確かめ（`requireAuth`）を通り、プレイヤーごとの利用制限の数え（`consume`）まで届いた要求を 1 回でも送ったか、ゲストを発行した人を、その日に遊んだとする。** トークンの無い読み取り（お知らせ・ランキングの読み取り・設定）は誰か分からないので数えない。ランキングの投稿だけは、本文の確かめが `requireAuth` と `consume` の間にあるので（`src/modules/rankings/index.ts`）、本文の誤り（400）で断られた投稿は数えない（ほかの 5 つは `requireAuth` の直後に数える）。
 
 | 所 | 書き方 | いまの口への影響 |
 | --- | --- | --- |
@@ -169,6 +169,7 @@ CREATE INDEX IF NOT EXISTS quest_claims_game_claimed ON quest_claims (game_id, c
 
 - `days` は `from`〜`to` の全部の日を昇順に並べ、数の無い日は 0（`fillDays`）。`activePlayers` がその日の DAU、`newPlayers` はその日に発行した人の数。
 - `cohorts` は同じ日の範囲で、その日に発行した人（`is_new = 1`）のうち N 日目（`RETENTION_OFFSETS`）に遊んだ人の数。**継続率**は `retained.dN / newPlayers` で、割り算はクライアント（管理コマンド）がする（0 で割らないため・数のまま渡すと合計し直せるため）。N 日目がサーバーの今日より後なら `null`（まだ決まらない）。`newPlayers` が 0 の日は行を出さない。
+- **トークンの期限による偏り**: ゲストのトークンは 30 日で切れ、更新の口が無い（`src/core/token.ts` の `TOKEN_TTL_SECONDS`・`account-design.md` §8 の決めること 3。切れたらゲストを発行し直し、前のプレイヤーを引き継がない）。そのため 30 日目は発行の時刻より前に遊んだときだけ数えられ、31 日目からは同じ人が新しい `playerId` で戻る。**D30 は低く、`newPlayers` は高く出る**（D1・D7 は効かない）。応答の形は変えず、管理コマンドの出力と `docs/api-contract.md` にこの偏りを書く。トークンの更新か、アカウントの引き継ぎが入るまでの限界（§16）。
 - 文（バインドはどちらも 3 つ: `gameId`・`from`・`to`）:
 
 ```sql
@@ -232,7 +233,7 @@ SELECT c.day, COUNT(*) AS new_players,
 | `event_claims` | **消さない** | — | `quest_claims` と同じ理由（`event-reward-design.md` §5 の一意の鍵） |
 | `inventory_ledger` | **消さない** | — | 残高の増減の証拠（問い合わせ・管理の取り消しの元）で、プレイヤーが読む受領の履歴そのもの。量は受け取りと管理の増減の数だけ |
 
-消さない 3 つの表の量が問題になったら、Phase 4 の利用上限・コストモデルの説明（§15）で見積もり、「区切りの過去の受け取りの行と履歴を同じ日数で一緒に消す」形を足す（§16）。
+`RETENTION_DAYS` の表には消す表だけを載せ、消さない 3 つの表は行を作らない（消さない理由はファイルの頭書きに書く）。消さない 3 つの表の量が問題になったら、Phase 4 の利用上限・コストモデルの説明（§15）で見積もり、「区切りの過去の受け取りの行と履歴を同じ日数で一緒に消す」形を足す（§16）。
 
 ### 消し方
 
@@ -277,12 +278,12 @@ DELETE FROM <表> WHERE rowid IN (SELECT rowid FROM <表> WHERE <切り目の列
 
 | 所 | 決まり |
 | --- | --- |
-| 認証 | 「遊んだ」の記録は `requireAuth` を通った後だけ書く。読む口は管理の鍵（今の管理の口と同じ）。プレイヤーのトークンでは読めない |
+| 認証 | 「遊んだ」の記録は `requireAuth` を通った後の `consume` の所でだけ書く（§4）。読む口は管理の鍵（今の管理の口と同じ）。プレイヤーのトークンでは読めない |
 | `APP_ENV` | `requireLocalWrite` の守りと `wrangler.jsonc` の既定 `APP_ENV=disabled` を外さない（`CLAUDE.md`）。記録はトークンの要る口（既に `local` のときだけ通る）の中なので、`local` 以外では書かれない。読む口は今の管理の口と同じく `local` 以外で 403 `NOT_READY_FOR_PRODUCTION`。`scheduled` の掃除も `local` 以外では消さない（守りを外す時にユーザーが一緒に決める。`admin-design.md` §10） |
 | 利用制限 | 新しい `RATE_LIMITS` の行を足さない。読む口は今の `RATE_LIMITS.admin`（IP ごと）を数える。記録はトークンの要る口の今の決まりの中（`consume` の数え方を変えない） |
 | `game_modules` | 機能の名前を足さない（「遊んだ」の記録と掃除は全部のゲームに効く仕組みで、利用制限と同じく core）。demo-rpg の設定とモジュールの一覧は変わらない |
 | エラーコード | 足さない。読む口は今の管理のコード（400 `INVALID_ARGUMENT`・404 `NOT_FOUND`・401・403・429・500）だけ。ゲームのクライアントのスキーマ `openapi/rpg-online.v1.json` は変えない。管理のスキーマ `openapi/rpg-online-admin.v1.json` には操作を足すが ErrorCode の列挙は変えない |
-| 文書（実装の束で直す） | `docs/api-contract.md` の「管理の API」に 2 つの読む口（N1・N3）と、プレイヤーデータの `Idempotency-Key` の期限 30 日（N2）。`docs/guides/working/architecture.md` に `scheduled` の入口（N2）。`admin-design.md` §5 の「消す仕組みは分析の束で」の文を、この設計書の §6 を指す文に置き換える（N2）。`roadmap.md` の Phase 2 の行は N3 の後に印を付ける（統合のセッション） |
+| 文書（実装の束で直す） | `docs/api-contract.md` の「管理の API」に 2 つの読む口（N1・N3）と、プレイヤーデータの `Idempotency-Key` の期限 30 日（N2）。`docs/guides/working/architecture.md` に `scheduled` の入口（N2）。`admin-design.md` §5 の「消す仕組みは分析の束で」の文・`player-data-design.md` §6 の鍵の期限の「掃除は §15 の分析で作る」の文（30 日にする）・`quest-design.md` §3 と §16 の掃除の行を、この設計書の §6 を指す文に置き換える（N2）。`roadmap.md` の Phase 2 の行は N3 の後に印を付ける（統合のセッション） |
 
 ## 10. 試験の名前の表
 
@@ -370,7 +371,7 @@ DELETE FROM <表> WHERE rowid IN (SELECT rowid FROM <表> WHERE <切り目の列
 | 5 | D1 だけか、Workers Analytics Engine などを使うか | A: **D1 だけ**。B: Analytics Engine に書き、読むのは SQL の API。C: 外の分析の道具（ログの転送） | **A**。ローカルの試験で確かめられ、パッケージも設定も足さない。B は書き込み・読む口・ローカルでの動きが**要確認**で、読むのにアカウントの鍵が要り、`wrangler.jsonc` に結び付けを足す。C は Phase 4 の配布で使う人ごとに道具が違う |
 | 6 | Cron Triggers を入れるか・掃除と集計を同じ入口でやるか | A: **入れる（1 日 1 回・UTC の 18:30）。入口は 1 つの `scheduled` で、今は掃除だけ。まとめの表を足すときも同じ入口に足す**。B: 入れず、管理の口に「掃除する」書き込みの口を足して人が呼ぶ。C: 要求の時に少しずつ消す（`consume` の古い窓の消し方と同じ） | **A**。`admin-design.md`・`player-data-design.md`・`quest-design.md` がここへ送った掃除を 1 か所でできる。B は人が忘れると消えず、監査に残る書き込みの口が増える。C は全部の要求に文が増え、表ごとの切り目がばらける |
 | 7 | 日の区切り | A: **UTC の 0 時（全部のゲームで同じ）。応答に `timezone: "UTC"` を書く**。B: ゲームごとの時差（`games` に列を足す・イベントの `reset_offset_minutes` と同じ範囲）。C: 記録に時刻を持ち、読む時に時差を指定する | **A**。Cron Triggers も UTC で動き、記録の日付が書いた時に決まる。B は時差を変えると過去の記録と境目がずれ、`games` に `ALTER TABLE` か新しい表が要る。C は 1 人 1 日 1 行の印にできず、行が要求の数だけ増える。日本の作者には「0 時が日本の 9 時」と管理コマンドの出力に書く。要るゲームが出たら B を新しい表で足す（§16） |
-| 8 | 継続率の定義 | A: **発行の日を 0 日目とし、ちょうど 1・7・30 日目に遊んだ人の数（D1・D7・D30）。割り算はクライアント**。B: N 日目「以降」に 1 回でも戻った人（rolling）。C: 週ごとのまとまり（週の継続） | **A**。よく使われる形で、1 つの文で数えられる。数のまま返すと日をまたいで足し直せる。B・C は同じ表から後で足せる |
+| 8 | 継続率の定義 | A: **発行の日を 0 日目とし、ちょうど 1・7・30 日目に遊んだ人の数（D1・D7・D30）。割り算はクライアント**。B: N 日目「以降」に 1 回でも戻った人（rolling）。C: 週ごとのまとまり（週の継続） | **A**。よく使われる形で、1 つの文で数えられる。数のまま返すと日をまたいで足し直せる。D30 はトークンの 30 日の期限で低く出る（§5）が、出さないと後で更新の口が入ったときに形を変えることになるので、形は残して偏りを書く。B・C は同じ表から後で足せる |
 | 9 | 保持の日数と、消さない表 | A: **§6 の表（監査 365・書き込みの記録 30・区切りの値 35・利用制限 1・遊んだ印 400。受け取りの行と受領の履歴は消さない）**。B: 全部の表を同じ日数（365）で消す。C: 受け取りの行のうちデイリー・週間の過去の区切りと、その履歴を 400 日で消す | **A**。消すと二重になる行・残高の証拠を残し、意味の無くなった行だけ消す。B は一度きりのクエストの鍵を消してもう一度受け取れる道を作る。C は履歴の `source_id` と受け取りの行を一緒に消す手続きが要り、量が問題になってから足す（§16） |
 | 10 | 読む口と管理コマンド | A: **管理の口に読む口を 2 つ（`/v1/admin/analytics/players`・`/v1/admin/analytics/grants`）。`scripts/admin-cli.mjs` に `analytics`・`analytics-grants`。`smoke` は変えない**。B: 管理の口を足さず、`wrangler d1 execute` の SQL を手順書に書く。C: 1 つの口にまとめる | **A**。管理の鍵・利用制限・確かめの順をそのまま使え、試験で形を見張れる。`smoke` の流れは既存の試験 `管理コマンドと同じ流れで付与と取り消しとBANとイベントの定義が監査のログに残る` が見張っていて、変えると期待を書き換えることになる。B は本番の DB に直に SQL を流す手順になり、個人を出さない決まりを守れない。C は束を分けられず、応答が大きくなる |
 | 11 | 集計に個人を出すか | A: **出さない（数と日付と品目・クエストの ID だけ）**。B: 遊んだ人の ID の一覧を返す（管理の読み取りに渡す）。C: 小さい数を丸めて伏せる | **A**。1 人を見るのは今のプレイヤーを読む口で足りる。B は集計の口が個人の一覧の口になる（`operations-security.md` の 6 の最小化に合わない）。C は管理の鍵を持つ人に伏せても今の口で読め、意味が薄い（§16） |
@@ -478,7 +479,9 @@ check(/"crons"\s*:\s*\[\s*"30 18 \* \* \*"\s*\]/.test(wr), 'wrangler.jsonc に�
 check(/scheduled/.test(read('src/worker.ts')), 'Worker の入口が scheduled を書き出す');
 const cleanup = read('src/core/cleanup.ts');
 check(/AUDIT_RETENTION_DAYS/.test(cleanup), '掃除が監査のログの保持の定数を読む');
-check(!/quest_claims|event_claims|inventory_ledger/.test(cleanup), '掃除の文が受け取りの行と受領の履歴を指さない');
+// 頭書きのコメントには消さない表の名前が出てよいので、保持の日数の表（RETENTION_DAYS の中身）だけを見る
+const retention = (cleanup.match(/RETENTION_DAYS[^=]*=\s*\{[\s\S]*?\n\}/) || [''])[0];
+check(retention.length > 0 && !/quest_claims|event_claims|inventory_ledger/.test(retention), '保持の日数の表に受け取りの行と受領の履歴が無い');
 runTests();
 requireTests([
   '掃除の切り目は表ごとの保持の日数から決まり監査のログは保持の定数を読む',
@@ -562,6 +565,7 @@ done();
 | ゲームごとの時差での日の区切り | 新しい表 `game_analytics_settings(game_id, day_offset_minutes)` を足し、記録の日付をその時差で決める。過去の行は UTC のまま（境目がずれることを応答に書く） |
 | 日ごとにまとめた表（集計が遅くなったとき） | `daily_stats(game_id, day, active_players, new_players, d1, d7, d30)` を足し、§7 の `scheduled` で前の日の分を書く。読む口はまとめた表と今日の数え上げを合わせる |
 | WAU・MAU・rolling の継続 | 同じ `player_activity_days` から数える文を足す（表を変えない） |
+| トークンの期限（30 日）をまたぐ継続（D30 より先・同じ人の数え直し） | トークンの更新の口か、アカウントの引き継ぎ（`account-design.md` の範囲の外）が入ったら、偏りの注意を外す。表と応答の形は変えない |
 | `0017` より前に発行したプレイヤーの初めての日 | さかのぼらない（`game_players.created_at` から作れるが、遊んだ日は残っていない）。記録は N1 から |
 | 小さい数を伏せる（k 匿名） | 公開の画面に出すとき（Phase 4 の管理画面）に、閾値より小さい数を丸める関数を `src/core/analytics.ts` に足す |
 | 受け取りの行・受領の履歴の掃除 | 量が問題になったら、デイリー・週間の過去の区切りの受け取りの行と、それを `source_id` で指す履歴の行を同じ日数で、1 つの `batch` で消す形を足す（一度きりの行は消さない） |
