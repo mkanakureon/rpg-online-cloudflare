@@ -190,11 +190,12 @@ export const playerData: GameModule = {
           return error('IDEMPOTENCY_KEY_REUSED', 'Idempotency-Key was used for a different request', 422);
         }
         if (row.resultJson === null) throw new Error('Player data write has no result');
-        const result = JSON.parse(row.resultJson) as { values: WrittenValue[]; unlocked: UnlockedRow[] };
+        // 実績の欄が入る前（0014 の前）の記録の写しには unlocked が無い。その書き込みで解いた実績は無いので空にする
+        const result = JSON.parse(row.resultJson) as { values: WrittenValue[]; unlocked?: UnlockedRow[] };
         const values = result.values
           .map((v) => ({ key: v.key, value: v.value }))
           .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-        return json({ gameId, writeId: row.writeRef, values, unlocked: unlockedOf(result.unlocked) });
+        return json({ gameId, writeId: row.writeRef, values, unlocked: unlockedOf(result.unlocked ?? []) });
       },
     },
   ],
