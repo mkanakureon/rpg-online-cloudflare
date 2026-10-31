@@ -3,14 +3,15 @@
 // いまは監査を読む口の limit・before（受領の履歴の parseHistoryQuery と同じ形）と、プレイヤーを読む口の履歴の行の数と、
 // BAN の本文の期限（expiresAt）と、所持品と通貨の増減の本文（itemId・delta）と、品目の種類（parseItemKind）とイベントの定義の本文
 // （parseEventDefinition。区切り〔名前は src/core/period.ts の EVENT_KINDS〕・期間・時差・報酬の行）と、プレイヤーデータのキーの宣言（parsePlayerDataKey。表 player_data_keys の
-// CHECK と同じ決まりを先に見て、DB の CHECK で落ちて 500 にしない）・実績の宣言（parseAchievement）・値を置く本文（parsePlayerDataValue）。
+// CHECK と同じ決まりを先に見て、DB の CHECK で落ちて 500 にしない）・実績の宣言（parseAchievement）・値を置く本文（parsePlayerDataValue）と、
+// クエストの定義の本文（parseQuestDefinition。イベントの定義の決まりにキーと閾値を足す）・プレイヤーを読む口のクエストの受け取りの行の数。
 // 書き込みの口に共通の X-Admin-Actor・reason は audit.ts。
-// 正は docs/guides/working/admin-design.md §2・§4〜§7 と docs/guides/working/player-data-design.md §8。
+// 正は docs/guides/working/admin-design.md §2・§4〜§7 と docs/guides/working/player-data-design.md §8 と docs/guides/working/quest-design.md §8。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
 import { validId } from '../ids';
 import { ITEM_KINDS, MAX_ITEM_AMOUNT, MAX_REWARD_LINES, type ItemKind } from '../inventory';
-import { EVENT_KINDS, type EventKind } from '../period';
+import { EVENT_KINDS, type EventKind, type QuestKind } from '../period';
 import { MAX_PLAYER_DATA_VALUE, PLAYER_DATA_MODES, type PlayerDataKey, type PlayerDataMode } from '../player-data';
 
 /** 監査を読む口の limit の既定と上限。 */
@@ -131,6 +132,25 @@ type Parsed<T> = { ok: true; value: T } | { ok: false; message: string };
 /** lo〜hi の整数か。 */
 function integerWithin(value: unknown, lo: number, hi: number): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= lo && value <= hi;
+}
+
+/** プレイヤーを読む口が返すクエストの受け取りの行の数（新しい順）。 */
+export const PLAYER_QUEST_CLAIM_ROWS = 20;
+
+export type QuestDefinition = EventDefinition & { kind: QuestKind; key: string; threshold: number };
+
+/**
+ * クエストの定義の本文を確かめる。イベントの定義と同じ決まり（parseEventDefinition）に、key が ID の形・threshold が
+ * 1〜MAX_PLAYER_DATA_VALUE の整数を足す。キーの宣言・書き方・区切りの宣言・品目・受け取りの有無は DB を引く使う側が見る。
+ */
+export function parseQuestDefinition(body: Record<string, unknown>): Parsed<QuestDefinition> {
+  const event = parseEventDefinition(body);
+  if (!event.ok) return event;
+  if (!validId(body.key)) return { ok: false, message: 'Invalid key' };
+  if (!integerWithin(body.threshold, 1, MAX_PLAYER_DATA_VALUE)) {
+    return { ok: false, message: `threshold must be an integer 1..${MAX_PLAYER_DATA_VALUE}` };
+  }
+  return { ok: true, value: { ...event.value, key: body.key, threshold: body.threshold } };
 }
 
 /**

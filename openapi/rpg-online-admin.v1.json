@@ -15,7 +15,7 @@
     "/v1/admin/players/{playerId}": {
       "get": {
         "operationId": "adminGetPlayer",
-        "summary": "1 人のプレイヤーの所持品・受領の履歴（新しい順に 20 行）・セーブの一覧・スコア・プレイヤーデータ（値と解いた実績）を読む。セーブの本文とチェックサムは返さない。監査に残さない",
+        "summary": "1 人のプレイヤーの所持品・受領の履歴（新しい順に 20 行）・セーブの一覧・スコア・プレイヤーデータ（値と解いた実績）・クエストの受け取り（新しい順に 20 行）を読む。セーブの本文とチェックサムは返さない。監査に残さない",
         "security": [
           {
             "adminKey": []
@@ -2704,6 +2704,226 @@
           }
         }
       }
+    },
+    "/v1/admin/quests/{questId}": {
+      "put": {
+        "operationId": "adminPutQuest",
+        "summary": "クエストの定義（区切り・期間・時差・見るキーと閾値・報酬）を入れる・置き換える。監査の行（quest.put。前と後の定義）・区切りの宣言（デイリー・週間のクエストで、キーに同じ区切りの宣言が無いときだけ player_data_key_periods に入れる）・クエスト・報酬の行は 1 つの batch。受け取りのあるクエストは kind・startsAt・resetOffsetMinutes・key を変えられない。クエストを消す口・受け取りを直す口は無い",
+        "security": [
+          {
+            "adminKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "questId",
+            "in": "path",
+            "required": true,
+            "description": "クエストの ID。形が外れればどのルートにも当たらず 404 NOT_FOUND（Endpoint not found）。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": true,
+            "description": "登録のあるゲーム。形が外れれば 400 INVALID_ARGUMENT、登録が無ければ 404 NOT_FOUND（Unknown game）。機能の設定は見ない。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "X-Admin-Actor",
+            "in": "header",
+            "required": true,
+            "description": "操作した人のラベル（^[a-zA-Z0-9_.@-]{1,64}$。自己申告で、そのまま監査のログに残る）。無い・形の外れは 400 INVALID_ARGUMENT。",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.@-]{1,64}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminQuestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "入れた定義（startsAt・endsAt は秒まで、rewards は品目の ID の昇順）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminQuestResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "gameId・X-Admin-Actor・reason・定義の本文（kind・startsAt < endsAt・resetOffsetMinutes・key の形・threshold が 1〜1000000000・rewards の行の数と重なり・amount）の外れか、デイリー・週間のクエストのキーが add でない・キーに同じ区切りの宣言が違う時差である・受け取りのあるクエストの kind・startsAt・resetOffsetMinutes・key を変えようとした・新しいクエストで宣言の数が 200（MAX_QUESTS）を超える（INVALID_ARGUMENT）か、本文が JSON でない（INVALID_JSON）。何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT",
+              "INVALID_JSON"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization が無い・Bearer でない・管理の鍵と違う（プレイヤーのトークンも含む）。外れた理由は返さない（message は Invalid admin credentials）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（正しい管理の鍵があっても断る。鍵を見る前・数える前）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "登録の無いゲーム（Unknown game）か、見るキーの宣言がそのゲームに無い（Unknown key）か、報酬の品目がそのゲームに無い（Unknown item）か、形の外れたパス（Endpoint not found）。キー・品目のときは何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "管理の口の利用制限を超えた（IP ごと。正しい鍵でも数え、鍵を確かめる前に断る）。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・管理の鍵 ADMIN_API_KEY が無いか 32 文字未満）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2846,7 +3066,8 @@
           "history",
           "saves",
           "rankings",
-          "playerData"
+          "playerData",
+          "questClaims"
         ],
         "properties": {
           "gameId": {
@@ -2895,6 +3116,14 @@
           "playerData": {
             "$ref": "#/components/schemas/AdminPlayerData",
             "description": "プレイヤーデータの値と解いた実績（いつも載る）。"
+          },
+          "questClaims": {
+            "type": "array",
+            "maxItems": 20,
+            "description": "クエストの受け取り（新しい順に 20 行まで。いつも載る。無ければ空の配列）。",
+            "items": {
+              "$ref": "#/components/schemas/AdminQuestClaim"
+            }
           }
         }
       },
@@ -3674,6 +3903,154 @@
             "type": "integer",
             "minimum": 1,
             "description": "取り消した操作の監査の行の番号。"
+          }
+        }
+      },
+      "AdminQuestKind": {
+        "type": "string",
+        "enum": [
+          "once",
+          "daily",
+          "weekly"
+        ],
+        "description": "クエストの区切り（一度きり・デイリー・週間。イベントの区切りと同じ名前）。"
+      },
+      "AdminQuestRequest": {
+        "type": "object",
+        "required": [
+          "kind",
+          "startsAt",
+          "endsAt",
+          "key",
+          "threshold",
+          "rewards",
+          "reason"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/AdminQuestKind"
+          },
+          "startsAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$",
+            "description": "始まり（ISO 8601 の UTC。ミリ秒は切り捨て）。endsAt より前。"
+          },
+          "endsAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$",
+            "description": "終わり（含まない。ISO 8601 の UTC。ミリ秒は切り捨て）。"
+          },
+          "resetOffsetMinutes": {
+            "type": "integer",
+            "minimum": -720,
+            "maximum": 840,
+            "default": 0,
+            "description": "区切りの時差（分。0 は UTC）。デイリー・週間のクエストは、キーの同じ区切りの宣言と同じ時差であること。"
+          },
+          "key": {
+            "$ref": "#/components/schemas/Id",
+            "description": "見るプレイヤーデータのキー（そのゲームに宣言があること。デイリー・週間は add のキーだけ）。"
+          },
+          "threshold": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000,
+            "description": "達成の閾値（進捗がこれ以上で受け取れる）。"
+          },
+          "rewards": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "$ref": "#/components/schemas/AdminEventReward"
+            },
+            "description": "報酬の行（1〜10 行。品目が重ならない。品目はそのゲームにあること）。"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/AdminReason"
+          }
+        }
+      },
+      "AdminQuestResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "questId",
+          "kind",
+          "startsAt",
+          "endsAt",
+          "resetOffsetMinutes",
+          "key",
+          "threshold",
+          "rewards"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "questId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AdminQuestKind"
+          },
+          "startsAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+          },
+          "endsAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+          },
+          "resetOffsetMinutes": {
+            "type": "integer",
+            "minimum": -720,
+            "maximum": 840
+          },
+          "key": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "threshold": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000
+          },
+          "rewards": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "$ref": "#/components/schemas/AdminEventReward"
+            }
+          }
+        }
+      },
+      "AdminQuestClaim": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "questId",
+          "periodKey",
+          "claimId",
+          "claimedAt"
+        ],
+        "properties": {
+          "questId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "periodKey": {
+            "type": "string",
+            "minLength": 1,
+            "description": "区切りの鍵（一度きりは 'once'、デイリーは時差の日付、週間は時差の月曜の日付）。"
+          },
+          "claimId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "受け取りの ID（受領の履歴の sourceId と同じ値）。"
+          },
+          "claimedAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$",
+            "description": "受け取った時刻（サーバーの時刻）。"
           }
         }
       }

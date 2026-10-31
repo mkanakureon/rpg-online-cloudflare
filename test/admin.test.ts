@@ -7,6 +7,8 @@
  * 要求の形（scripts/admin-requests.mjs。smoke の流れ runSmoke に src/worker.ts の fetch を渡す）の試験。
  * プレイヤーデータ U3: プレイヤーを読む口の playerData と、キーと実績の宣言・値を置く・実績の取り消しの 4 つの口（名前と期待する結果の正は
  * docs/guides/working/player-data-design.md §10 の U3 の行）。プレイヤーデータの表は U3 の describe の前後で消す。
+ * クエスト Q3: クエストの定義の口（PUT /v1/admin/quests/{questId}・MAX_QUESTS）・プレイヤーを読む口の questClaims・値を置く口の区切りの値の
+ * 頭打ち（名前と期待する結果の正は docs/guides/working/quest-design.md §10 の Q3 の行）。クエストと区切りの表は Q3 の describe の前後で消す。
  * 名前と期待する結果の正は docs/guides/working/admin-design.md §8 の O1・O3・O4 の行。L1 は関数を直に呼ぶ。L2 は src/worker.ts の
  * default.fetch を直に呼ぶ。管理の鍵は試験の中で作る秘密でない値（'a'.repeat(32)）で、鍵の無い場合は ADMIN_API_KEY: undefined を
  * env に明示する（試験のランタイムが .dev.vars を読み込んでも、人の鍵に頼らない）。試験のゲームは専用の adm-game。
@@ -22,16 +24,18 @@ import { parseAdjustment, parseEventDefinition } from '../src/core/admin/parse';
 import { adminRoutes } from '../src/core/admin/routes';
 import { MAX_ITEM_AMOUNT, MAX_REWARD_LINES } from '../src/core/inventory';
 import { LEDGER_SOURCES } from '../src/core/ledger';
+import { periodKey } from '../src/core/period';
 import { MAX_PLAYER_DATA_KEYS } from '../src/core/player-data';
+import { MAX_QUESTS } from '../src/core/quests';
 import { NO_IP_SUBJECT } from '../src/core/rate-limit';
 import { RATE_LIMITS } from '../src/core/rate-limit-policy';
 import adminSpecJson from '../openapi/rpg-online-admin.v1.json';
 import {
-  SMOKE_AUDIT_ACTIONS, adminRequest, auditOp, playerOp, putAchievementOp, putDataKeyOp, putEventOp, putItemOp, revokeAchievementOp, runSmoke,
-  setDataOp, type AdminOp, type EventDefinitionBody,
+  SMOKE_AUDIT_ACTIONS, adminRequest, auditOp, playerOp, putAchievementOp, putDataKeyOp, putEventOp, putItemOp, putQuestOp, revokeAchievementOp,
+  runSmoke, setDataOp, type AdminOp, type EventDefinitionBody, type QuestDefinitionBody,
 } from '../scripts/admin-requests.mjs';
 import {
-  authHeaders, claimPath, eventsPath, guestRequest, inventoryPath, playerDataHeaders, playerDataPath, playerDataWrite,
+  authHeaders, claimPath, eventsPath, guestRequest, inventoryPath, playerDataHeaders, playerDataPath, playerDataWrite, questClaimPath, questsPath,
 } from '../scripts/cli-requests.mjs';
 import { registerGame } from './support/games';
 import { countRateLimitRows, fillRateLimit, resetRateLimits } from './support/rate-limits';
@@ -1255,5 +1259,351 @@ describe('U3 プレイヤーデータの管理', () => {
       ['player-data-key.put', `player-data-key:${key}`, null, { mode: 'add', maxValue: 1000, maxDelta: 10 }],
     ]);
     expect(audit.items.every((a) => a.actor === 'local-admin')).toBe(true);
+  });
+});
+
+// ---- Q3 クエストの管理 ----
+
+type ListedQuest = { questId: string; kind: string; endsAt: string; key: string; threshold: number; progress: number; completed: boolean;
+  claimed: boolean; periodKey: string; rewards: Array<{ itemId: string; amount: number }> };
+type QuestClaimItem = { questId: string; periodKey: string; claimId: string; claimedAt: string };
+const questSpec = '/v1/admin/quests/{questId}';
+const nowSeconds = () => Math.floor(Date.now() / 1000);
+/** いま開いている一度きりのクエストの定義（1 時間前から 1 日後まで。kills が 3 以上・報酬は gold 50）。 */
+function questDefinition(overrides: Partial<QuestDefinitionBody> = {}): QuestDefinitionBody {
+  const now = nowSeconds();
+  return { kind: 'once', startsAt: isoAt(now - 3600), endsAt: isoAt(now + 86_400), resetOffsetMinutes: 0, key: 'kills', threshold: 3,
+    rewards: [{ itemId: 'gold', amount: 50 }], reason: '試験のクエスト', ...overrides };
+}
+const putQuest = (questId: string, definition: QuestDefinitionBody, gameId = game, e: TestEnv = adminEnv) =>
+  adminSend(putQuestOp(questId, definition, gameId), e);
+/** クエストと区切りの表を消す（demo-rpg の手本のクエスト first-hunt・daily-slimes と slimes-defeated のデイリーの宣言は残す）。 */
+async function resetQuests(): Promise<void> {
+  await baseEnv.DB.batch([
+    baseEnv.DB.prepare('DELETE FROM quest_claims'),
+    baseEnv.DB.prepare('DELETE FROM player_data_period_values'),
+    baseEnv.DB.prepare("DELETE FROM quests WHERE NOT (game_id = 'demo-rpg' AND quest_id IN ('first-hunt', 'daily-slimes'))"),
+    baseEnv.DB.prepare("DELETE FROM player_data_key_periods WHERE NOT (game_id = 'demo-rpg' AND key = 'slimes-defeated' AND kind = 'daily')"),
+  ]);
+  await resetPlayerData();
+}
+/** クエスト・プレイヤーデータ・所持品を使う設定にして、ゲストを発行する。 */
+async function questGuest(): Promise<{ token: string; playerId: string }> {
+  await registerGame(baseEnv.DB, game, ['player-data', 'quests', 'inventory']);
+  return dataGuest();
+}
+async function listQuests(token: string, gameId = game): Promise<ListedQuest[]> {
+  const res = await worker.fetch(new Request(`${base}${questsPath(gameId)}`, { headers: authHeaders(token) }), adminEnv as never);
+  expect(res.status).toBe(200);
+  return (await res.json<{ items: ListedQuest[] }>()).items;
+}
+const claimQuest = (token: string, questId: string, gameId = game) =>
+  worker.fetch(new Request(`${base}${questClaimPath(questId, gameId)}`, { method: 'POST', headers: authHeaders(token) }), adminEnv as never);
+async function putClaim(playerId: string, questId: string, period: string, claimedAt: number, claimId = crypto.randomUUID()): Promise<string> {
+  await baseEnv.DB.prepare('INSERT INTO quest_claims (game_id, player_id, quest_id, period_key, claim_id, claimed_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .bind(game, playerId, questId, period, claimId, claimedAt).run();
+  return claimId;
+}
+async function putPeriodValue(playerId: string, key: string, kind: string, period: string, value: number): Promise<void> {
+  await baseEnv.DB.prepare('INSERT INTO player_data_period_values (game_id, player_id, key, kind, period_key, value, updated_at) '
+    + 'VALUES (?, ?, ?, ?, ?, ?, ?)').bind(game, playerId, key, kind, period, value, nowSeconds()).run();
+}
+async function periodValues(): Promise<unknown[]> {
+  return (await baseEnv.DB.prepare('SELECT player_id AS playerId, key, kind, period_key AS periodKey, value FROM player_data_period_values '
+    + 'WHERE game_id = ? ORDER BY player_id, key, kind, period_key').bind(game).all()).results;
+}
+async function keyPeriods(): Promise<unknown[]> {
+  return (await baseEnv.DB.prepare('SELECT key, kind, reset_offset_minutes AS offsetMinutes FROM player_data_key_periods WHERE game_id = ? '
+    + 'ORDER BY key, kind').bind(game).all()).results;
+}
+/** 何も書いていないことを見るための行（クエスト・報酬・区切りの宣言・監査）。 */
+async function questSnapshot(): Promise<unknown[]> {
+  const all = (sql: string) => baseEnv.DB.prepare(sql).bind(game).all().then((r) => r.results);
+  return [
+    await all('SELECT quest_id, kind, starts_at, ends_at, reset_offset_minutes, key, threshold FROM quests WHERE game_id = ? ORDER BY quest_id'),
+    await all('SELECT quest_id, item_id, amount FROM quest_rewards WHERE game_id = ? ORDER BY quest_id, item_id'),
+    await keyPeriods(),
+    await countRows('admin_audit_log'),
+  ];
+}
+
+describe('Q3 クエストの管理', () => {
+  beforeEach(async () => {
+    await resetQuests();
+    await declareData();
+  });
+  afterEach(resetQuests);
+
+  it('管理の口でクエストを定義するとプレイヤーの一覧に出て監査に前と後が残る', async () => {
+    const { token } = await questGuest();
+    const definition = questDefinition();
+    const res = await putQuest('hunt', definition);
+    expect(res.status).toBe(200);
+    const first = { kind: 'once', startsAt: definition.startsAt, endsAt: definition.endsAt, resetOffsetMinutes: 0, key: 'kills', threshold: 3,
+      rewards: [{ itemId: 'gold', amount: 50 }] };
+    expect(await res.json()).toEqual({ gameId: game, questId: 'hunt', ...first });
+    expect((await listQuests(token)).find((q) => q.questId === 'hunt')).toMatchObject({ kind: 'once', key: 'kills', threshold: 3, progress: 0,
+      completed: false, claimed: false, rewards: [{ itemId: 'gold', amount: 50 }] });
+    // 定義を変えてもう一度（閾値と報酬を置き換える）
+    const changed = { ...definition, threshold: 5, rewards: [{ itemId: 'potion', amount: 2 }, { itemId: 'gold', amount: 10 }], reason: '閾値を上げる' };
+    const again = await putQuest('hunt', changed);
+    expect(again.status).toBe(200);
+    const second = { ...first, threshold: 5, rewards: [{ itemId: 'gold', amount: 10 }, { itemId: 'potion', amount: 2 }] };
+    expect(await again.json()).toEqual({ gameId: game, questId: 'hunt', ...second });
+    expect((await listQuests(token)).find((q) => q.questId === 'hunt')).toMatchObject({ threshold: 5, rewards: second.rewards });
+    const rows = await baseEnv.DB.prepare('SELECT item_id AS itemId, amount FROM quest_rewards WHERE game_id = ? AND quest_id = ? ORDER BY item_id')
+      .bind(game, 'hunt').all();
+    expect(rows.results).toEqual(second.rewards);
+    const audit = await (await adminGet(auditPath())).json<AuditBody>();
+    expect(audit.items).toHaveLength(2);
+    expect(audit.items[1]).toMatchObject({ actor: 'local-admin', action: 'quest.put', target: 'quest:hunt', before: null, after: first,
+      reason: '試験のクエスト' });
+    expect(audit.items[0]).toMatchObject({ actor: 'local-admin', action: 'quest.put', target: 'quest:hunt', before: first, after: second,
+      reason: '閾値を上げる' });
+  });
+
+  it('宣言の無いキーか品目を使うクエストの定義はNOT_FOUNDの404を返し何も書かない', async () => {
+    expect((await putQuest('hunt', questDefinition())).status).toBe(200);
+    const before = await questSnapshot();
+    // 新しいクエストも、あるクエストの入れ直しも。デイリーでも区切りの宣言を入れない。demo-rpg にあるキーでもこのゲームに無ければ宣言の無いキー
+    for (const questId of ['hunt', 'fresh']) {
+      for (const key of ['no-such-key', 'slimes-defeated']) {
+        for (const kind of ['once', 'daily']) {
+          const res = await putQuest(questId, questDefinition({ kind, key }));
+          await expectAdminConforms(res.clone(), questSpec, 'put');
+          expect((await expectError(res, 404, 'NOT_FOUND')).error.message).toBe('Unknown key');
+        }
+      }
+      for (const rewards of [[{ itemId: 'no-item', amount: 1 }], [{ itemId: 'gold', amount: 1 }, { itemId: 'no-item', amount: 1 }]]) {
+        const res = await putQuest(questId, questDefinition({ kind: 'daily', rewards }));
+        await expectAdminConforms(res.clone(), questSpec, 'put');
+        expect((await expectError(res, 404, 'NOT_FOUND')).error.message).toBe('Unknown item');
+      }
+    }
+    expect(await questSnapshot()).toEqual(before);
+  });
+
+  it('受け取りのあるクエストの区切りと見るキーは変えられない', async () => {
+    await baseEnv.DB.prepare("INSERT INTO player_data_keys (game_id, key, mode, max_value, max_delta) VALUES (?, 'steps', 'add', 1000, 100)")
+      .bind(game).run();
+    const definition = questDefinition();
+    expect((await putQuest('hunt', definition)).status).toBe(200);
+    // 受け取りの無いうちは区切りも見るキーも変えられる
+    expect((await putQuest('hunt', { ...definition, kind: 'daily', key: 'steps' })).status).toBe(200);
+    expect((await putQuest('hunt', definition)).status).toBe(200);
+    await putClaim('p1', 'hunt', 'once', nowSeconds());
+    const before = await questSnapshot();
+    const startsAt = isoAt(Date.parse(definition.startsAt) / 1000 - 60);
+    for (const change of [{ kind: 'daily' }, { kind: 'weekly' }, { startsAt }, { resetOffsetMinutes: 540 }, { key: 'steps' }]) {
+      const res = await putQuest('hunt', { ...definition, ...change });
+      await expectAdminConforms(res.clone(), questSpec, 'put');
+      await expectError(res, 400, 'INVALID_ARGUMENT');
+    }
+    expect(await questSnapshot()).toEqual(before);
+    // 終わり・閾値・報酬だけの変更は通る
+    const endsAt = isoAt(Date.parse(definition.endsAt) / 1000 + 86_400);
+    const res = await putQuest('hunt', { ...definition, endsAt, threshold: 7, rewards: [{ itemId: 'potion', amount: 2 }] });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ endsAt, threshold: 7, rewards: [{ itemId: 'potion', amount: 2 }] });
+    const row = await baseEnv.DB.prepare('SELECT kind, key, threshold, ends_at AS endsAt FROM quests WHERE game_id = ? AND quest_id = ?')
+      .bind(game, 'hunt').first();
+    expect(row).toEqual({ kind: 'once', key: 'kills', threshold: 7, endsAt: Date.parse(endsAt) / 1000 });
+  });
+
+  it('デイリーのクエストの定義は増やすキーだけを受け付け区切りの数え方を宣言する', async () => {
+    const { token } = await questGuest();
+    const before = await questSnapshot();
+    // add でないキー（set・max・flag）の区切りのあるクエストは 400
+    for (const [kind, key] of [['daily', 'chapter'], ['weekly', 'floor'], ['daily', 'boss']]) {
+      const res = await putQuest('daily-hunt', questDefinition({ kind, key, threshold: 1 }));
+      await expectAdminConforms(res.clone(), questSpec, 'put');
+      await expectError(res, 400, 'INVALID_ARGUMENT');
+    }
+    expect(await questSnapshot()).toEqual(before);
+    // 一度きりのクエストは add でないキーも見られ、区切りの宣言を入れない
+    expect((await putQuest('chapter-2', questDefinition({ key: 'chapter', threshold: 2 }))).status).toBe(200);
+    expect(await keyPeriods()).toEqual([]);
+    // add のキーのデイリーは通り、同じ batch で区切りの宣言が入る（入れ直しても 1 行）
+    expect((await putQuest('daily-hunt', questDefinition({ kind: 'daily', resetOffsetMinutes: 540 }))).status).toBe(200);
+    expect((await putQuest('daily-hunt', questDefinition({ kind: 'daily', resetOffsetMinutes: 540, threshold: 2 }))).status).toBe(200);
+    expect(await keyPeriods()).toEqual([{ key: 'kills', kind: 'daily', offsetMinutes: 540 }]);
+    expect((await putQuest('weekly-hunt', questDefinition({ kind: 'weekly' }))).status).toBe(200);
+    expect(await keyPeriods()).toEqual([{ key: 'kills', kind: 'daily', offsetMinutes: 540 }, { key: 'kills', kind: 'weekly', offsetMinutes: 0 }]);
+    // 宣言の後の書き込みから区切りの値が数えられ、一覧の進捗になる
+    expect((await writeData(token, 'kills', 2)).status).toBe(200);
+    const listed = await listQuests(token);
+    expect(listed.find((q) => q.questId === 'daily-hunt')).toMatchObject({ kind: 'daily', progress: 2, completed: true,
+      periodKey: periodKey('daily', nowSeconds(), 540) });
+    expect(listed.find((q) => q.questId === 'weekly-hunt')).toMatchObject({ kind: 'weekly', progress: 2, completed: false });
+  });
+
+  it('時差の違う区切りを同じキーに宣言するクエストの定義は400を返す', async () => {
+    expect((await putQuest('daily-a', questDefinition({ kind: 'daily', resetOffsetMinutes: 0 }))).status).toBe(200);
+    const before = await questSnapshot();
+    // 新しいクエストも、受け取りの無いクエストの時差の入れ直しも
+    for (const questId of ['daily-b', 'daily-a']) {
+      const res = await putQuest(questId, questDefinition({ kind: 'daily', resetOffsetMinutes: 540 }));
+      await expectAdminConforms(res.clone(), questSpec, 'put');
+      await expectError(res, 400, 'INVALID_ARGUMENT');
+    }
+    expect(await questSnapshot()).toEqual(before);
+    // 同じ時差のデイリー・別の区切りの種類（週間）は通る
+    expect((await putQuest('daily-b', questDefinition({ kind: 'daily', resetOffsetMinutes: 0 }))).status).toBe(200);
+    expect((await putQuest('weekly-a', questDefinition({ kind: 'weekly', resetOffsetMinutes: 540 }))).status).toBe(200);
+    expect(await keyPeriods()).toEqual([{ key: 'kills', kind: 'daily', offsetMinutes: 0 }, { key: 'kills', kind: 'weekly', offsetMinutes: 540 }]);
+  });
+
+  it('管理で値を下げるとデイリーのクエストの区切りの値も新しい値で頭打ちになる', async () => {
+    const { token, playerId } = await questGuest();
+    expect((await putQuest('daily-hunt', questDefinition({ kind: 'daily' }))).status).toBe(200);
+    expect((await writeData(token, 'kills', 5)).status).toBe(200);
+    const today = periodKey('daily', nowSeconds(), 0);
+    const yesterday = periodKey('daily', nowSeconds() - 86_400, 0);
+    // 前の区切りの行（1 は下がらない・4 は下がる）と、ほかのプレイヤーの行（変わらない）
+    await putPeriodValue(playerId, 'kills', 'daily', yesterday, 4);
+    await putPeriodValue(playerId, 'kills', 'daily', '2000-01-01', 1);
+    await addPlayer('p-other');
+    await putPeriodValue('p-other', 'kills', 'daily', today, 9);
+    expect((await listQuests(token)).find((q) => q.questId === 'daily-hunt')).toMatchObject({ progress: 5, completed: true });
+    const res = await adminSend(setDataOp(playerId, 'kills', 2, '不正な連打の分を戻す', game));
+    expect(res.status).toBe(200);
+    const valuesAfterLowering = [
+      { playerId: 'p-other', key: 'kills', kind: 'daily', periodKey: today, value: 9 },
+      ...[{ periodKey: '2000-01-01', value: 1 }, { periodKey: yesterday, value: 2 }, { periodKey: today, value: 2 }]
+        .sort((a, b) => (a.periodKey < b.periodKey ? -1 : 1)).map((v) => ({ playerId, key: 'kills', kind: 'daily', ...v })),
+    ].sort((a, b) => (a.playerId < b.playerId ? -1 : a.playerId > b.playerId ? 1 : 0));
+    expect(await periodValues()).toEqual(valuesAfterLowering);
+    expect((await listQuests(token)).find((q) => q.questId === 'daily-hunt')).toMatchObject({ progress: 2, completed: false });
+    // 上げる直しは区切りの値を上げない
+    expect((await adminSend(setDataOp(playerId, 'kills', 10, '戻しすぎを直す', game))).status).toBe(200);
+    expect(await valueOf(playerId, 'kills')).toBe(10);
+    expect(await periodValues()).toEqual(valuesAfterLowering);
+    expect((await listQuests(token)).find((q) => q.questId === 'daily-hunt')).toMatchObject({ progress: 2, completed: false });
+    // 監査の前と後は合計の値のまま
+    const audit = await (await adminGet(auditPath())).json<AuditBody>();
+    expect(audit.items.map((a) => [a.action, a.before, a.after])).toEqual([
+      ['player-data.set', { key: 'kills', value: 2 }, { key: 'kills', value: 10 }],
+      ['player-data.set', { key: 'kills', value: 5 }, { key: 'kills', value: 2 }],
+      ['quest.put', null, expect.objectContaining({ kind: 'daily', key: 'kills' })],
+    ]);
+  });
+
+  it('クエストの定義が上限の数を超えると400を返す', async () => {
+    expect(MAX_QUESTS).toBe(200);
+    const now = nowSeconds();
+    const fill = baseEnv.DB.prepare("INSERT INTO quests (game_id, quest_id, kind, starts_at, ends_at, key, threshold) VALUES (?, ?, 'once', ?, ?, 'kills', 1)");
+    await baseEnv.DB.batch(Array.from({ length: MAX_QUESTS }, (_, i) => fill.bind(game, `fill-${i}`, now - 3600, now + 86_400)));
+    const before = await questSnapshot();
+    const res = await putQuest('one-more', questDefinition());
+    await expectAdminConforms(res.clone(), questSpec, 'put');
+    await expectError(res, 400, 'INVALID_ARGUMENT');
+    expect(await questSnapshot()).toEqual(before);
+    // あるクエストの置き換えは通る
+    expect((await putQuest('fill-0', questDefinition({ threshold: 2 }))).status).toBe(200);
+  });
+
+  it('管理の読み取りはプレイヤーのクエストの受け取りを新しい順に返す', async () => {
+    const now = nowSeconds();
+    for (const [questId, kind] of [['q-a', 'once'], ['q-b', 'once'], ['q-d', 'daily']]) {
+      expect((await putQuest(questId, questDefinition({ kind }))).status).toBe(200);
+    }
+    await addPlayer('p1');
+    await addPlayer('p2');
+    await addPlayer('p3');
+    const a = await putClaim('p1', 'q-a', 'once', now - 100);
+    const d1 = await putClaim('p1', 'q-d', '2026-10-29', now - 50);
+    const d2 = await putClaim('p1', 'q-d', '2026-10-30', now - 10);
+    // 同じ秒の受け取りは後に入れたほうが先
+    const b = await putClaim('p1', 'q-b', 'once', now - 10);
+    await putClaim('p2', 'q-a', 'once', now);
+    const res = await adminSend(playerOp('p1', game));
+    const body = await expectConforms(res, '/v1/admin/players/{playerId}') as { questClaims: QuestClaimItem[] };
+    expect(body.questClaims).toEqual([
+      { questId: 'q-b', periodKey: 'once', claimId: b, claimedAt: isoAt(now - 10) },
+      { questId: 'q-d', periodKey: '2026-10-30', claimId: d2, claimedAt: isoAt(now - 10) },
+      { questId: 'q-d', periodKey: '2026-10-29', claimId: d1, claimedAt: isoAt(now - 50) },
+      { questId: 'q-a', periodKey: 'once', claimId: a, claimedAt: isoAt(now - 100) },
+    ]);
+    // 受け取りの無い人は空の配列
+    expect((await (await adminSend(playerOp('p3', game))).json<{ questClaims: unknown[] }>()).questClaims).toEqual([]);
+    // 新しい順に 20 件まで
+    for (let i = 0; i < 22; i++) await putClaim('p3', 'q-d', `2026-09-${String(i + 1).padStart(2, '0')}`, now - 1000 + i);
+    const many = (await (await adminSend(playerOp('p3', game))).json<{ questClaims: QuestClaimItem[] }>()).questClaims;
+    expect(many.map((c) => c.periodKey)).toEqual(Array.from({ length: 20 }, (_, i) => `2026-09-${String(22 - i).padStart(2, '0')}`));
+    // 読み取りは監査に残さない（定義の 3 行だけ）
+    expect(await countRows('admin_audit_log')).toBe(3);
+  });
+
+  it('本番の設定ではクエストの管理の口にNOT_READY_FOR_PRODUCTIONの403を返す', async () => {
+    expect((await putQuest('hunt', questDefinition())).status).toBe(200);
+    const before = await questSnapshot();
+    const disabled: TestEnv = { ...baseEnv, APP_ENV: 'disabled', ADMIN_API_KEY: adminKey };
+    for (const [questId, definition] of [['hunt', questDefinition({ threshold: 9 })], ['fresh', questDefinition({ kind: 'daily' })]] as const) {
+      const res = await putQuest(questId, definition, game, disabled);
+      await expectAdminConforms(res.clone(), questSpec, 'put');
+      await expectError(res, 403, 'NOT_READY_FOR_PRODUCTION');
+    }
+    expect(await questSnapshot()).toEqual(before);
+  });
+
+  it('クエストの管理の口の応答は管理のスキーマに合う', async () => {
+    const check = async (questId: string, definition: QuestDefinitionBody, status: number, gameId = game) => {
+      const res = await putQuest(questId, definition, gameId);
+      expect(res.status, `${questId} ${JSON.stringify(definition).slice(0, 80)}`).toBe(status);
+      await expectAdminConforms(res, questSpec, 'put');
+    };
+    // 200（一度きり・デイリー）
+    await check('hunt', questDefinition(), 200);
+    await check('daily-hunt', questDefinition({ kind: 'daily', resetOffsetMinutes: 540 }), 200);
+    // 400（閾値・キーの形・区切りのあるクエストの add でないキー・時差の違う区切り・reason）
+    await check('hunt', questDefinition({ threshold: 0 }), 400);
+    await check('hunt', questDefinition({ threshold: 1_000_000_001 }), 400);
+    await check('hunt', questDefinition({ key: 'bad key' }), 400);
+    await check('hunt', questDefinition({ kind: 'weekly', key: 'chapter' }), 400);
+    await check('other', questDefinition({ kind: 'daily' }), 400);
+    await check('hunt', questDefinition({ reason: '' }), 400);
+    // 404（キー・品目・ゲーム）
+    await check('hunt', questDefinition({ key: 'no-key' }), 404);
+    await check('hunt', questDefinition({ rewards: [{ itemId: 'no-item', amount: 1 }] }), 404);
+    await check('hunt', questDefinition(), 404, 'no-such-game');
+    // プレイヤーを読む口の 200（questClaims がある）
+    await addPlayer('p1');
+    await putClaim('p1', 'hunt', 'once', nowSeconds());
+    const body = await expectConforms(await adminSend(playerOp('p1', game)), '/v1/admin/players/{playerId}') as { questClaims: unknown[] };
+    expect(body.questClaims).toHaveLength(1);
+  });
+
+  it('管理コマンドと同じ流れでクエストの定義と受け取りが監査と受領の履歴に残る', async () => {
+    // scripts/admin-requests.mjs の関数で demo-rpg にデイリーのクエストを入れ、scripts/cli-requests.mjs の形でゲストが書いて受け取る
+    const gameId = guestRequest().gameId;
+    const questId = `admin-smoke-quest-${Date.now().toString(36)}`;
+    const steps: Array<[string, number]> = [];
+    const step = async (name: string, res: Response) => {
+      steps.push([name, res.status]);
+      return res.json<Record<string, unknown>>();
+    };
+    const definition = questDefinition({ kind: 'daily', key: 'slimes-defeated', threshold: 2, rewards: [{ itemId: 'gold', amount: 20 }],
+      reason: 'smoke: クエスト' });
+    expect(await step('put-quest', await adminSend(putQuestOp(questId, definition, gameId)))).toMatchObject({ gameId, questId, kind: 'daily',
+      key: 'slimes-defeated', threshold: 2, rewards: [{ itemId: 'gold', amount: 20 }] });
+    const guest = await step('guest', await worker.fetch(new Request(`${base}/v1/accounts/guest`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(guestRequest()),
+    }), adminEnv as never)) as { token: string; playerId: string };
+    expect((await step('write', await writeData(guest.token, 'slimes-defeated', 2, gameId)))).toMatchObject({ values: [{ key: 'slimes-defeated', value: 2 }] });
+    const listed = await listQuests(guest.token, gameId);
+    expect(listed.find((q) => q.questId === questId)).toMatchObject({ progress: 2, completed: true, claimed: false });
+    const claimed = await step('claim', await claimQuest(guest.token, questId, gameId)) as { claimId: string };
+    const read = await step('player', await adminSend(playerOp(guest.playerId, gameId))) as {
+      questClaims: QuestClaimItem[]; history: Array<{ itemId: string; delta: number; sourceType: string; sourceId: string }> };
+    expect(read.questClaims).toEqual([{ questId, periodKey: periodKey('daily', nowSeconds(), 0), claimId: claimed.claimId,
+      claimedAt: expect.stringMatching(iso) }]);
+    expect(read.history.filter((h) => h.sourceType === LEDGER_SOURCES.questClaim))
+      .toEqual([expect.objectContaining({ itemId: 'gold', delta: 20, sourceType: 'quest-claim', sourceId: claimed.claimId })]);
+    const audit = await step('audit', await adminSend(auditOp(gameId, { limit: 1 }))) as { items: AuditItem[] };
+    expect(steps).toEqual([['put-quest', 200], ['guest', 200], ['write', 200], ['claim', 200], ['player', 200], ['audit', 200]]);
+    expect(audit.items.map((a) => [a.actor, a.action, a.target, a.before, a.reason])).toEqual([
+      ['local-admin', 'quest.put', `quest:${questId}`, null, 'smoke: クエスト'],
+    ]);
+    expect(audit.items[0].after).toMatchObject({ kind: 'daily', key: 'slimes-defeated', threshold: 2 });
   });
 });

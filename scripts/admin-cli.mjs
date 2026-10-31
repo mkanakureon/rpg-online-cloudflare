@@ -2,7 +2,7 @@
 // admin-cli.mjs — ローカルの管理コマンド（管理の HTTP の口 /v1/admin/... を呼ぶだけ。D1 を直に触らない）。
 //
 // 呼び方: node scripts/admin-cli.mjs <操作> [引数] [--game <gameId>] [--actor <ラベル>]
-//   player <playerId>                                  1 人のプレイヤーを読む（所持品・履歴・セーブの一覧・スコア・プレイヤーデータ）
+//   player <playerId>                                  1 人のプレイヤーを読む（所持品・履歴・セーブの一覧・スコア・プレイヤーデータ・クエストの受け取り）
 //   audit [--limit <n>] [--before <auditId>]            監査のログを新しい順に読む
 //   grant <playerId> <itemId> <amount> --reason <理由> [--key <Idempotency-Key>]   付与（鍵を表示する。流し直しは --key で同じ鍵）
 //   revoke <playerId> <itemId> <amount> --reason <理由> [--key <Idempotency-Key>]  取り消し（負の増減）
@@ -11,6 +11,7 @@
 //   delete-score <boardId> <playerId> --reason <理由>                              スコアを消す
 //   put-item <itemId> <currency|item> --reason <理由>                              品目を入れる
 //   put-event <eventId> <定義の JSON のファイル> [--reason <理由>]                 イベントの定義を入れる・置き換える
+//   put-quest <questId> <定義の JSON のファイル> [--reason <理由>]                 クエストの定義を入れる・置き換える（見るキーと閾値つき）
 //   put-data-key <key> <add|max|set|flag> <maxValue> [--max-delta <n>] --reason <理由>  プレイヤーデータのキーを宣言する（add は --max-delta が要る）
 //   put-achievement <achievementId> <key> <threshold> --reason <理由>             実績を宣言する
 //   set-data <playerId> <key> <value> --reason <理由>                              プレイヤーデータの値を置く（実績は判定しない）
@@ -25,7 +26,7 @@
 import { readFileSync } from 'node:fs';
 import {
   DEFAULT_GAME_ID, adjustOp, adminRequest, auditOp, banOp, deleteScoreOp, newIdempotencyKey, playerOp, putAchievementOp, putDataKeyOp,
-  putEventOp, putItemOp, revokeAchievementOp, runSmoke, setDataOp, unbanOp
+  putEventOp, putItemOp, putQuestOp, revokeAchievementOp, runSmoke, setDataOp, unbanOp
 } from './admin-requests.mjs';
 
 const base = process.env.RPG_API_BASE || 'http://127.0.0.1:8787';
@@ -98,6 +99,14 @@ async function send(adminKey, op, options) {
   return show(op, await fetch(adminRequest(base, adminKey, op, options)));
 }
 
+/** 定義の JSON のファイルを読む（読むだけ）。--reason があればファイルの reason より先に使う。 */
+function definitionOf(file, flags) {
+  const definition = JSON.parse(readFileSync(required(file, '<definition.json>'), 'utf8'));
+  if (flags.reason !== undefined) definition.reason = flags.reason;
+  required(definition.reason, '--reason (or "reason" in the definition file)');
+  return definition;
+}
+
 /** 付与と取り消し。鍵を表示し、--key があればその鍵で流し直す。 */
 async function adjust(adminKey, args, flags, sign, actor, gameId) {
   const [playerId, itemId, amount] = args;
@@ -123,12 +132,10 @@ const commands = {
     send(k, deleteScoreOp(required(boardId, '<boardId>'), required(playerId, '<playerId>'), required(f.reason, '--reason'), gameId), { actor }),
   'put-item': (k, [itemId, kind], f, actor, gameId) =>
     send(k, putItemOp(required(itemId, '<itemId>'), required(kind, '<kind>'), required(f.reason, '--reason'), gameId), { actor }),
-  'put-event': (k, [eventId, file], f, actor, gameId) => {
-    const definition = JSON.parse(readFileSync(required(file, '<definition.json>'), 'utf8'));
-    if (f.reason !== undefined) definition.reason = f.reason;
-    required(definition.reason, '--reason (or "reason" in the definition file)');
-    return send(k, putEventOp(required(eventId, '<eventId>'), definition, gameId), { actor });
-  },
+  'put-event': (k, [eventId, file], f, actor, gameId) =>
+    send(k, putEventOp(required(eventId, '<eventId>'), definitionOf(file, f), gameId), { actor }),
+  'put-quest': (k, [questId, file], f, actor, gameId) =>
+    send(k, putQuestOp(required(questId, '<questId>'), definitionOf(file, f), gameId), { actor }),
   'put-data-key': (k, [key, mode, maxValue], f, actor, gameId) =>
     send(k, putDataKeyOp(required(key, '<key>'), {
       mode: required(mode, '<mode>'), maxValue: integerOf(maxValue, '<maxValue>', 1),

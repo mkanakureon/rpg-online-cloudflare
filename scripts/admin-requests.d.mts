@@ -36,6 +36,10 @@ export type EventDefinitionBody = {
 
 export declare function putEventOp(eventId: string, definition: EventDefinitionBody, gameId?: string): AdminOp;
 
+export type QuestDefinitionBody = EventDefinitionBody & { key: string; threshold: number };
+
+export declare function putQuestOp(questId: string, definition: QuestDefinitionBody, gameId?: string): AdminOp;
+
 export type PlayerDataKeyDeclaration = { mode: string; maxValue: number; maxDelta?: number | null };
 
 export declare function putDataKeyOp(key: string, declaration: PlayerDataKeyDeclaration, reason: string, gameId?: string): AdminOp;

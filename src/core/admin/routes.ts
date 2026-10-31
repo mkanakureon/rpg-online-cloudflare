@@ -4,14 +4,17 @@
 // （RATE_LIMITS.admin・IP ごと。正しい鍵でも数え、鍵を確かめる前に 429）→ 管理の鍵（401）→ gameId の形（400）→
 // ゲームの登録（404 Unknown game。機能の設定は見ない）→ 書き込みの口は X-Admin-Actor・本文の JSON・reason（400）→ 口ごとの確かめ。管理はゲームごとの機能にせず、機能のモジュールを
 // 読み込まない（表を SQL で読み書きするだけ）。どのプレイヤーのトークンも読まない。読み取りの口は監査に残さない。
-// 書き込みの口（BAN・BAN を解く・所持品と通貨の増減・スコアを消す・品目とイベントの定義・プレイヤーデータのキーと実績の宣言・値を置く・
+// 書き込みの口（BAN・BAN を解く・所持品と通貨の増減・スコアを消す・品目とイベントとクエストの定義・プレイヤーデータのキーと実績の宣言・値を置く・
 // 実績の取り消し）は、監査の行を 1 文目にし、続く文は「この要求の監査の行が入ったとき」だけ書く 1 つの batch で書く（片方だけ残らない）。増減の続く文と受領の履歴の種類の名前は src/core/ledger.ts。
-// 品目の種類の違い・報酬の品目の有無・受け取りのあるイベントの守り・値のあるキーの書き方・宣言の数・解いた人のいる実績のキーは、
-// 先に読んで断り、監査の行の文の条件にも入れる（読んでから書くまでの間に変わっても書かない）。プレイヤーデータの値を置く口は実績を判定しない。
+// 品目の種類の違い・報酬の品目の有無・受け取りのあるイベントとクエストの守り・値のあるキーの書き方・宣言の数・解いた人のいる実績のキー・
+// クエストの見るキーと区切りの宣言は、先に読んで断り、監査の行の文の条件にも入れる（読んでから書くまでの間に変わっても書かない）。
+// クエストの定義の口は、デイリー・週間のクエストのキーの区切りの宣言（player_data_key_periods）を同じ batch で入れ、数の上限は src/core/quests.ts。
+// プレイヤーデータの値を置く口は実績を判定せず、区切りの値を新しい値で頭打ちにする（下げるだけ）。
 // 増減は Idempotency-Key が必須で（形は src/core/idempotency.ts）、鍵と中身のハッシュを監査の行の列に入れて二重を止める（同じ中身は 200 で 1 回目と同じ本文・違う中身は 422）。
 // ルートの一覧はルーター（src/core/router.ts）がゲストの発行の後・機能のルートの前に当てる。形の正は openapi/rpg-online-admin.v1.json、
 // 挙動の説明の正は docs/api-contract.md の「管理の API」、設計の正は docs/guides/working/admin-design.md §2・§4〜§7
-// （プレイヤーデータの 4 つの口とプレイヤーを読む口の playerData は docs/guides/working/player-data-design.md §8）。
+// （プレイヤーデータの 4 つの口とプレイヤーを読む口の playerData は docs/guides/working/player-data-design.md §8、
+// クエストの定義の口・プレイヤーを読む口の questClaims・値を置く口の区切りの値の頭打ちは docs/guides/working/quest-design.md §8）。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
 import { isBanActive } from '../bans';
@@ -25,13 +28,14 @@ import { MAX_ITEM_AMOUNT } from '../inventory';
 import { adjustStatements, LEDGER_SOURCES } from '../ledger';
 import type { Route } from '../module';
 import { MAX_PLAYER_DATA_KEYS, type PlayerDataMode } from '../player-data';
+import { MAX_QUESTS } from '../quests';
 import { consume, ipSubject } from '../rate-limit';
 import { RATE_LIMITS } from '../rate-limit-policy';
 import { isoSeconds, listAuditSql, parseActor, parseReason, requestHash, shapeAuditRow, type AuditRow } from './audit';
 import { adminSecret, requireAdmin } from './key';
 import {
   parseAchievement, parseAdjustment, parseAuditQuery, parseEventDefinition, parseExpiresAt, parseItemKind, parsePlayerDataKey, parsePlayerDataValue,
-  PLAYER_HISTORY_ROWS, type EventDefinition,
+  parseQuestDefinition, PLAYER_HISTORY_ROWS, PLAYER_QUEST_CLAIM_ROWS, type EventDefinition, type QuestDefinition,
 } from './parse';
 
 type Checked = { ok: true; gameId: string } | { ok: false; response: Response };
@@ -96,6 +100,9 @@ const playerDataValues = `SELECT d.key AS key, k.mode AS mode, d.value AS value,
   WHERE d.game_id = ? AND d.player_id = ? ORDER BY d.key`;
 const playerAchievements = `SELECT achievement_id AS achievementId, unlocked_at AS unlockedAt, write_ref AS writeId FROM player_achievements
   WHERE game_id = ? AND player_id = ? ORDER BY achievement_id`;
+// クエストの受け取り（新しい順。同じ秒の受け取りは入れた順の後ろを先に）
+const playerQuestClaims = `SELECT quest_id AS questId, period_key AS periodKey, claim_id AS claimId, claimed_at AS claimedAt FROM quest_claims
+  WHERE game_id = ? AND player_id = ? ORDER BY claimed_at DESC, rowid DESC LIMIT ?`;
 
 const ban = 'SELECT reason, banned_at AS bannedAt, expires_at AS expiresAt FROM player_bans WHERE game_id = ? AND player_id = ?';
 // 監査の行（1 文目）。前の状態は同じ文の中で止めた印から作る（無ければ NULL）
@@ -114,6 +121,7 @@ const deleteBan = `DELETE FROM player_bans WHERE game_id = ? AND player_id = ?
 type BanRow = { reason: string; bannedAt: number; expiresAt: number | null };
 type PlayerDataRow = { key: string; mode: PlayerDataMode; value: number; updatedAt: number };
 type PlayerAchievementRow = { achievementId: string; unlockedAt: number; writeId: string };
+type QuestClaimRow = { questId: string; periodKey: string; claimId: string; claimedAt: number };
 type HistoryRow = { entryId: number; itemId: string; delta: number; sourceType: string; sourceId: string; createdAt: number };
 type SaveRow = { slotId: string; revision: number; size: number; deleted: number; updatedAt: string };
 
@@ -252,6 +260,10 @@ const insertDataSetAudit = `INSERT INTO admin_audit_log (audit_ref, game_id, act
 const upsertDataValue = `INSERT INTO player_data (game_id, player_id, key, value, updated_at)
   SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM admin_audit_log WHERE audit_ref = ?)
   ON CONFLICT (game_id, player_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`;
+// 区切りの値（デイリー・週間のクエストの進捗）を新しい値で頭打ちにする。下げるだけで上げない（上げた分がどの区切りの分か決まらない）。
+// 監査の前と後は合計の値のまま（区切りの値は合計から決まる写し。quest-design.md §8。バインドは 6）
+const capPeriodValues = `UPDATE player_data_period_values SET value = MIN(value, ?), updated_at = ?
+  WHERE game_id = ? AND player_id = ? AND key = ? AND EXISTS (SELECT 1 FROM admin_audit_log WHERE audit_ref = ?)`;
 
 // 実績の取り消し（achievement.revoke）。1 文目は解いた行があるときだけ入る（前は消す行）
 const insertRevokeAudit = `INSERT INTO admin_audit_log (audit_ref, game_id, actor, action, target, before_json, after_json, reason, created_at)
@@ -291,6 +303,82 @@ async function dataSetRefusal(db: Database, gameId: string, playerId: string, ke
   return value > def.maxValue ? error('INVALID_ARGUMENT', `value must be 0..${def.maxValue} for key ${key}`, 400) : null;
 }
 
+// クエストの定義（PUT /v1/admin/quests/{questId}・quest.put）。正は quest-design.md §8
+const questKeyState = `SELECT k.mode AS mode,
+    (SELECT p.reset_offset_minutes FROM player_data_key_periods p WHERE p.game_id = k.game_id AND p.key = k.key AND p.kind = ?) AS periodOffset
+  FROM player_data_keys k WHERE k.game_id = ? AND k.key = ?`;
+const questState = `SELECT kind, starts_at AS startsAt, reset_offset_minutes AS offsetMinutes, key,
+    EXISTS (SELECT 1 FROM quest_claims c WHERE c.game_id = x.game_id AND c.quest_id = x.quest_id) AS claimed
+  FROM quests x WHERE x.game_id = ? AND x.quest_id = ?`;
+const questCount = 'SELECT COUNT(*) AS n FROM quests WHERE game_id = ?';
+/**
+ * 1 文目（監査の行）。前の定義は同じ文の中で読む（無ければ NULL）。報酬の品目が全部あり、キーの宣言があり（区切りのあるクエストは add のキー）、
+ * 同じ区切りの宣言が違う時差でなく、受け取りのあるクエストの区切り・始まり・時差・キーを変えず、新しいクエストなら宣言の数が上限より少ないときだけ入る。
+ */
+const insertQuestAudit = (n: number) => `INSERT INTO admin_audit_log (audit_ref, game_id, actor, action, target, before_json, after_json, reason, created_at)
+  SELECT ?, ?, ?, 'quest.put', ?,
+    (SELECT json_object('kind', kind, 'startsAt', ${isoColumn('starts_at')}, 'endsAt', ${isoColumn('ends_at')},
+        'resetOffsetMinutes', reset_offset_minutes, 'key', key, 'threshold', threshold,
+        'rewards', json((SELECT json_group_array(json_object('itemId', item_id, 'amount', amount))
+          FROM (SELECT item_id, amount FROM quest_rewards WHERE game_id = ? AND quest_id = ? ORDER BY item_id))))
+      FROM quests WHERE game_id = ? AND quest_id = ?),
+    ?, ?, ?
+  WHERE (${knownItems(n)}) = ?
+    AND EXISTS (SELECT 1 FROM player_data_keys WHERE game_id = ? AND key = ? AND (? = 'once' OR mode = 'add'))
+    AND NOT EXISTS (SELECT 1 FROM player_data_key_periods WHERE game_id = ? AND key = ? AND kind = ? AND reset_offset_minutes <> ?)
+    AND NOT EXISTS (SELECT 1 FROM quests x WHERE x.game_id = ? AND x.quest_id = ?
+      AND (x.kind <> ? OR x.starts_at <> ? OR x.reset_offset_minutes <> ? OR x.key <> ?)
+      AND EXISTS (SELECT 1 FROM quest_claims c WHERE c.game_id = x.game_id AND c.quest_id = x.quest_id))
+    AND (EXISTS (SELECT 1 FROM quests WHERE game_id = ? AND quest_id = ?) OR (SELECT COUNT(*) FROM quests WHERE game_id = ?) < ?)`;
+// 続く文は、この要求の監査の行が入ったときだけ書く。区切りの宣言は区切りのあるクエストだけ（同じ時差の宣言があれば何もしない）
+const insertKeyPeriod = `INSERT INTO player_data_key_periods (game_id, key, kind, reset_offset_minutes, created_at)
+  SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM admin_audit_log WHERE audit_ref = ?)
+  ON CONFLICT (game_id, key, kind) DO NOTHING`;
+const upsertQuest = `INSERT INTO quests (game_id, quest_id, kind, starts_at, ends_at, reset_offset_minutes, key, threshold)
+  SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM admin_audit_log WHERE audit_ref = ?)
+  ON CONFLICT (game_id, quest_id) DO UPDATE SET
+    kind = excluded.kind, starts_at = excluded.starts_at, ends_at = excluded.ends_at,
+    reset_offset_minutes = excluded.reset_offset_minutes, key = excluded.key, threshold = excluded.threshold`;
+const deleteQuestRewards = `DELETE FROM quest_rewards WHERE game_id = ? AND quest_id = ?
+  AND EXISTS (SELECT 1 FROM admin_audit_log WHERE audit_ref = ?)`;
+const insertQuestReward = `INSERT INTO quest_rewards (game_id, quest_id, item_id, amount)
+  SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM admin_audit_log WHERE audit_ref = ?)`;
+
+type QuestState = { kind: string; startsAt: number; offsetMinutes: number; key: string; claimed: number };
+
+const lockedQuest = () =>
+  error('INVALID_ARGUMENT', 'A claimed quest cannot change kind, startsAt, resetOffsetMinutes or key', 400);
+
+/**
+ * クエストの定義を断る理由。キーの宣言が無い（404 Unknown key）→ 報酬の品目が無い（404 Unknown item）→ 区切りのあるクエストで add でないキー・
+ * 同じ区切りの宣言の時差の違い（400）→ 受け取りのあるクエストの区切り・始まり・時差・キーの変更（400）→ 新しいクエストで宣言の数が上限（400）。
+ * 断らなければ null。
+ */
+async function questRefusal(db: Database, gameId: string, questId: string, def: QuestDefinition): Promise<Response | null> {
+  const key = (await db.prepare(questKeyState).bind(def.kind, gameId, def.key).all<{ mode: PlayerDataMode; periodOffset: number | null }>())
+    .results[0];
+  if (!key) return unknownKey();
+  if (!await rewardItemsExist(db, gameId, def)) return error('NOT_FOUND', 'Unknown item', 404);
+  if (def.kind !== 'once') {
+    if (key.mode !== 'add') return error('INVALID_ARGUMENT', 'daily and weekly quests need an add key', 400);
+    if (key.periodOffset !== null && key.periodOffset !== def.resetOffsetMinutes) {
+      return error('INVALID_ARGUMENT', `key ${def.key} already counts ${def.kind} periods with resetOffsetMinutes ${key.periodOffset}`, 400);
+    }
+  }
+  const state = (await db.prepare(questState).bind(gameId, questId).all<QuestState>()).results[0];
+  if (state) {
+    return state.claimed === 1 && (state.kind !== def.kind || state.startsAt !== def.startsAt
+      || state.offsetMinutes !== def.resetOffsetMinutes || state.key !== def.key) ? lockedQuest() : null;
+  }
+  const count = (await db.prepare(questCount).bind(gameId).all<{ n: number }>()).results[0]?.n ?? 0;
+  return count >= MAX_QUESTS ? error('INVALID_ARGUMENT', `A game can declare at most ${MAX_QUESTS} quests`, 400) : null;
+}
+
+/** 応答と監査の後の状態に使うクエストの定義（時刻は ISO 8601 の UTC の秒まで）。 */
+function shownQuest(def: QuestDefinition) {
+  return { ...shownDefinition(def), key: def.key, threshold: def.threshold };
+}
+
 const lockedEvent = () => error('INVALID_ARGUMENT', 'A claimed event cannot change kind, startsAt or resetOffsetMinutes', 400);
 const changedKind = () => error('INVALID_ARGUMENT', 'Item kind cannot be changed', 400);
 
@@ -305,7 +393,7 @@ export const adminRoutes: Route[] = [
       const playerId = match[1];
       const found = await env.DB.prepare(player).bind(gameId, playerId).all<{ createdAt: string }>();
       if (!found.results[0]) return error('NOT_FOUND', 'Unknown player', 404);
-      const [banned, b, h, s, r, dv, da] = await Promise.all([
+      const [banned, b, h, s, r, dv, da, qc] = await Promise.all([
         env.DB.prepare(ban).bind(gameId, playerId).all<BanRow>(),
         env.DB.prepare(balances).bind(gameId, playerId).all<{ itemId: string; kind: string; amount: number }>(),
         env.DB.prepare(history).bind(gameId, playerId, PLAYER_HISTORY_ROWS).all<HistoryRow>(),
@@ -313,6 +401,7 @@ export const adminRoutes: Route[] = [
         env.DB.prepare(rankings).bind(gameId, playerId).all<{ boardId: string; score: number; displayName: string }>(),
         env.DB.prepare(playerDataValues).bind(gameId, playerId).all<PlayerDataRow>(),
         env.DB.prepare(playerAchievements).bind(gameId, playerId).all<PlayerAchievementRow>(),
+        env.DB.prepare(playerQuestClaims).bind(gameId, playerId, PLAYER_QUEST_CLAIM_ROWS).all<QuestClaimRow>(),
       ]);
       // 止めた印は効いているものだけ載せる（止めていなければ欄ごと載せない）
       const active = banned.results.find((row) => isBanActive(row, serverNow()));
@@ -328,6 +417,7 @@ export const adminRoutes: Route[] = [
           values: dv.results.map((row) => ({ key: row.key, mode: row.mode, value: row.value, updatedAt: isoSeconds(row.updatedAt) })),
           achievements: da.results.map((row) => ({ achievementId: row.achievementId, unlockedAt: isoSeconds(row.unlockedAt), writeId: row.writeId })),
         },
+        questClaims: qc.results.map((row) => ({ ...row, claimedAt: isoSeconds(row.claimedAt) })),
       });
     },
   },
@@ -495,6 +585,41 @@ export const adminRoutes: Route[] = [
   },
   {
     method: 'PUT',
+    pattern: /^\/v1\/admin\/quests\/([a-zA-Z0-9_-]{1,64})$/,
+    async handle(req, env, match, url, known) {
+      const access = await checkAdminWrite(req, env, url, known);
+      if (!access.ok) return access.response;
+      const { gameId, actor, reason, body } = access;
+      const questId = match[1];
+      const parsed = parseQuestDefinition(body);
+      if (!parsed.ok) return error('INVALID_ARGUMENT', parsed.message, 400);
+      const def = parsed.value;
+      const refused = await questRefusal(env.DB, gameId, questId, def);
+      if (refused) return refused;
+      const ids = def.rewards.map((r) => r.itemId);
+      const shown = shownQuest(def);
+      const ref = crypto.randomUUID();
+      const now = serverNow();
+      await env.DB.batch([
+        env.DB.prepare(insertQuestAudit(ids.length)).bind(ref, gameId, actor, `quest:${questId}`, gameId, questId, gameId, questId,
+          JSON.stringify(shown), reason, now, gameId, ...ids, ids.length, gameId, def.key, def.kind, gameId, def.key, def.kind,
+          def.resetOffsetMinutes, gameId, questId, def.kind, def.startsAt, def.resetOffsetMinutes, def.key, gameId, questId, gameId,
+          MAX_QUESTS),
+        ...(def.kind === 'once' ? [] : [env.DB.prepare(insertKeyPeriod).bind(gameId, def.key, def.kind, def.resetOffsetMinutes, now, ref)]),
+        env.DB.prepare(upsertQuest).bind(gameId, questId, def.kind, def.startsAt, def.endsAt, def.resetOffsetMinutes, def.key, def.threshold,
+          ref),
+        env.DB.prepare(deleteQuestRewards).bind(gameId, questId, ref),
+        ...def.rewards.map((r) => env.DB.prepare(insertQuestReward).bind(gameId, questId, r.itemId, r.amount, ref)),
+      ]);
+      if (!(await env.DB.prepare(auditByRef).bind(ref).all()).results[0]) {
+        // 読んでから書くまでの間に宣言・品目・受け取り・クエストの数が変わった。何も書いていないので、もう一度見分ける
+        return await questRefusal(env.DB, gameId, questId, def) ?? lockedQuest();
+      }
+      return json({ gameId, questId, ...shown });
+    },
+  },
+  {
+    method: 'PUT',
     pattern: /^\/v1\/admin\/player-data\/keys\/([a-zA-Z0-9_-]{1,64})$/,
     async handle(req, env, match, url, known) {
       const access = await checkAdminWrite(req, env, url, known);
@@ -563,6 +688,7 @@ export const adminRoutes: Route[] = [
         env.DB.prepare(insertDataSetAudit).bind(ref, gameId, actor, playerId, gameId, playerId, key, JSON.stringify({ key, value }), reason, now,
           gameId, playerId, gameId, key, value),
         env.DB.prepare(upsertDataValue).bind(gameId, playerId, key, value, now, ref),
+        env.DB.prepare(capPeriodValues).bind(value, now, gameId, playerId, key, ref),
       ]);
       const written = (await env.DB.prepare(auditByRef).bind(ref).all<{ auditId: number }>()).results[0];
       if (!written) {
