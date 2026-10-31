@@ -422,6 +422,444 @@
           }
         }
       }
+    },
+    "/v1/admin/players/{playerId}/ban": {
+      "put": {
+        "operationId": "adminBanPlayer",
+        "summary": "1 人のプレイヤー（ゲームごと）を止める。止めた人のトークンの要求は 403 PLAYER_BANNED になる。印があれば理由と期限を置き換える（2 回送っても印は 1 つ）。印の書き込みと監査の行（player.ban）は 1 つの batch",
+        "security": [
+          {
+            "adminKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "playerId",
+            "in": "path",
+            "required": true,
+            "description": "ゲームのプレイヤー（game_players の playerId）。形が外れればどのルートにも当たらず 404 NOT_FOUND（Endpoint not found）。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": true,
+            "description": "登録のあるゲーム。形が外れれば 400 INVALID_ARGUMENT、登録が無ければ 404 NOT_FOUND（Unknown game）。機能の設定は見ない。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "X-Admin-Actor",
+            "in": "header",
+            "required": true,
+            "description": "操作した人のラベル（^[a-zA-Z0-9_.@-]{1,64}$。自己申告で、そのまま監査のログに残る）。無い・形の外れは 400 INVALID_ARGUMENT。",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.@-]{1,64}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminBanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "止めた印（expiresAt は無ければ null）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminBanResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "gameId・X-Admin-Actor・reason・expiresAt（形の外れ・今より前）の外れ（INVALID_ARGUMENT）か、本文が JSON でない（INVALID_JSON）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT",
+              "INVALID_JSON"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization が無い・Bearer でない・管理の鍵と違う（プレイヤーのトークンも含む）。外れた理由は返さない（message は Invalid admin credentials）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（正しい管理の鍵があっても断る。鍵を見る前・数える前）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "登録の無いゲーム（Unknown game）か、そのゲームに無いプレイヤー（Unknown player）か、形の外れたパス（Endpoint not found）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "管理の口の利用制限を超えた（IP ごと。正しい鍵でも数え、鍵を確かめる前に断る）。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・管理の鍵 ADMIN_API_KEY が無いか 32 文字未満）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "adminUnbanPlayer",
+        "summary": "1 人のプレイヤーの止めた印を消す（解く）。印が無くても 200（同じ結果）。監査の行（player.unban）は印を消す文と 1 つの batch",
+        "security": [
+          {
+            "adminKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "playerId",
+            "in": "path",
+            "required": true,
+            "description": "ゲームのプレイヤー（game_players の playerId）。形が外れればどのルートにも当たらず 404 NOT_FOUND（Endpoint not found）。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": true,
+            "description": "登録のあるゲーム。形が外れれば 400 INVALID_ARGUMENT、登録が無ければ 404 NOT_FOUND（Unknown game）。機能の設定は見ない。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "X-Admin-Actor",
+            "in": "header",
+            "required": true,
+            "description": "操作した人のラベル（^[a-zA-Z0-9_.@-]{1,64}$。自己申告で、そのまま監査のログに残る）。無い・形の外れは 400 INVALID_ARGUMENT。",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.@-]{1,64}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminUnbanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "解いた後の状態（banned は false）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUnbanResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "gameId・X-Admin-Actor・reason の外れ（INVALID_ARGUMENT）か、本文が JSON でない（INVALID_JSON）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT",
+              "INVALID_JSON"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization が無い・Bearer でない・管理の鍵と違う（プレイヤーのトークンも含む）。外れた理由は返さない（message は Invalid admin credentials）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（正しい管理の鍵があっても断る。鍵を見る前・数える前）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "登録の無いゲーム（Unknown game）か、そのゲームに無いプレイヤー（Unknown player）か、形の外れたパス（Endpoint not found）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "管理の口の利用制限を超えた（IP ごと。正しい鍵でも数え、鍵を確かめる前に断る）。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・管理の鍵 ADMIN_API_KEY が無いか 32 文字未満）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -576,6 +1014,10 @@
             "type": "string",
             "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$"
           },
+          "ban": {
+            "$ref": "#/components/schemas/AdminBan",
+            "description": "止めた印（期限の前のものだけ）。止めていなければ欄ごと載せない。"
+          },
           "balances": {
             "type": "array",
             "description": "残高のある品目（品目の ID の昇順）。",
@@ -710,12 +1152,125 @@
         "type": "string",
         "enum": [
           "INVALID_ARGUMENT",
+          "INVALID_JSON",
           "UNAUTHENTICATED",
           "NOT_READY_FOR_PRODUCTION",
           "NOT_FOUND",
           "RATE_LIMITED",
           "INTERNAL_ERROR"
         ]
+      },
+      "AdminReason": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "description": "管理の人のメモ（1〜200 文字。空白だけは外れ）。監査のログに残り、プレイヤーには返さない。"
+      },
+      "AdminBan": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reason",
+          "bannedAt",
+          "expiresAt"
+        ],
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/AdminReason"
+          },
+          "bannedAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+            "description": "止めた時刻（サーバーの時刻。ISO 8601・UTC・秒まで）。"
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+            "description": "この時刻から止めない（ISO 8601・UTC・秒まで）。null はずっと。"
+          }
+        }
+      },
+      "AdminBanRequest": {
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/AdminReason"
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$",
+            "description": "任意。この時刻から止めない（ISO 8601 の UTC。ミリ秒は切り捨て）。今より後でなければ 400。無いか null はずっと。"
+          }
+        }
+      },
+      "AdminUnbanRequest": {
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/AdminReason"
+          }
+        }
+      },
+      "AdminBanResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "playerId",
+          "bannedAt",
+          "expiresAt"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "playerId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "bannedAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+          }
+        }
+      },
+      "AdminUnbanResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "playerId",
+          "banned"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "playerId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "banned": {
+            "const": false
+          }
+        }
       }
     }
   }

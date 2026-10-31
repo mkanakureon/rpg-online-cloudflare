@@ -75,7 +75,7 @@
 - `score`は0～1,000,000,000の整数。
 - `npm run dev`でローカル実行し`APP_ENV=local`を与えた時だけ・トークンがある時だけ書込み可能。`APP_ENV`が`local`でなければ、トークンがあっても無くても本文を読む前に**403 `NOT_READY_FOR_PRODUCTION`**。
 - 同じプレイヤー（トークンのゲームとプレイヤー）は 60 秒の窓に 30 回まで。超えると**429 `RATE_LIMITED`**と`Retry-After`で、記録を変えない（下の「利用制限」）。トークンの無い・正しくない要求と、本文の形の外れた要求は数えない（401・400 が先）。
-- 確かめの順: `APP_ENV`の守り（403）→ トークン（本文を読む前）→ 本文の JSON（400 `INVALID_JSON`）→ 欄の形（400 `INVALID_ARGUMENT`。ここまで DB を引かない）→ プレイヤーの利用制限（429）→ トークンと本文の突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録（404 `NOT_FOUND`）→ 書き込み。
+- 確かめの順: `APP_ENV`の守り（403）→ トークン（本文を読む前）→ 本文の JSON（400 `INVALID_JSON`）→ 欄の形（400 `INVALID_ARGUMENT`。ここまで DB を引かない）→ プレイヤーの利用制限（429）→ 止めた印（403 `PLAYER_BANNED`）→ トークンと本文の突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録（404 `NOT_FOUND`）→ 書き込み。
 - `Authorization`が無い・`Bearer`でない・トークンの形か署名が正しくなければ**401 `UNAUTHENTICATED`**（`message`は`Missing or malformed Authorization`か`Invalid token`。どちらが外れたかの詳しい理由は返さない）。期限が切れていれば**401 `TOKEN_EXPIRED`**（ゲストを発行し直す）。
 - 本文の`gameId`・`playerId`がトークンのゲームとプレイヤーと違えば**403 `PERMISSION_DENIED`**（`message`は`Token does not match player`）。本文の形は変わらない（`playerId`も送る）。
 
@@ -106,7 +106,7 @@
 - スロットは 1 プレイヤー・1 ゲームに**10 個まで**。新しいスロットに書くと超えるときは**409 `SLOT_LIMIT_EXCEEDED`**で書かない（消したスロットは数えない。既にあるスロットの上書きは上限まで埋まっていても通る）。`DELETE`で要らないスロットを消してから書く。
 - 書込み系 API なので、`npm run dev`でローカル実行し`APP_ENV=local`を与えた時だけ・トークンがある時だけ通る。`APP_ENV`が`local`でなければ、トークンがあっても無くても**403 `NOT_READY_FOR_PRODUCTION`**。
 - 同じプレイヤー（トークンのゲームとプレイヤー）のセーブの操作（書く・読む・一覧・消す）は合わせて 60 秒の窓に 60 回まで。超えると**429 `RATE_LIMITED`**と`Retry-After`で、書かない（リビジョンを進めない。下の「利用制限」）。トークンの無い・正しくない要求は数えない（401 が先）。
-- 確かめの順: `APP_ENV`の守り（403）→ トークン（401。本文を読む前）→ プレイヤーの利用制限（429）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`。`message`は`Token does not match game`）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ 欄の形（400 `INVALID_ARGUMENT`）→ `data`の大きさ（413）→ チェックサム（400 `INVALID_ARGUMENT`）→ ゲームの登録と機能の設定（404 `NOT_FOUND`。機能の名前は`saves`）→ 書き込み（409 `SAVE_CONFLICT`・409 `SLOT_LIMIT_EXCEEDED`）。
+- 確かめの順: `APP_ENV`の守り（403）→ トークン（401。本文を読む前）→ プレイヤーの利用制限（429）→ 止めた印（403 `PLAYER_BANNED`）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`。`message`は`Token does not match game`）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ 欄の形（400 `INVALID_ARGUMENT`）→ `data`の大きさ（413）→ チェックサム（400 `INVALID_ARGUMENT`）→ ゲームの登録と機能の設定（404 `NOT_FOUND`。機能の名前は`saves`）→ 書き込み（409 `SAVE_CONFLICT`・409 `SLOT_LIMIT_EXCEEDED`）。
 
 ## GET /v1/saves/{slotId}?gameId=demo-rpg
 
@@ -120,7 +120,7 @@
 
 - `PUT`の応答の欄に`data`を足したもの。受け取った`data`でチェックサムを計算し直して比べると、端から端まで壊れていないことが分かる。
 - そのスロットにセーブが無ければ**404 `NOT_FOUND`**（`message`は`Save not found`）。端末は`revision`を`0`と覚えて、初めての書き込みに使う。
-- 読むのも`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順は`APP_ENV`の守り → トークン → プレイヤーの利用制限（429 `RATE_LIMITED`。`PUT`と合わせて数える）→ `gameId`の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定 → 読む。
+- 読むのも`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順は`APP_ENV`の守り → トークン → プレイヤーの利用制限（429 `RATE_LIMITED`。`PUT`と合わせて数える）→ 止めた印（403 `PLAYER_BANNED`）→ `gameId`の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定 → 読む。
 
 ## GET /v1/saves?gameId=demo-rpg
 
@@ -134,7 +134,7 @@
 
 - `items`の各行は`GET /v1/saves/{slotId}`の応答から`gameId`と`data`を除いたもの（本体を読まずに`formatVersion`・`size`・`revision`が分かる）。並びは`slotId`の昇順。最大 10 件なのでページングしない。
 - 自分（トークンのプレイヤー）のスロットだけが出る。消したスロットは出ない。セーブが 1 つも無ければ**200 と空の`items`**。
-- 一覧も`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順は`GET /v1/saves/{slotId}`と同じ（`APP_ENV`の守り → トークン → プレイヤーの利用制限（429 `RATE_LIMITED`。`PUT`と合わせて数える）→ `gameId`の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定 → 読む）。
+- 一覧も`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順は`GET /v1/saves/{slotId}`と同じ（`APP_ENV`の守り → トークン → プレイヤーの利用制限（429 `RATE_LIMITED`。`PUT`と合わせて数える）→ 止めた印（403 `PLAYER_BANNED`）→ `gameId`の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定 → 読む）。
 
 ## DELETE /v1/saves/{slotId}?gameId=demo-rpg&baseRevision=…
 
@@ -149,7 +149,7 @@
 - `baseRevision`がいまのリビジョンと違えば**409 `SAVE_CONFLICT`**で消さない（別の端末が書いたばかりのセーブを古い画面から消さないため）。`GET`で読み直してから消し直す。
 - そのスロットにセーブが無い（消した後も同じ）・他のプレイヤーのスロットは**404 `NOT_FOUND`**（`message`は`Save not found`）。`baseRevision`が無い・1 以上の整数でなければ**400 `INVALID_ARGUMENT`**。
 - 消した後は`GET`が 404・一覧に出ない・スロットの数に数えない。同じスロットに`baseRevision: 0`で書き直せるが、`revision`は 1 に戻らず消す前より先へ進む（サーバーは消した印を残す）。だから消す前のリビジョンを覚えた古い端末の書き込みは 409 `SAVE_CONFLICT`になる。
-- 書込み系 API なので`APP_ENV=local`の時だけ・トークンがある時だけ通る（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順: `APP_ENV`の守り → トークン → プレイヤーの利用制限（429 `RATE_LIMITED`。`PUT`と合わせて数え、断ったときは消さない）→ `gameId`の形 → トークンのゲームとの突き合わせ → `baseRevision`の形（400）→ ゲームの登録と機能の設定（404）→ 消す（409・404）。
+- 書込み系 API なので`APP_ENV=local`の時だけ・トークンがある時だけ通る（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順: `APP_ENV`の守り → トークン → プレイヤーの利用制限（429 `RATE_LIMITED`。`PUT`と合わせて数え、断ったときは消さない）→ 止めた印（403 `PLAYER_BANNED`）→ `gameId`の形 → トークンのゲームとの突き合わせ → `baseRevision`の形（400）→ ゲームの登録と機能の設定（404）→ 消す（409・404）。
 
 ## GET /v1/inventory?gameId=demo-rpg
 
@@ -165,7 +165,7 @@
 - 品目の ID と種類（通貨か所持品か）はサーバーの表`inventory_items`（`migrations/0009_inventory.sql`。`demo-rpg`は`gold`〔通貨〕と`potion`〔所持品〕）にある。品目の名前・絵・効果・値段はマスターデータに置き、サーバーは解釈しない。
 - 残高は 0〜1,000,000,000（`MAX_ITEM_AMOUNT`）。クライアントが残高を増やす・減らす口は無い（増やすのはサーバーだけ）。
 - 自分（トークンのプレイヤー）の残高だけが出る。プレイヤーはトークンだけで決まり、問い合わせの`playerId`は読まない。
-- 読むのも`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順は`APP_ENV`の守り → トークン（401）→ プレイヤーの利用制限（429 `RATE_LIMITED`。受領の履歴・イベントの一覧と受け取りと合わせて数える）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録と機能の設定（404 `NOT_FOUND`。所持品の機能`inventory`を使わない設定のゲームは`Feature not enabled for this game`）→ 読む。
+- 読むのも`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順は`APP_ENV`の守り → トークン（401）→ プレイヤーの利用制限（429 `RATE_LIMITED`。受領の履歴・イベントの一覧と受け取りと合わせて数える）→ 止めた印（403 `PLAYER_BANNED`）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録と機能の設定（404 `NOT_FOUND`。所持品の機能`inventory`を使わない設定のゲームは`Feature not enabled for this game`）→ 読む。
 
 ## GET /v1/inventory/history?gameId=demo-rpg&limit=20&before=42
 
@@ -198,7 +198,7 @@
 - `periodKey`はいまの区切り（`once`・デイリーはその日`YYYY-MM-DD`・週間はその週の月曜の日付）。`nextResetAt`は次の区切りの時刻で、`endsAt`を越えない。一度きりのイベントには載らない。時刻はどれも ISO 8601 の UTC（秒まで）。
 - `rewards`は受け取ると付与される品目と数（品目の ID の昇順）。`claimed`はトークンのプレイヤーがいまの区切りで受け取ったか（ほかのプレイヤーの受け取りは数えない）。
 - イベントの定義はマイグレーションで入れる（`migrations/0010_events.sql`。`demo-rpg`はデイリーの`daily-login`・金貨`gold` 100）。イベントを書き換える API は無い。
-- 読むのも`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順は`GET /v1/inventory`と同じ: `APP_ENV`の守り → トークン（401）→ プレイヤーの利用制限（429 `RATE_LIMITED`。所持品・受領の履歴・受け取りと合わせて数える）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録と機能の設定（404 `NOT_FOUND`。イベントの機能`events`を使わない設定のゲームは`Feature not enabled for this game`）→ 読む。
+- 読むのも`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順は`GET /v1/inventory`と同じ: `APP_ENV`の守り → トークン（401）→ プレイヤーの利用制限（429 `RATE_LIMITED`。所持品・受領の履歴・受け取りと合わせて数える）→ 止めた印（403 `PLAYER_BANNED`）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録と機能の設定（404 `NOT_FOUND`。イベントの機能`events`を使わない設定のゲームは`Feature not enabled for this game`）→ 読む。
 
 ## POST /v1/events/{eventId}/claim?gameId=demo-rpg
 
@@ -216,7 +216,7 @@
 - 期間はサーバーの時刻だけで決める。期間の外（終わった・まだ始まらない）は**409 `EVENT_NOT_ACTIVE`**で、何も書かない。終わる直前に送って届かず、終わった後に送り直したときも 409 になる（同じ本文の 200 にはならない）。受け取れていたかは`GET /v1/inventory/history`の`sourceType: "event-claim"`の行で確かめる。
 - 付与すると残高が 1,000,000,000（`MAX_ITEM_AMOUNT`）を超える品目があれば**409 `INVENTORY_LIMIT_EXCEEDED`**で、何も書かない（どの品目も足さない）。
 - そのゲームに無いイベントは**404 `NOT_FOUND`**（`message`は`Unknown event`）。`eventId`の形（`^[a-zA-Z0-9_-]{1,64}$`）が外れていればどのルートにも当たらず**404 `NOT_FOUND`**（`Endpoint not found`）。
-- 書込み系 API なので`APP_ENV=local`の時だけ・トークンがある時だけ通る（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順: `APP_ENV`の守り → トークン（401。数えない）→ プレイヤーの利用制限（429 `RATE_LIMITED`。一覧・所持品・受領の履歴と合わせて数え、断ったときは何も書かない）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403）→ ゲームの登録と機能の設定（404）→ イベントがあるか（404）→ 期間（409 `EVENT_NOT_ACTIVE`）→ 書く（409 `INVENTORY_LIMIT_EXCEEDED`）。
+- 書込み系 API なので`APP_ENV=local`の時だけ・トークンがある時だけ通る（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順: `APP_ENV`の守り → トークン（401。数えない）→ プレイヤーの利用制限（429 `RATE_LIMITED`。一覧・所持品・受領の履歴と合わせて数え、断ったときは何も書かない）→ 止めた印（403 `PLAYER_BANNED`）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403）→ ゲームの登録と機能の設定（404）→ イベントがあるか（404）→ 期間（409 `EVENT_NOT_ACTIVE`）→ 書く（409 `INVENTORY_LIMIT_EXCEEDED`）。
 
 ## GET /v1/config?gameId=demo-rpg&clientVersion=…
 
@@ -262,14 +262,15 @@
 
 ## 管理の API（ゲームのクライアントは使わない）
 
-運営する人が 1 人のプレイヤーの状態と監査のログを読む口。**ゲームのクライアント（CLI モック・UE・Unity・ブラウザ）は使わず、管理の鍵を持たせない**。形の正は`openapi/rpg-online-admin.v1.json`（ゲームのクライアントのスキーマ`openapi/rpg-online.v1.json`には入れない）、設計の正は`docs/guides/working/admin-design.md`。
+運営する人が 1 人のプレイヤーの状態と監査のログを読み、プレイヤーを止める（BAN する）口。**ゲームのクライアント（CLI モック・UE・Unity・ブラウザ）は使わず、管理の鍵を持たせない**。形の正は`openapi/rpg-online-admin.v1.json`（ゲームのクライアントのスキーマ`openapi/rpg-online.v1.json`には入れない）、設計の正は`docs/guides/working/admin-design.md`。
 
 - 見出しは`Authorization: Bearer <管理の鍵>`。管理の鍵は Worker ごとに 1 つの`ADMIN_API_KEY`（32 文字以上）。ローカルは人が`.dev.vars`（git に入らない）に`ADMIN_API_KEY=<32 文字以上>`を書き、staging・production は`wrangler secret put ADMIN_API_KEY`で渡す。鍵の値をファイル（`wrangler.jsonc`・ソース・試験・文書）に書かない。
 - **`local`でも既定の鍵を持たない**。`ADMIN_API_KEY`が無いか 32 文字未満の環境では、管理の口はどれも**500 `INTERNAL_ERROR`**（鍵の名前・値は返さない）。
 - 鍵が無い・`Bearer`でない・違う（プレイヤーのトークンも含む）は、どれも**401 `UNAUTHENTICATED`**（`message`は`Invalid admin credentials`。外れた理由は返さない）。鍵は SHA-256 にしてから時間の一定な比べで確かめる。鍵を取り替えると、前の鍵はその時から 401（前の鍵を並べて受ける期間は無い）。
 - 読むのも`APP_ENV=local`の時だけ（ほかは正しい鍵があっても**403 `NOT_READY_FOR_PRODUCTION`**）。
 - 確かめの順（どの口も同じ）: `APP_ENV`の守り（403）→ 管理の鍵の有無（500）→ 管理の利用制限（IP ごと。**429 `RATE_LIMITED`**と`Retry-After`。正しい鍵でも数え、鍵を確かめる前に断る）→ 管理の鍵（401）→ `gameId`の形（**400 `INVALID_ARGUMENT`**）→ ゲームの登録（**404 `NOT_FOUND`**・`Unknown game`。機能の設定は見ない）→ 口ごとの確かめ。
-- 読み取りの口は監査のログに残さない。
+- 書き込みの口（BAN と BAN を解く）は、口ごとの確かめの前に見出し`X-Admin-Actor`（操作した人のラベル。`^[a-zA-Z0-9_.@-]{1,64}$`。自己申告で、そのまま監査のログに残る）と、本文（JSON でなければ**400 `INVALID_JSON`**）の`reason`（1〜200 文字。空白だけは外れ）を確かめる。外れは**400 `INVALID_ARGUMENT`**。
+- 書き込みの口は、操作 1 回で監査のログに 1 行（誰が・いつ・何を・前と後）を残し、書き込みと監査の行を 1 つの`batch`に入れる（片方だけ残らない）。読み取りの口は監査のログに残さない。
 
 ### GET /v1/admin/players/{playerId}?gameId=demo-rpg
 
@@ -278,10 +279,11 @@
 レスポンス例（200）:
 
 ```json
-{"gameId":"demo-rpg","playerId":"<playerId>","createdAt":"2026-10-31T01:02:03Z","balances":[{"itemId":"gold","kind":"currency","amount":100}],"history":[{"entryId":7,"itemId":"gold","delta":100,"sourceType":"event-claim","sourceId":"<claimId>","createdAt":"2026-10-31T01:05:00Z"}],"saves":[{"slotId":"auto","revision":3,"size":120,"deleted":false,"updatedAt":"2026-10-31T01:06:00.123Z"}],"rankings":[{"boardId":"boss-score","score":1200,"displayName":"Hero"}]}
+{"gameId":"demo-rpg","playerId":"<playerId>","createdAt":"2026-10-31T01:02:03Z","ban":{"reason":"チートの疑い","bannedAt":"2026-10-31T02:00:00Z","expiresAt":null},"balances":[{"itemId":"gold","kind":"currency","amount":100}],"history":[{"entryId":7,"itemId":"gold","delta":100,"sourceType":"event-claim","sourceId":"<claimId>","createdAt":"2026-10-31T01:05:00Z"}],"saves":[{"slotId":"auto","revision":3,"size":120,"deleted":false,"updatedAt":"2026-10-31T01:06:00.123Z"}],"rankings":[{"boardId":"boss-score","score":1200,"displayName":"Hero"}]}
 ```
 
 - `createdAt`はプレイヤーを作った時刻（ISO 8601・UTC・秒まで）。
+- `ban`は止めた印（`reason`・`bannedAt`・`expiresAt`。時刻は ISO 8601・UTC・秒まで、`expiresAt`は期限が無ければ`null`）。**止めていなければ（印が無い・期限が過ぎた）欄ごと載らない**。
 - `balances`は残高のある品目（品目の ID の昇順。`kind`は`currency`か`item`）。`history`は受領の履歴の新しい順に 20 行まで（`GET /v1/inventory/history`の行と同じ欄）。`saves`はスロットの ID の昇順で、消した印のある行も`deleted: true`で載る（`updatedAt`はセーブの API と同じ値）。`rankings`はボードの ID の昇順。
 - **セーブの本文（`data`）とチェックサムは返さない**。
 - そのゲームに無いプレイヤー（`game_players`に行が無い）は**404 `NOT_FOUND`**（`message`は`Unknown player`）。`playerId`の形（`^[a-zA-Z0-9_-]{1,64}$`）が外れていればどのルートにも当たらず**404 `NOT_FOUND`**（`Endpoint not found`）。
@@ -298,7 +300,53 @@
 
 - 並びは`auditId`の降順（新しい順）。`limit`は 1〜100 の整数（無ければ 20）。`before`は 1 以上の整数で、付けるとその`auditId`より古い行だけを返す。外れは**400 `INVALID_ARGUMENT`**。続きがあれば`nextBefore`（最後の行の`auditId`）が載り、無ければ欄ごと載らない（受領の履歴と同じ）。
 - `actor`は書き込みの口の`X-Admin-Actor`（自己申告のラベル）。`before`・`after`は操作の前と後の状態（保存した JSON を読み直した値。無ければ`null`）。`createdAt`はサーバーの時刻（ISO 8601・UTC・秒まで）。トークン・管理の鍵・セーブの本文・IP は記録しない。
-- 監査のログは API から書き換えも消しもしない。保持の期間は 365 日（消す仕組みは後で足す。それまでは残る）。いまは監査に行を書く口が無い（BAN・データ修正・イベントの定義の口と一緒に足す）。
+- 監査のログは API から書き換えも消しもしない。保持の期間は 365 日（消す仕組みは後で足す。それまでは残る）。いま行を書く口は BAN と BAN を解く口（`action`は`player.ban`・`player.unban`、`target`は`player:<playerId>`）。データ修正・イベントの定義の口は後で足す。
+
+### PUT /v1/admin/players/{playerId}/ban?gameId=demo-rpg
+
+1 人のプレイヤー（ゲームごと）を止める。止めたプレイヤーのトークンの要求は**403 `PLAYER_BANNED`**になる（上の「エラーレスポンス」）。
+
+見出し: `Authorization: Bearer <管理の鍵>`・`X-Admin-Actor: <ラベル>`。
+
+入力例:
+
+```json
+{"reason":"チートの疑い","expiresAt":"2026-11-07T00:00:00Z"}
+```
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","playerId":"<playerId>","bannedAt":"2026-10-31T02:00:00Z","expiresAt":"2026-11-07T00:00:00Z"}
+```
+
+- `expiresAt`は任意（ISO 8601 の UTC。ミリ秒は切り捨て）。その時刻から止めない。無いか`null`ならずっと止める（応答の`expiresAt`は`null`）。今より後でない・形の外れは**400 `INVALID_ARGUMENT`**。
+- 印があれば理由と期限と`bannedAt`を置き換える（2 回送っても印は 1 つ）。
+- そのゲームに無いプレイヤーは**404 `NOT_FOUND`**（`message`は`Unknown player`。印を作らない）。
+- 監査のログに`player.ban`の 1 行（`before`は前の印`{"reason","expiresAt"}`か`null`、`after`は新しい印`{"reason","expiresAt"}`）。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・`expiresAt`（400）→ プレイヤー（404）→ 書く。
+
+### DELETE /v1/admin/players/{playerId}/ban?gameId=demo-rpg
+
+1 人のプレイヤーの止めた印を消す（解く）。解いた後は同じトークンでまた通る。
+
+見出し: `Authorization: Bearer <管理の鍵>`・`X-Admin-Actor: <ラベル>`。
+
+入力例:
+
+```json
+{"reason":"誤りだった"}
+```
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","playerId":"<playerId>","banned":false}
+```
+
+- 印が無くても 200（同じ結果）。そのゲームに無いプレイヤーは**404 `NOT_FOUND`**（`Unknown player`）。
+- 監査のログに`player.unban`の 1 行（`before`は消した印`{"reason","expiresAt"}`か`null`、`after`は`null`）。
+- 確かめの順は`PUT`と同じ（`expiresAt`は無い）。
 
 ## エラーレスポンス
 
@@ -306,7 +354,9 @@
 {"error":{"code":"INVALID_ARGUMENT","message":"Invalid parameters"}}
 ```
 
-現PoCの代表コード: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）、`UNAUTHENTICATED`（401）、`TOKEN_EXPIRED`（401）、`PERMISSION_DENIED`（403）、`SAVE_CONFLICT`（409）、`PAYLOAD_TOO_LARGE`（413）、`SLOT_LIMIT_EXCEEDED`（409）、`RATE_LIMITED`（429）、`EVENT_NOT_ACTIVE`（409）、`INVENTORY_LIMIT_EXCEEDED`（409）。
+現PoCの代表コード: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）、`UNAUTHENTICATED`（401）、`TOKEN_EXPIRED`（401）、`PERMISSION_DENIED`（403）、`SAVE_CONFLICT`（409）、`PAYLOAD_TOO_LARGE`（413）、`SLOT_LIMIT_EXCEEDED`（409）、`RATE_LIMITED`（429）、`EVENT_NOT_ACTIVE`（409）、`INVENTORY_LIMIT_EXCEEDED`（409）、`PLAYER_BANNED`（403）。
+
+- **`PLAYER_BANNED`（403）**: トークンの要る口（スコアの投稿・セーブの 4 つ・所持品・受領の履歴・イベントの一覧と受け取り）で、トークンのプレイヤーが管理の口（`PUT /v1/admin/players/{playerId}/ban`）で止められているとき。`message`は`Player is banned`で、止めた理由・期限は返さない。トークンは正しいので、ゲストを発行し直しても同じプレイヤーには戻らない（別の`playerId`の新しいゲストになる）。確かめるのはプレイヤーの利用制限の後（止めた人の要求も数える）で、トークンの無い要求（401）・本文の形の外れ（400）はそれより先に断る。止めた人の要求は何も書かない。トークンを読まない口（お知らせ・ランキングの`GET`・設定）は止めない。
 
 ## 利用制限
 

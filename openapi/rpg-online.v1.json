@@ -548,7 +548,7 @@
             }
           },
           "403": {
-            "description": "APP_ENV が local でない（本文を読む前に断る。トークンがあっても無くても）か、本文の gameId・playerId がトークンのゲームとプレイヤーと違う（PERMISSION_DENIED）。",
+            "description": "APP_ENV が local でない（本文を読む前に断る。トークンがあっても無くても）か、本文の gameId・playerId がトークンのゲームとプレイヤーと違う（PERMISSION_DENIED）、トークンのプレイヤーが管理の口で止められている（PLAYER_BANNED。message は Player is banned。理由・期限は返さない。プレイヤーの利用制限の後に確かめる）。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -561,7 +561,8 @@
             },
             "x-error-codes": [
               "NOT_READY_FOR_PRODUCTION",
-              "PERMISSION_DENIED"
+              "PERMISSION_DENIED",
+              "PLAYER_BANNED"
             ],
             "content": {
               "application/json": {
@@ -740,7 +741,7 @@
             }
           },
           "403": {
-            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）。",
+            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）、トークンのプレイヤーが管理の口で止められている（PLAYER_BANNED。message は Player is banned。理由・期限は返さない。プレイヤーの利用制限の後に確かめる）。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -753,7 +754,8 @@
             },
             "x-error-codes": [
               "NOT_READY_FOR_PRODUCTION",
-              "PERMISSION_DENIED"
+              "PERMISSION_DENIED",
+              "PLAYER_BANNED"
             ],
             "content": {
               "application/json": {
@@ -943,7 +945,7 @@
             }
           },
           "403": {
-            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）。",
+            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）、トークンのプレイヤーが管理の口で止められている（PLAYER_BANNED。message は Player is banned。理由・期限は返さない。プレイヤーの利用制限の後に確かめる）。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -956,7 +958,8 @@
             },
             "x-error-codes": [
               "NOT_READY_FOR_PRODUCTION",
-              "PERMISSION_DENIED"
+              "PERMISSION_DENIED",
+              "PLAYER_BANNED"
             ],
             "content": {
               "application/json": {
@@ -1144,7 +1147,7 @@
             }
           },
           "403": {
-            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）。",
+            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）、トークンのプレイヤーが管理の口で止められている（PLAYER_BANNED。message は Player is banned。理由・期限は返さない。プレイヤーの利用制限の後に確かめる）。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -1157,7 +1160,8 @@
             },
             "x-error-codes": [
               "NOT_READY_FOR_PRODUCTION",
-              "PERMISSION_DENIED"
+              "PERMISSION_DENIED",
+              "PLAYER_BANNED"
             ],
             "content": {
               "application/json": {
@@ -1392,7 +1396,7 @@
             }
           },
           "403": {
-            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）。",
+            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）、トークンのプレイヤーが管理の口で止められている（PLAYER_BANNED。message は Player is banned。理由・期限は返さない。プレイヤーの利用制限の後に確かめる）。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -1405,7 +1409,8 @@
             },
             "x-error-codes": [
               "NOT_READY_FOR_PRODUCTION",
-              "PERMISSION_DENIED"
+              "PERMISSION_DENIED",
+              "PLAYER_BANNED"
             ],
             "content": {
               "application/json": {
@@ -1915,7 +1920,7 @@
             }
           },
           "403": {
-            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）。",
+            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）、トークンのプレイヤーが管理の口で止められている（PLAYER_BANNED。message は Player is banned。理由・期限は返さない。プレイヤーの利用制限の後に確かめる）。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -1928,7 +1933,8 @@
             },
             "x-error-codes": [
               "NOT_READY_FOR_PRODUCTION",
-              "PERMISSION_DENIED"
+              "PERMISSION_DENIED",
+              "PLAYER_BANNED"
             ],
             "content": {
               "application/json": {
@@ -2129,7 +2135,7 @@
             }
           },
           "403": {
-            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）。",
+            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）、トークンのプレイヤーが管理の口で止められている（PLAYER_BANNED。message は Player is banned。理由・期限は返さない。プレイヤーの利用制限の後に確かめる）。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -2142,7 +2148,8 @@
             },
             "x-error-codes": [
               "NOT_READY_FOR_PRODUCTION",
-              "PERMISSION_DENIED"
+              "PERMISSION_DENIED",
+              "PLAYER_BANNED"
             ],
             "content": {
               "application/json": {
@@ -2321,7 +2328,7 @@
             }
           },
           "403": {
-            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）。",
+            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）、トークンのプレイヤーが管理の口で止められている（PLAYER_BANNED。message は Player is banned。理由・期限は返さない。プレイヤーの利用制限の後に確かめる）。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -2334,7 +2341,8 @@
             },
             "x-error-codes": [
               "NOT_READY_FOR_PRODUCTION",
-              "PERMISSION_DENIED"
+              "PERMISSION_DENIED",
+              "PLAYER_BANNED"
             ],
             "content": {
               "application/json": {
@@ -2522,7 +2530,7 @@
             }
           },
           "403": {
-            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）。",
+            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）、トークンのプレイヤーが管理の口で止められている（PLAYER_BANNED。message は Player is banned。理由・期限は返さない。プレイヤーの利用制限の後に確かめる）。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -2535,7 +2543,8 @@
             },
             "x-error-codes": [
               "NOT_READY_FOR_PRODUCTION",
-              "PERMISSION_DENIED"
+              "PERMISSION_DENIED",
+              "PLAYER_BANNED"
             ],
             "content": {
               "application/json": {
@@ -3492,7 +3501,8 @@
           "SLOT_LIMIT_EXCEEDED",
           "RATE_LIMITED",
           "EVENT_NOT_ACTIVE",
-          "INVENTORY_LIMIT_EXCEEDED"
+          "INVENTORY_LIMIT_EXCEEDED",
+          "PLAYER_BANNED"
         ]
       }
     },

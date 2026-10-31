@@ -450,7 +450,7 @@ done();
 | --- | --- |
 | Steam など外部の認証との連携 | `account_identities(provider, subject, account_id)` の表を足し、確かめた外部 ID から `account_id` を引いて同じトークンを発行する。トークンの形（§4）と `game_players` は変えない |
 | ログイン（メールなど）・複数端末の引き継ぎ・同じアカウントで別のゲームのプレイヤーを作る | 引き継ぎ用の秘密（§8 の決めること 3 の B）か外部 ID でアカウントを確かめ、`game_players` に行を足す。`UNIQUE (game_id, account_id)` が 1 ゲーム 1 人を守る |
-| 1 人だけのトークンの取り消し（BAN） | §8 の決めること 2 の B の表を足すか、`accounts` に止めた印を足して `requireAuth` で引く（Phase 2 の管理機能と一緒に） |
+| 1 人だけのトークンの取り消し（BAN） | `docs/guides/working/admin-design.md` §4 で決めた: トークンは取り消さず、ゲームごとのプレイヤーを止めた印の表 `player_bans`（`migrations/0012_player_bans.sql`）を、4 つのモジュールがプレイヤーの利用制限の後に `requireNotBanned`（`src/core/bans.ts`）で引く。`requireAuth` は変えない（DB を引かない）。アカウント単位の BAN・トークンの取り消しは `admin-design.md` §14 |
 | 連投の制限・送信 ID | §8 の決めること 9 |
 | お知らせ・ランキングの GET に認証を付ける | 付けない（読み取りは公開。ランキングに出る `playerId` はゲーム別の公開用 ID で、`account_id` は出ない） |
 
