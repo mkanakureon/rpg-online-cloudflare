@@ -119,7 +119,7 @@ Cloudflare の機能（2026-10-31。リポジトリに入っている wrangler 4
 - 試験は `fetch(要求, env)` に渡す `env` に、試験の中で作った 32 文字以上の値（例: `'a'.repeat(32)`。秘密でない試験用の値）を入れる。鍵の無い場合の試験は `ADMIN_API_KEY: undefined` を明示する（§1 の要確認）。
 - 比べ方（`requireAdmin`）: `parseBearer`（`src/core/token.ts`）で取り出した値と `ADMIN_API_KEY` を、それぞれ SHA-256 にしてから `crypto.subtle.timingSafeEqual` で比べる（長さが中身で変わらず、文字列の `===` を使わない）。外れた理由（見出しが無い・違う）は応答に入れず、どちらも 401 `UNAUTHENTICATED` `Invalid admin credentials`。
 - 取り替え: `wrangler secret put ADMIN_API_KEY` で新しい値を入れる（ローカルは `.dev.vars` を書き換えて `npm run dev` を起動し直す）。前の鍵はその時から 401（前の鍵を並べて受ける期間は作らない。管理する人は少なく、同時に持ち替えられる）。
-- **ゲームのクライアント（CLI モック・UE・Unity・ブラウザ）に管理の鍵を持たせない**（`architecture.md`）。`scripts/cli-mock.mjs` と `scripts/cli-requests.mjs` には管理の鍵も管理の口も入れない（§7・§8 の `CLIモックの要求に管理の鍵の見出しが入らない`）。
+- **ゲームのクライアント（CLI モック・UE・Unity・ブラウザ）に管理の鍵を持たせない**（`architecture.md`）。`scripts/cli-mock.mjs` と `scripts/cli-requests.mjs` には管理の鍵も管理の口も入れない（§7。O4 の確認コマンドが文字列で見る）。
 - 管理コマンドは鍵を自分のプロセスの環境変数 `ADMIN_API_KEY` から読む。無ければ、行き先が `127.0.0.1`・`localhost` のときだけ `.dev.vars` から `ADMIN_API_KEY` の行を読む（読むだけ。書かない）。鍵を表示・記録しない。
 
 ## 4. BAN（1 人のプレイヤーを止める）
@@ -273,10 +273,11 @@ DELETE FROM inventory_balances
 | 行がある（この要求の `audit_ref`） | 200 |
 | 行がある（前の要求）・`request_hash` が同じ＝二重 | **200 で 1 回目と同じ本文**（`after_json` と `audit_id` から作る）。履歴も残高も増えない |
 | 行がある・`request_hash` が違う | 422 `IDEMPOTENCY_KEY_REUSED`（新しいコード。管理の口だけ） |
-| 行が無く、品目かプレイヤーが無い | 404 `NOT_FOUND`（`Unknown item`・`Unknown player`） |
+| 行が無く、品目かプレイヤーが無い | 404 `NOT_FOUND`（`Unknown item`・`Unknown player`）。見分けは下の読み直しで |
 | 行が無く、取り消しで 0 未満になる | 409 `INSUFFICIENT_BALANCE`（新しいコード。`event-reward-design.md` §6 の名前。管理の口だけ） |
 | 行が無く、付与で上限を超える | 409 `INVENTORY_LIMIT_EXCEEDED`（いまのコード） |
 
+- 行が無いときの読み直し（見分けるための 1 文）: `SELECT (SELECT 1 FROM inventory_items WHERE game_id = :g AND item_id = :item) AS item, (SELECT 1 FROM game_players WHERE game_id = :g AND player_id = :p) AS player, COALESCE((SELECT amount FROM inventory_balances WHERE game_id = :g AND player_id = :p AND item_id = :item), 0) AS cur`。`item` か `player` が NULL なら 404、`cur + delta < 0` なら `INSUFFICIENT_BALANCE`、`cur + delta > MAX_ITEM_AMOUNT` なら `INVENTORY_LIMIT_EXCEEDED`。どれでもなければ（`batch` と読み直しの間に別の修正で残高が動いた）、`delta` が負なら `INSUFFICIENT_BALANCE`・正なら `INVENTORY_LIMIT_EXCEEDED` の 409 を返す（何も書いていないので、管理の人は同じ鍵で流し直せる）。
 - 並べて送っても: D1 は `batch` を順に流すので、2 つ目の `batch` の文 1 は一意の鍵で何もせず、その `audit_ref` の行が無いので文 2〜5 も何もしない（イベントの受け取りと同じ）。
 - `request_hash` は `{"action","gameId","playerId","itemId","delta","reason"}` を決まった順の JSON にして SHA-256（16 進）。`actor` は入れない（同じ修正を別の人が流し直しても二重にしない）。
 - **`Idempotency-Key` の保存は `admin_audit_log` の列にする**（`abuse-protection-design.md` §5 の表 `idempotency_keys` は作らない。§11 の決めること 5）。`idempotency_keys` は、プレイヤーの消費の口（`event-reward-design.md` §6）を足すときに作る。
@@ -328,7 +329,7 @@ DELETE FROM inventory_balances
 
 ### 管理コマンド（O4）
 
-`scripts/` の下に `admin-cli.mjs`（入口）と `admin-requests.mjs`（要求の形の関数。試験と共有。`scripts/cli-requests.mjs` と同じ考え）を作る。`package.json` に行を足さない（`node` で直に起動する）。
+`scripts/` の下に `admin-cli.mjs`（入口）と `admin-requests.mjs`（要求の形の関数。試験と共有。`scripts/cli-requests.mjs` と同じ考え）と、その型のファイル `admin-requests.d.mts`（試験の TypeScript から読み込むため。`scripts/cli-requests.d.mts` と同じ形。無いと `npm run typecheck` で落ちる）を作る。`package.json` に行を足さない（`node` で直に起動する）。
 
 - 呼び方: `node <scripts の下の admin-cli.mjs> <操作> [引数]`。操作は `player`・`audit`・`grant`・`revoke`・`ban`・`unban`・`delete-score`・`put-item`・`put-event`（定義は JSON のファイルを引数で渡す）・`smoke`。行き先は `RPG_API_BASE`（既定 `http://127.0.0.1:8787`。CLI モックと同じ）。`X-Admin-Actor` は `--actor`（既定は OS のユーザー名でなく `local-admin`。個人の名前を勝手に記録しない）。
 - `grant`・`revoke` は新しい `Idempotency-Key` を作って表示し、`--key <値>` で流し直しに同じ鍵を指定できる。
@@ -344,7 +345,7 @@ DELETE FROM inventory_balances
 - 管理の鍵は試験の中で作る（`const adminKey = 'a'.repeat(32)`）。`adminEnv = { ...localEnv, ADMIN_API_KEY: adminKey }`。鍵の無い場合は `{ ...localEnv, ADMIN_API_KEY: undefined }` を明示する（§1 の要確認）。
 - 試験のゲームは専用（`adm-game` など。`registerGame` と品目・プレイヤーの行を `beforeEach` で入れる）。プレイヤーはゲストの発行で作るか、`game_players`・`accounts` に行を直に入れる。
 - 書き込みをするファイルの `beforeEach` で `resetRateLimits(db)` と、監査・止めた印・所持品・受け取りの表の `DELETE`。
-- 新しい試験の名前には数を入れない（エラーコードや操作の数が増えるたびに名前を置き換える手間を作らない。§9）。
+- 新しい試験の名前には、機能が増えると変わる数（エラーコード・操作・ルートの個数）を入れない（増えるたびに名前を置き換える手間を作らない。§9）。決まった値（鍵の長さ・送る回数）と、既存の試験の置き換え（`スキーマのErrorCodeの列挙は15個のエラーコードと一致する`）は入れてよい。
 
 | 束 | テストの名前 | 層 | 入力（要求） | 期待する結果 |
 | --- | --- | --- | --- | --- |
@@ -398,9 +399,10 @@ DELETE FROM inventory_balances
 | O4 | `品目の種類は後から変えられない` | L2 | `currency` の品目を `item` で入れ直す | 400 `INVALID_ARGUMENT` |
 | O4 | `イベントの定義を入れると監査のログに前と後の定義が残る` | L2 | 入れて、入れ直して監査を読む | `event.put` の 2 行。1 行目の前は `null` |
 | O4 | `管理コマンドと同じ流れで付与と取り消しとBANとイベントの定義が監査のログに残る` | L2 | `admin-requests.mjs` の関数で §7 の `smoke` と同じ流れ | 各手順の応答が §7 のとおり。監査に新しい順で並ぶ |
-| O4 | `CLIモックの要求に管理の鍵の見出しも管理の口も入らない` | L1 | `scripts/cli-mock.mjs`・`scripts/cli-requests.mjs` の文字列 | `/v1/admin` と `ADMIN_API_KEY` を含まない |
 
-数（行）: O1 が 15・O2 が 12・O3 が 15・O4 が 9。
+数（行）: O1 が 15・O2 が 12・O3 が 15・O4 が 8。
+
+CLI モックに管理の鍵と管理の口が入らないことは試験にしない（試験は Workers のランタイムで回り、いまの `test/` にファイルの中身を文字列で読む前例が無い）。O4 の確認コマンド（Node.js で回る）が `scripts/cli-mock.mjs` と `scripts/cli-requests.mjs` の文字列で見る（§12）。
 
 ## 9. 挙動が変わる既存の試験と、直す手続き
 
@@ -643,7 +645,8 @@ const read = (p) => (existsSync(p) ? readFileSync(p, 'utf8') : '');
 const pkg = ['package', 'json'].join('.');
 const cli = ['scripts', 'admin-cli.mjs'].join('/');
 const requests = ['scripts', 'admin-requests.mjs'].join('/');
-const files = [cli, requests];
+const types = ['scripts', 'admin-requests.d.mts'].join('/');
+const files = [cli, requests, types];
 mustExist(files);
 gitTracked(files);
 check(/APP_ENV\s*!==\s*'local'/.test(read('src/core/guards.ts')), 'APP_ENV=local の守りが残っている');
@@ -661,7 +664,6 @@ requireTests([
   '品目の種類は後から変えられない',
   'イベントの定義を入れると監査のログに前と後の定義が残る',
   '管理コマンドと同じ流れで付与と取り消しとBANとイベントの定義が監査のログに残る',
-  'CLIモックの要求に管理の鍵の見出しも管理の口も入らない',
   // イベントの受け取りと CLI モックが変わらないことを見張る（§9）
   '同じ期間の報酬を二重に受け取っても所持品は1回分で同じ本文を返す',
   'CLIモックと同じ流れでイベントの報酬を受け取り二回目は二重にならない',
