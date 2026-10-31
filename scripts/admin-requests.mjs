@@ -1,7 +1,8 @@
 // admin-requests.mjs — 管理コマンドが送る要求の形（依存の無い ES モジュール。読み込むだけで HTTP を送らない）。
 //
 // scripts/admin-cli.mjs（入口）と test/admin.test.ts の両方がここを読み込む（scripts/cli-requests.mjs と同じ考え）。
-// 操作ごとの関数（playerOp〜putEventOp）が { method, path, body } を作り、adminRequest が管理の鍵・X-Admin-Actor・Idempotency-Key を付けた
+// 操作ごとの関数（playerOp〜putEventOp と、プレイヤーデータの putDataKeyOp・putAchievementOp・setDataOp・revokeAchievementOp）が
+// { method, path, body } を作り、adminRequest が管理の鍵・X-Admin-Actor・Idempotency-Key を付けた
 // Request にする。通しの確かめ runSmoke は、送る関数（send）を受け取って docs/guides/working/admin-design.md §7 の smoke の流れを回す
 // （CLI は fetch、試験は src/worker.ts の fetch を渡す。テスト「管理コマンドと同じ流れで付与と取り消しとBANとイベントの定義が監査のログに残る」）。
 // ゲストの発行とゲームの口（所持品・イベントの一覧）の形は scripts/cli-requests.mjs の guestRequest などを読むだけ（ゲームのクライアントの
@@ -62,6 +63,32 @@ export function putItemOp(itemId, kind, reason, gameId = DEFAULT_GAME_ID) {
 /** イベントの定義を入れる・置き換える（PUT /v1/admin/events/{eventId}）。definition は kind・startsAt・endsAt・resetOffsetMinutes・rewards・reason。 */
 export function putEventOp(eventId, definition, gameId = DEFAULT_GAME_ID) {
   return { method: 'PUT', path: `/v1/admin/events/${segment(eventId)}?${query(gameId)}`, body: definition };
+}
+
+/**
+ * プレイヤーデータのキーを宣言する（PUT /v1/admin/player-data/keys/{key}）。declaration は mode・maxValue と、add のときだけ maxDelta
+ * （ほかの書き方では送らない）。
+ */
+export function putDataKeyOp(key, declaration, reason, gameId = DEFAULT_GAME_ID) {
+  const { mode, maxValue, maxDelta } = declaration;
+  return { method: 'PUT', path: `/v1/admin/player-data/keys/${segment(key)}?${query(gameId)}`,
+    body: maxDelta === undefined || maxDelta === null ? { mode, maxValue, reason } : { mode, maxValue, maxDelta, reason } };
+}
+
+/** 実績を宣言する（PUT /v1/admin/achievements/{achievementId}。見るキーと閾値）。 */
+export function putAchievementOp(achievementId, key, threshold, reason, gameId = DEFAULT_GAME_ID) {
+  return { method: 'PUT', path: `/v1/admin/achievements/${segment(achievementId)}?${query(gameId)}`, body: { key, threshold, reason } };
+}
+
+/** 1 人のプレイヤーの 1 つのキーの値を置く（PUT /v1/admin/players/{playerId}/player-data/{key}。実績は判定しない）。 */
+export function setDataOp(playerId, key, value, reason, gameId = DEFAULT_GAME_ID) {
+  return { method: 'PUT', path: `/v1/admin/players/${segment(playerId)}/player-data/${segment(key)}?${query(gameId)}`, body: { value, reason } };
+}
+
+/** 1 人のプレイヤーの解いた実績を取り消す（DELETE /v1/admin/players/{playerId}/achievements/{achievementId}）。 */
+export function revokeAchievementOp(playerId, achievementId, reason, gameId = DEFAULT_GAME_ID) {
+  return { method: 'DELETE', path: `/v1/admin/players/${segment(playerId)}/achievements/${segment(achievementId)}?${query(gameId)}`,
+    body: { reason } };
 }
 
 /** 増減の Idempotency-Key を新しく作る（修正ごとに新しく。流し直すときだけ前の鍵を使う）。 */

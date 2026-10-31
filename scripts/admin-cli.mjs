@@ -2,7 +2,7 @@
 // admin-cli.mjs — ローカルの管理コマンド（管理の HTTP の口 /v1/admin/... を呼ぶだけ。D1 を直に触らない）。
 //
 // 呼び方: node scripts/admin-cli.mjs <操作> [引数] [--game <gameId>] [--actor <ラベル>]
-//   player <playerId>                                  1 人のプレイヤーを読む
+//   player <playerId>                                  1 人のプレイヤーを読む（所持品・履歴・セーブの一覧・スコア・プレイヤーデータ）
 //   audit [--limit <n>] [--before <auditId>]            監査のログを新しい順に読む
 //   grant <playerId> <itemId> <amount> --reason <理由> [--key <Idempotency-Key>]   付与（鍵を表示する。流し直しは --key で同じ鍵）
 //   revoke <playerId> <itemId> <amount> --reason <理由> [--key <Idempotency-Key>]  取り消し（負の増減）
@@ -11,6 +11,10 @@
 //   delete-score <boardId> <playerId> --reason <理由>                              スコアを消す
 //   put-item <itemId> <currency|item> --reason <理由>                              品目を入れる
 //   put-event <eventId> <定義の JSON のファイル> [--reason <理由>]                 イベントの定義を入れる・置き換える
+//   put-data-key <key> <add|max|set|flag> <maxValue> [--max-delta <n>] --reason <理由>  プレイヤーデータのキーを宣言する（add は --max-delta が要る）
+//   put-achievement <achievementId> <key> <threshold> --reason <理由>             実績を宣言する
+//   set-data <playerId> <key> <value> --reason <理由>                              プレイヤーデータの値を置く（実績は判定しない）
+//   revoke-achievement <playerId> <achievementId> --reason <理由>                  解いた実績を取り消す
 //   smoke                                               通しの確かめ（docs/guides/working/admin-design.md §7。最後に PASS）
 // 行き先は RPG_API_BASE（既定 http://127.0.0.1:8787。CLI モックと同じ）。X-Admin-Actor は --actor（既定 local-admin。OS の名前は使わない）。
 // 管理の鍵は環境変数 ADMIN_API_KEY から読み、無ければ行き先が 127.0.0.1・localhost のときだけリポジトリの .dev.vars の ADMIN_API_KEY の行を
@@ -20,8 +24,8 @@
 // 概要記述: Claude Opus 5.5 — 2026-10-31
 import { readFileSync } from 'node:fs';
 import {
-  DEFAULT_GAME_ID, adjustOp, adminRequest, auditOp, banOp, deleteScoreOp, newIdempotencyKey, playerOp, putEventOp,
-  putItemOp, runSmoke, unbanOp
+  DEFAULT_GAME_ID, adjustOp, adminRequest, auditOp, banOp, deleteScoreOp, newIdempotencyKey, playerOp, putAchievementOp, putDataKeyOp,
+  putEventOp, putItemOp, revokeAchievementOp, runSmoke, setDataOp, unbanOp
 } from './admin-requests.mjs';
 
 const base = process.env.RPG_API_BASE || 'http://127.0.0.1:8787';
@@ -75,6 +79,13 @@ function amountOf(raw) {
   return n;
 }
 
+/** min 以上の整数の引数。 */
+function integerOf(raw, name, min) {
+  const n = Number(required(raw, name));
+  if (!Number.isInteger(n) || n < min) throw new Error(`${name} must be an integer >= ${min}`);
+  return n;
+}
+
 /** 応答を表示する（管理の口の応答に鍵は入らない）。失敗の状態なら投げる。 */
 async function show(op, res) {
   const body = await res.json();
@@ -118,6 +129,20 @@ const commands = {
     required(definition.reason, '--reason (or "reason" in the definition file)');
     return send(k, putEventOp(required(eventId, '<eventId>'), definition, gameId), { actor });
   },
+  'put-data-key': (k, [key, mode, maxValue], f, actor, gameId) =>
+    send(k, putDataKeyOp(required(key, '<key>'), {
+      mode: required(mode, '<mode>'), maxValue: integerOf(maxValue, '<maxValue>', 1),
+      maxDelta: f['max-delta'] === undefined ? undefined : integerOf(f['max-delta'], '--max-delta', 1),
+    }, required(f.reason, '--reason'), gameId), { actor }),
+  'put-achievement': (k, [achievementId, key, threshold], f, actor, gameId) =>
+    send(k, putAchievementOp(required(achievementId, '<achievementId>'), required(key, '<key>'), integerOf(threshold, '<threshold>', 1),
+      required(f.reason, '--reason'), gameId), { actor }),
+  'set-data': (k, [playerId, key, value], f, actor, gameId) =>
+    send(k, setDataOp(required(playerId, '<playerId>'), required(key, '<key>'), integerOf(value, '<value>', 0),
+      required(f.reason, '--reason'), gameId), { actor }),
+  'revoke-achievement': (k, [playerId, achievementId], f, actor, gameId) =>
+    send(k, revokeAchievementOp(required(playerId, '<playerId>'), required(achievementId, '<achievementId>'), required(f.reason, '--reason'),
+      gameId), { actor }),
   'smoke': async (k, _a, _f, actor) => {
     await runSmoke({
       send: (request) => fetch(request), baseUrl: base, adminKey: k, actor,

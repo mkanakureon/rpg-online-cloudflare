@@ -5,6 +5,8 @@
  * DELETE /v1/admin/rankings/{boardId}/entries/{playerId}・src/core/ledger.ts の LEDGER_SOURCES）の試験。
  * 管理 O4: 品目とイベントの定義（PUT /v1/admin/items/{itemId}・PUT /v1/admin/events/{eventId}・parseEventDefinition）と、管理コマンドの
  * 要求の形（scripts/admin-requests.mjs。smoke の流れ runSmoke に src/worker.ts の fetch を渡す）の試験。
+ * プレイヤーデータ U3: プレイヤーを読む口の playerData と、キーと実績の宣言・値を置く・実績の取り消しの 4 つの口（名前と期待する結果の正は
+ * docs/guides/working/player-data-design.md §10 の U3 の行）。プレイヤーデータの表は U3 の describe の前後で消す。
  * 名前と期待する結果の正は docs/guides/working/admin-design.md §8 の O1・O3・O4 の行。L1 は関数を直に呼ぶ。L2 は src/worker.ts の
  * default.fetch を直に呼ぶ。管理の鍵は試験の中で作る秘密でない値（'a'.repeat(32)）で、鍵の無い場合は ADMIN_API_KEY: undefined を
  * env に明示する（試験のランタイムが .dev.vars を読み込んでも、人の鍵に頼らない）。試験のゲームは専用の adm-game。
@@ -13,20 +15,24 @@
  * 概要記述: Claude Opus 5.5 — 2026-10-31
  */
 import { env } from 'cloudflare:workers';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
 import { adminSecret, requireAdmin } from '../src/core/admin/key';
 import { parseAdjustment, parseEventDefinition } from '../src/core/admin/parse';
 import { adminRoutes } from '../src/core/admin/routes';
 import { MAX_ITEM_AMOUNT, MAX_REWARD_LINES } from '../src/core/inventory';
 import { LEDGER_SOURCES } from '../src/core/ledger';
+import { MAX_PLAYER_DATA_KEYS } from '../src/core/player-data';
 import { NO_IP_SUBJECT } from '../src/core/rate-limit';
 import { RATE_LIMITS } from '../src/core/rate-limit-policy';
 import adminSpecJson from '../openapi/rpg-online-admin.v1.json';
 import {
-  SMOKE_AUDIT_ACTIONS, adminRequest, putEventOp, putItemOp, runSmoke, type EventDefinitionBody,
+  SMOKE_AUDIT_ACTIONS, adminRequest, auditOp, playerOp, putAchievementOp, putDataKeyOp, putEventOp, putItemOp, revokeAchievementOp, runSmoke,
+  setDataOp, type AdminOp, type EventDefinitionBody,
 } from '../scripts/admin-requests.mjs';
-import { authHeaders, claimPath, eventsPath, inventoryPath } from '../scripts/cli-requests.mjs';
+import {
+  authHeaders, claimPath, eventsPath, guestRequest, inventoryPath, playerDataHeaders, playerDataPath, playerDataWrite,
+} from '../scripts/cli-requests.mjs';
 import { registerGame } from './support/games';
 import { countRateLimitRows, fillRateLimit, resetRateLimits } from './support/rate-limits';
 import { validate, type Schema, type SchemaRoot } from './support/schema-check';
@@ -922,5 +928,331 @@ describe('O4 管理コマンド', () => {
       .bind('demo-rpg', result.playerId, 'gold').first<{ amount: number }>();
     expect(balance?.amount).toBe(30);
     expect(await baseEnv.DB.prepare('SELECT COUNT(*) AS n FROM player_bans').first<{ n: number }>()).toEqual({ n: 0 });
+  });
+});
+
+// ---- U3 プレイヤーデータの管理 ----
+
+type PlayerDataBody = { values: Array<{ key: string; mode: string; value: number; updatedAt: string }>;
+  achievements: Array<{ achievementId: string; unlockedAt: string; writeId: string }> };
+const dataKeySpec = '/v1/admin/player-data/keys/{key}';
+const achievementSpec = '/v1/admin/achievements/{achievementId}';
+const dataSetSpec = '/v1/admin/players/{playerId}/player-data/{key}';
+const revokeSpec = '/v1/admin/players/{playerId}/achievements/{achievementId}';
+const iso = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+/** 管理コマンドと同じ要求の形（scripts/admin-requests.mjs）で管理の口に送る。 */
+const adminSend = (op: AdminOp, e: TestEnv = adminEnv) => worker.fetch(adminRequest(base, adminKey, op), e as never);
+/** プレイヤーデータの表を消す（demo-rpg の手本のキーと実績は残す）。 */
+async function resetPlayerData(): Promise<void> {
+  await baseEnv.DB.batch([
+    baseEnv.DB.prepare('DELETE FROM player_achievements'),
+    baseEnv.DB.prepare('DELETE FROM player_data'),
+    baseEnv.DB.prepare('DELETE FROM player_data_writes'),
+    baseEnv.DB.prepare("DELETE FROM achievements WHERE NOT (game_id = 'demo-rpg' AND achievement_id IN ('first-slime', 'boss-1'))"),
+    baseEnv.DB.prepare("DELETE FROM player_data_keys WHERE NOT (game_id = 'demo-rpg' "
+      + "AND key IN ('slimes-defeated', 'highest-floor', 'chapter', 'boss-1-defeated'))"),
+  ]);
+}
+/** adm-game の宣言: kills（add・上限 1000・1 回 100）・floor（max）・chapter（set）・boss（flag）と、kills が 10 以上で解ける実績 kill-10。 */
+async function declareData(): Promise<void> {
+  const key = baseEnv.DB.prepare('INSERT INTO player_data_keys (game_id, key, mode, max_value, max_delta) VALUES (?, ?, ?, ?, ?)');
+  await baseEnv.DB.batch([
+    key.bind(game, 'kills', 'add', 1000, 100), key.bind(game, 'floor', 'max', 999, null), key.bind(game, 'chapter', 'set', 100, null),
+    key.bind(game, 'boss', 'flag', 1, null),
+    baseEnv.DB.prepare("INSERT INTO achievements (game_id, achievement_id, key, threshold) VALUES (?, 'kill-10', 'kills', 10)").bind(game),
+  ]);
+}
+async function putValue(playerId: string, key: string, value: number, gameId = game): Promise<void> {
+  await baseEnv.DB.prepare('INSERT INTO player_data (game_id, player_id, key, value, updated_at) VALUES (?, ?, ?, ?, ?)')
+    .bind(gameId, playerId, key, value, Math.floor(Date.now() / 1000)).run();
+}
+async function putUnlocked(playerId: string, achievementId: string, writeRef: string): Promise<void> {
+  await baseEnv.DB.prepare('INSERT INTO player_achievements (game_id, player_id, achievement_id, unlocked_at, write_ref) VALUES (?, ?, ?, ?, ?)')
+    .bind(game, playerId, achievementId, Math.floor(Date.now() / 1000), writeRef).run();
+}
+async function valueOf(playerId: string, key: string): Promise<number | null> {
+  const row = await baseEnv.DB.prepare('SELECT value FROM player_data WHERE game_id = ? AND player_id = ? AND key = ?')
+    .bind(game, playerId, key).first<{ value: number }>();
+  return row?.value ?? null;
+}
+const countOf = async (sql: string) => (await baseEnv.DB.prepare(sql).first<{ n: number }>())?.n ?? 0;
+/** 何も書いていないことを見るための行（宣言・値・解いた実績・監査）。 */
+async function dataSnapshot(): Promise<unknown[]> {
+  const all = (sql: string) => baseEnv.DB.prepare(sql).all().then((r) => r.results);
+  return [
+    await all('SELECT game_id, key, mode, max_value, max_delta FROM player_data_keys ORDER BY game_id, key'),
+    await all('SELECT game_id, achievement_id, key, threshold FROM achievements ORDER BY game_id, achievement_id'),
+    await all('SELECT game_id, player_id, key, value FROM player_data ORDER BY game_id, player_id, key'),
+    await all('SELECT game_id, player_id, achievement_id, unlocked_at FROM player_achievements ORDER BY game_id, player_id, achievement_id'),
+    await countRows('admin_audit_log'),
+  ];
+}
+/** プレイヤーデータを使う設定にして、ゲストを発行する。 */
+async function dataGuest(): Promise<{ token: string; playerId: string }> {
+  await registerGame(baseEnv.DB, game, ['player-data']);
+  const res = await worker.fetch(new Request(`${base}/v1/accounts/guest`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ gameId: game }),
+  }), adminEnv as never);
+  expect(res.status).toBe(200);
+  return res.json<{ token: string; playerId: string }>();
+}
+/** ゲストのトークンでプレイヤーデータを書く（scripts/cli-requests.mjs の形。鍵は毎回新しく）。 */
+const writeData = (token: string, key: string, value: number, gameId = game) =>
+  worker.fetch(new Request(`${base}${playerDataPath(gameId)}`, {
+    method: 'POST', headers: playerDataHeaders(token, crypto.randomUUID()), body: JSON.stringify(playerDataWrite(key, value)),
+  }), adminEnv as never);
+
+describe('U3 プレイヤーデータの管理', () => {
+  beforeEach(async () => {
+    await resetPlayerData();
+    await declareData();
+  });
+  afterEach(resetPlayerData);
+
+  it('管理の読み取りはプレイヤーデータの値と解いた実績を返す', async () => {
+    await addPlayer('p1');
+    await addPlayer('p2');
+    await addPlayer('p3');
+    await putValue('p1', 'kills', 12);
+    await putValue('p1', 'chapter', 2);
+    await putValue('p2', 'kills', 5);
+    await putUnlocked('p1', 'kill-10', 'write-ref-1');
+    const body = await (await adminSend(playerOp('p1', game))).json<{ playerData: PlayerDataBody }>();
+    expect(body.playerData.values.map(({ updatedAt, ...v }) => ({ ...v, updatedAt: iso.test(updatedAt) }))).toEqual([
+      { key: 'chapter', mode: 'set', value: 2, updatedAt: true }, { key: 'kills', mode: 'add', value: 12, updatedAt: true },
+    ]);
+    expect(body.playerData.achievements).toHaveLength(1);
+    expect(body.playerData.achievements[0]).toMatchObject({ achievementId: 'kill-10', writeId: 'write-ref-1' });
+    expect(body.playerData.achievements[0].unlockedAt).toMatch(iso);
+    // ほかのプレイヤーの行は載らない。行の無い人は空の配列
+    const other = await (await adminSend(playerOp('p2', game))).json<{ playerData: PlayerDataBody }>();
+    expect(other.playerData.values.map((v) => [v.key, v.value])).toEqual([['kills', 5]]);
+    expect(other.playerData.achievements).toEqual([]);
+    expect((await (await adminSend(playerOp('p3', game))).json<{ playerData: PlayerDataBody }>()).playerData).toEqual({ values: [], achievements: [] });
+    // 読み取りは監査に残さない
+    expect(await countRows('admin_audit_log')).toBe(0);
+  });
+
+  it('管理の口で宣言したキーにプレイヤーが書ける', async () => {
+    const { token } = await dataGuest();
+    // 宣言の前は書けない
+    await expectError(await writeData(token, 'gems-found', 5), 404, 'NOT_FOUND');
+    const res = await adminSend(putDataKeyOp('gems-found', { mode: 'add', maxValue: 1000, maxDelta: 10 }, '宝石の数を数える', game));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ gameId: game, key: 'gems-found', mode: 'add', maxValue: 1000, maxDelta: 10 });
+    const written = await writeData(token, 'gems-found', 5);
+    expect(written.status).toBe(200);
+    expect((await written.json<{ values: unknown[] }>()).values).toEqual([{ key: 'gems-found', value: 5 }]);
+    // 宣言の 1 回の増加の上限が効く
+    await expectError(await writeData(token, 'gems-found', 11), 400, 'INVALID_ARGUMENT');
+    // add でない書き方の宣言は maxDelta が null で返り、プレイヤーが書ける
+    const flag = await adminSend(putDataKeyOp('door-opened', { mode: 'flag', maxValue: 1 }, '扉の印', game));
+    expect(await flag.json()).toEqual({ gameId: game, key: 'door-opened', mode: 'flag', maxValue: 1, maxDelta: null });
+    expect((await writeData(token, 'door-opened', 1)).status).toBe(200);
+    const audit = await (await adminGet(auditPath())).json<AuditBody>();
+    expect(audit.items.map((a) => [a.action, a.target, a.before, a.after])).toEqual([
+      ['player-data-key.put', 'player-data-key:door-opened', null, { mode: 'flag', maxValue: 1, maxDelta: null }],
+      ['player-data-key.put', 'player-data-key:gems-found', null, { mode: 'add', maxValue: 1000, maxDelta: 10 }],
+    ]);
+  });
+
+  it('値のあるキーの書き方は変えられない', async () => {
+    await addPlayer('p1');
+    await putValue('p1', 'kills', 3);
+    const before = await dataSnapshot();
+    const res = await adminSend(putDataKeyOp('kills', { mode: 'set', maxValue: 1000 }, '書き方を変える', game));
+    await expectAdminConforms(res.clone(), dataKeySpec, 'put');
+    await expectError(res, 400, 'INVALID_ARGUMENT');
+    // 本文の確かめ（表の CHECK と同じ決まり）も DB の前に断る
+    for (const declaration of [{ mode: 'add', maxValue: 1000 }, { mode: 'set', maxValue: 10, maxDelta: 5 }, { mode: 'flag', maxValue: 2 },
+      { mode: 'max', maxValue: 0 }, { mode: 'max', maxValue: 1_000_000_001 }, { mode: 'add', maxValue: 10, maxDelta: 0 }, { mode: 'count', maxValue: 10 }]) {
+      await expectError(await adminSend(putDataKeyOp('kills', declaration, '外れ', game)), 400, 'INVALID_ARGUMENT');
+    }
+    expect(await dataSnapshot()).toEqual(before);
+    // maxValue だけの変更は通る（前の値は消さない）
+    const lowered = await adminSend(putDataKeyOp('kills', { mode: 'add', maxValue: 2, maxDelta: 1 }, '上限を下げる', game));
+    expect(lowered.status).toBe(200);
+    expect(await valueOf('p1', 'kills')).toBe(3);
+    const row = await baseEnv.DB.prepare('SELECT mode, max_value AS maxValue, max_delta AS maxDelta FROM player_data_keys WHERE game_id = ? AND key = ?')
+      .bind(game, 'kills').first();
+    expect(row).toEqual({ mode: 'add', maxValue: 2, maxDelta: 1 });
+    // 値の行の無いキーは書き方も変えられる
+    expect((await adminSend(putDataKeyOp('floor', { mode: 'set', maxValue: 999 }, '書き方を変える', game))).status).toBe(200);
+    const audit = await (await adminGet(auditPath())).json<AuditBody>();
+    expect(audit.items.map((a) => [a.action, a.before, a.after])).toEqual([
+      ['player-data-key.put', { mode: 'max', maxValue: 999, maxDelta: null }, { mode: 'set', maxValue: 999, maxDelta: null }],
+      ['player-data-key.put', { mode: 'add', maxValue: 1000, maxDelta: 100 }, { mode: 'add', maxValue: 2, maxDelta: 1 }],
+    ]);
+    // 宣言は MAX_PLAYER_DATA_KEYS まで（あるキーの入れ直しは通る）
+    const declared = await countOf(`SELECT COUNT(*) AS n FROM player_data_keys WHERE game_id = '${game}'`);
+    const fill = baseEnv.DB.prepare("INSERT INTO player_data_keys (game_id, key, mode, max_value) VALUES (?, ?, 'set', 10)");
+    await baseEnv.DB.batch(Array.from({ length: MAX_PLAYER_DATA_KEYS - declared }, (_, i) => fill.bind(game, `fill-${i}`)));
+    const full = await dataSnapshot();
+    await expectError(await adminSend(putDataKeyOp('one-more', { mode: 'set', maxValue: 10 }, '多すぎる', game)), 400, 'INVALID_ARGUMENT');
+    expect(await dataSnapshot()).toEqual(full);
+    expect((await adminSend(putDataKeyOp('fill-0', { mode: 'set', maxValue: 20 }, '入れ直す', game))).status).toBe(200);
+  });
+
+  it('宣言の無いキーを見る実績の宣言はNOT_FOUNDの404を返し何も書かない', async () => {
+    const before = await dataSnapshot();
+    for (const achievementId of ['fresh', 'kill-10']) {
+      const res = await adminSend(putAchievementOp(achievementId, 'no-such-key', 1, '無いキー', game));
+      await expectAdminConforms(res.clone(), achievementSpec, 'put');
+      const body = await expectError(res, 404, 'NOT_FOUND');
+      expect(body.error.message).toBe('Unknown key');
+    }
+    // demo-rpg にあるキーでもこのゲームに無ければ宣言の無いキー
+    await expectError(await adminSend(putAchievementOp('fresh', 'slimes-defeated', 1, '別のゲームのキー', game)), 404, 'NOT_FOUND');
+    expect(await dataSnapshot()).toEqual(before);
+    // 宣言のあるキーなら入る
+    const ok = await adminSend(putAchievementOp('boss-down', 'boss', 1, 'ボスの実績', game));
+    expect(await ok.json()).toEqual({ gameId: game, achievementId: 'boss-down', key: 'boss', threshold: 1 });
+  });
+
+  it('管理でプレイヤーデータを直すと値が置き換わり監査に前と後が残る', async () => {
+    await addPlayer('p1');
+    await putValue('p1', 'kills', 50);
+    const res = await adminSend(setDataOp('p1', 'kills', 0, '不正な連打の分を戻す', game));
+    expect(res.status).toBe(200);
+    const body = await res.json<{ auditId: number }>();
+    expect(body).toMatchObject({ gameId: game, playerId: 'p1', key: 'kills', value: 0 });
+    expect(await valueOf('p1', 'kills')).toBe(0);
+    // 値の行が無いキーは前が null。書き方に関わらず 0〜maxValue（flag も 0 に戻せる）
+    expect((await adminSend(setDataOp('p1', 'chapter', 7, '章を進める', game))).status).toBe(200);
+    expect(await valueOf('p1', 'chapter')).toBe(7);
+    const audit = await (await adminGet(auditPath())).json<AuditBody>();
+    expect(audit.items).toHaveLength(2);
+    expect(audit.items[1]).toMatchObject({ auditId: body.auditId, actor: 'local-admin', action: 'player-data.set', target: 'player:p1',
+      before: { key: 'kills', value: 50 }, after: { key: 'kills', value: 0 }, reason: '不正な連打の分を戻す' });
+    expect(audit.items[0]).toMatchObject({ action: 'player-data.set', before: null, after: { key: 'chapter', value: 7 } });
+    // 外れは何も書かない: 無いプレイヤー・無いキー（404）・キーの上限の外・負・小数（400）
+    const before = await dataSnapshot();
+    expect((await expectError(await adminSend(setDataOp('nobody', 'kills', 1, 'x', game)), 404, 'NOT_FOUND')).error.message).toBe('Unknown player');
+    expect((await expectError(await adminSend(setDataOp('p1', 'no-key', 1, 'x', game)), 404, 'NOT_FOUND')).error.message).toBe('Unknown key');
+    for (const value of [1001, -1, 1.5]) await expectError(await adminSend(setDataOp('p1', 'kills', value, 'x', game)), 400, 'INVALID_ARGUMENT');
+    await expectError(await adminSend(setDataOp('p1', 'boss', 2, 'x', game)), 400, 'INVALID_ARGUMENT');
+    expect(await dataSnapshot()).toEqual(before);
+  });
+
+  it('管理で値を直しても実績は解けず取り消されない', async () => {
+    await addPlayer('p1');
+    await addPlayer('p2');
+    // 閾値を超える値に直しても解けない
+    expect((await adminSend(setDataOp('p1', 'kills', 20, '閾値を超える', game))).status).toBe(200);
+    expect(await countOf('SELECT COUNT(*) AS n FROM player_achievements')).toBe(0);
+    // 解いた人の値を 0 に直しても取り消されない
+    await putValue('p2', 'kills', 12);
+    await putUnlocked('p2', 'kill-10', 'write-ref-2');
+    expect((await adminSend(setDataOp('p2', 'kills', 0, '戻す', game))).status).toBe(200);
+    const rows = await baseEnv.DB.prepare('SELECT player_id AS playerId, achievement_id AS achievementId FROM player_achievements').all();
+    expect(rows.results).toEqual([{ playerId: 'p2', achievementId: 'kill-10' }]);
+  });
+
+  it('管理で実績を取り消すと解いた行が消え監査に残る', async () => {
+    const { token, playerId } = await dataGuest();
+    const written = await writeData(token, 'kills', 10);
+    const unlocked = (await written.json<{ unlocked: Array<{ achievementId: string; unlockedAt: string }> }>()).unlocked;
+    expect(unlocked.map((u) => u.achievementId)).toEqual(['kill-10']);
+    const res = await adminSend(revokeAchievementOp(playerId, 'kill-10', '不正な値で解けた', game));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ gameId: game, playerId, achievementId: 'kill-10', revoked: true });
+    const read = await worker.fetch(new Request(`${base}${playerDataPath(game)}`, { headers: authHeaders(token) }), adminEnv as never);
+    expect((await read.json<{ achievements: unknown[] }>()).achievements).toEqual([]);
+    const audit = await (await adminGet(auditPath())).json<AuditBody>();
+    expect(audit.items).toHaveLength(1);
+    expect(audit.items[0]).toMatchObject({ actor: 'local-admin', action: 'achievement.revoke', target: `player:${playerId}`,
+      before: { achievementId: 'kill-10', unlockedAt: unlocked[0].unlockedAt }, after: null, reason: '不正な値で解けた' });
+    // 2 回目は 404 で監査が増えない
+    const again = await adminSend(revokeAchievementOp(playerId, 'kill-10', '不正な値で解けた', game));
+    expect((await expectError(again, 404, 'NOT_FOUND')).error.message).toBe('Unknown achievement');
+    expect(await countRows('admin_audit_log')).toBe(1);
+  });
+
+  it('本番の設定ではプレイヤーデータの管理の口にNOT_READY_FOR_PRODUCTIONの403を返す', async () => {
+    await addPlayer('p1');
+    await putValue('p1', 'kills', 12);
+    await putUnlocked('p1', 'kill-10', 'write-ref-1');
+    const before = await dataSnapshot();
+    const disabled: TestEnv = { ...baseEnv, APP_ENV: 'disabled', ADMIN_API_KEY: adminKey };
+    for (const op of [putDataKeyOp('new-key', { mode: 'set', maxValue: 10 }, 'x', game), putAchievementOp('new-ach', 'kills', 1, 'x', game),
+      setDataOp('p1', 'kills', 0, 'x', game), revokeAchievementOp('p1', 'kill-10', 'x', game)]) {
+      await expectError(await adminSend(op, disabled), 403, 'NOT_READY_FOR_PRODUCTION');
+    }
+    expect(await dataSnapshot()).toEqual(before);
+  });
+
+  it('プレイヤーデータの管理の口の応答は管理のスキーマに合う', async () => {
+    await addPlayer('p1');
+    await putValue('p1', 'kills', 12);
+    await putUnlocked('p1', 'kill-10', 'write-ref-1');
+    const check = async (op: AdminOp, spec: string, method: 'put' | 'delete', status: number) => {
+      const res = await adminSend(op);
+      expect(res.status, `${op.method} ${op.path}`).toBe(status);
+      await expectAdminConforms(res, spec, method);
+    };
+    // プレイヤーを読む口の 200（playerData がある）
+    await expectConforms(await adminSend(playerOp('p1', game)), '/v1/admin/players/{playerId}');
+    // キーの宣言: 200（add・set）・400（本文・値のあるキーの書き方）・404（ゲーム）
+    await check(putDataKeyOp('gems', { mode: 'add', maxValue: 100, maxDelta: 5 }, 'x', game), dataKeySpec, 'put', 200);
+    await check(putDataKeyOp('stage', { mode: 'set', maxValue: 100 }, 'x', game), dataKeySpec, 'put', 200);
+    await check(putDataKeyOp('gems', { mode: 'flag', maxValue: 2 }, 'x', game), dataKeySpec, 'put', 400);
+    await check(putDataKeyOp('kills', { mode: 'max', maxValue: 100 }, 'x', game), dataKeySpec, 'put', 400);
+    await check(putDataKeyOp('gems', { mode: 'set', maxValue: 100 }, 'x', 'no-such-game'), dataKeySpec, 'put', 404);
+    // 実績の宣言: 200・400（解いた人のいる実績のキー・閾値）・404（キー）
+    await check(putAchievementOp('kill-10', 'kills', 20, 'x', game), achievementSpec, 'put', 200);
+    await check(putAchievementOp('kill-10', 'gems', 20, 'x', game), achievementSpec, 'put', 400);
+    await check(putAchievementOp('gem-1', 'gems', 0, 'x', game), achievementSpec, 'put', 400);
+    await check(putAchievementOp('gem-1', 'no-key', 1, 'x', game), achievementSpec, 'put', 404);
+    // 値を置く: 200・400・404
+    await check(setDataOp('p1', 'kills', 0, 'x', game), dataSetSpec, 'put', 200);
+    await check(setDataOp('p1', 'kills', 1001, 'x', game), dataSetSpec, 'put', 400);
+    await check(setDataOp('nobody', 'kills', 1, 'x', game), dataSetSpec, 'put', 404);
+    // 実績の取り消し: 200・400（reason）・404
+    await check(revokeAchievementOp('p1', 'kill-10', '', game), revokeSpec, 'delete', 400);
+    await check(revokeAchievementOp('p1', 'kill-10', 'x', game), revokeSpec, 'delete', 200);
+    await check(revokeAchievementOp('p1', 'kill-10', 'x', game), revokeSpec, 'delete', 404);
+  });
+
+  it('管理コマンドと同じ流れでプレイヤーデータの宣言と直しと実績の取り消しが監査に残る', async () => {
+    // scripts/admin-requests.mjs の関数で demo-rpg に宣言を入れ、scripts/cli-requests.mjs の形でゲストが書く
+    const gameId = guestRequest().gameId;
+    const stamp = Date.now().toString(36);
+    const key = `admin-smoke-kills-${stamp}`;
+    const achievementId = `admin-smoke-ach-${stamp}`;
+    const steps: Array<[string, number]> = [];
+    const step = async (name: string, res: Response) => {
+      steps.push([name, res.status]);
+      return res.json<Record<string, unknown>>();
+    };
+    expect(await step('put-data-key', await adminSend(putDataKeyOp(key, { mode: 'add', maxValue: 1000, maxDelta: 10 }, 'smoke: キー', gameId))))
+      .toEqual({ gameId, key, mode: 'add', maxValue: 1000, maxDelta: 10 });
+    expect(await step('put-achievement', await adminSend(putAchievementOp(achievementId, key, 3, 'smoke: 実績', gameId))))
+      .toEqual({ gameId, achievementId, key, threshold: 3 });
+    const guest = await step('guest', await worker.fetch(new Request(`${base}/v1/accounts/guest`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(guestRequest()),
+    }), adminEnv as never)) as { token: string; playerId: string };
+    const written = await step('write', await writeData(guest.token, key, 3, gameId)) as { writeId: string; unlocked: Array<{ achievementId: string }> };
+    expect(written.unlocked.map((u) => u.achievementId)).toEqual([achievementId]);
+    const read = await step('player', await adminSend(playerOp(guest.playerId, gameId))) as { playerData: PlayerDataBody };
+    expect(read.playerData.values.map((v) => [v.key, v.mode, v.value])).toEqual([[key, 'add', 3]]);
+    expect(read.playerData.achievements.map((a) => [a.achievementId, a.writeId])).toEqual([[achievementId, written.writeId]]);
+    expect(await step('set-data', await adminSend(setDataOp(guest.playerId, key, 0, 'smoke: 直す', gameId))))
+      .toMatchObject({ gameId, playerId: guest.playerId, key, value: 0 });
+    expect(await step('revoke-achievement', await adminSend(revokeAchievementOp(guest.playerId, achievementId, 'smoke: 取り消す', gameId))))
+      .toMatchObject({ achievementId, revoked: true });
+    const after = await step('player (after)', await adminSend(playerOp(guest.playerId, gameId))) as { playerData: PlayerDataBody };
+    expect(after.playerData.values.map((v) => [v.key, v.value])).toEqual([[key, 0]]);
+    expect(after.playerData.achievements).toEqual([]);
+    const audit = await step('audit', await adminSend(auditOp(gameId, { limit: 4 }))) as { items: AuditItem[] };
+    expect(steps).toEqual([['put-data-key', 200], ['put-achievement', 200], ['guest', 200], ['write', 200], ['player', 200], ['set-data', 200],
+      ['revoke-achievement', 200], ['player (after)', 200], ['audit', 200]]);
+    const p = `player:${guest.playerId}`;
+    expect(audit.items.map((a) => [a.action, a.target, a.before, a.after])).toEqual([
+      ['achievement.revoke', p, { achievementId, unlockedAt: expect.stringMatching(iso) }, null],
+      ['player-data.set', p, { key, value: 3 }, { key, value: 0 }],
+      ['achievement.put', `achievement:${achievementId}`, null, { key, threshold: 3 }],
+      ['player-data-key.put', `player-data-key:${key}`, null, { mode: 'add', maxValue: 1000, maxDelta: 10 }],
+    ]);
+    expect(audit.items.every((a) => a.actor === 'local-admin')).toBe(true);
   });
 });

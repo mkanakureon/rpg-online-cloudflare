@@ -1,6 +1,7 @@
 // audit.ts — 監査のログ（表 admin_audit_log）の保持の期間・読む文・応答の 1 行の形。入出力を持たない。
 //
-// 監査の行は管理の書き込みの操作 1 回で 1 行（書く口は BAN・BAN を解く・所持品と通貨の増減・スコアを消す・品目とイベントの定義）。
+// 監査の行は管理の書き込みの操作 1 回で 1 行（書く口は BAN・BAN を解く・所持品と通貨の増減・スコアを消す・品目とイベントの定義・
+// プレイヤーデータのキーと実績の宣言・値を置く・実績の取り消し）。
 // 読み取りの口は監査に残さない。書き込みの口の共通の確かめ（X-Admin-Actor の parseActor・本文の reason の parseReason）と、
 // 増減の二重の止めの中身のハッシュ requestHash（鍵とハッシュは監査の行の列に入る）もここに置く。鍵の形 IDEMPOTENCY_KEY_PATTERN・
 // parseIdempotencyKey とハッシュの sha256Hex は src/core/idempotency.ts（プレイヤーデータのモジュールも読む）。

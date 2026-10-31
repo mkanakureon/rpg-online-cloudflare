@@ -2,12 +2,15 @@
 //
 // いまは監査を読む口の limit・before（受領の履歴の parseHistoryQuery と同じ形）と、プレイヤーを読む口の履歴の行の数と、
 // BAN の本文の期限（expiresAt）と、所持品と通貨の増減の本文（itemId・delta）と、品目の種類（parseItemKind）とイベントの定義の本文
-// （parseEventDefinition。区切り・期間・時差・報酬の行）。書き込みの口に共通の X-Admin-Actor・reason は audit.ts。
-// 正は docs/guides/working/admin-design.md §2・§4〜§7。
+// （parseEventDefinition。区切り・期間・時差・報酬の行）と、プレイヤーデータのキーの宣言（parsePlayerDataKey。表 player_data_keys の
+// CHECK と同じ決まりを先に見て、DB の CHECK で落ちて 500 にしない）・実績の宣言（parseAchievement）・値を置く本文（parsePlayerDataValue）。
+// 書き込みの口に共通の X-Admin-Actor・reason は audit.ts。
+// 正は docs/guides/working/admin-design.md §2・§4〜§7 と docs/guides/working/player-data-design.md §8。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
 import { validId } from '../ids';
 import { ITEM_KINDS, MAX_ITEM_AMOUNT, MAX_REWARD_LINES, type ItemKind } from '../inventory';
+import { MAX_PLAYER_DATA_VALUE, PLAYER_DATA_MODES, type PlayerDataKey, type PlayerDataMode } from '../player-data';
 
 /** 監査を読む口の limit の既定と上限。 */
 export const AUDIT_LIMIT_DEFAULT = 20;
@@ -122,4 +125,46 @@ export function parseEventDefinition(body: Record<string, unknown>): EventDefini
   }
   rewards.sort((a, b) => (a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0));
   return { ok: true, value: { kind: kind as EventDefinition['kind'], startsAt, endsAt, resetOffsetMinutes: offset, rewards } };
+}
+
+type Parsed<T> = { ok: true; value: T } | { ok: false; message: string };
+
+/** lo〜hi の整数か。 */
+function integerWithin(value: unknown, lo: number, hi: number): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= lo && value <= hi;
+}
+
+/**
+ * キーの宣言の本文を確かめる（表 player_data_keys の CHECK と同じ決まり）。mode は add・max・set・flag、maxValue は 1〜MAX_PLAYER_DATA_VALUE
+ * （flag は 1 だけ）、maxDelta は add のときだけ必須で 1〜MAX_PLAYER_DATA_VALUE、ほかの書き方では送らない（null は送らないと同じ）。
+ */
+export function parsePlayerDataKey(body: Record<string, unknown>): Parsed<Omit<PlayerDataKey, 'key'>> {
+  const mode = body.mode;
+  if (!(PLAYER_DATA_MODES as readonly unknown[]).includes(mode)) return { ok: false, message: 'mode must be add, max, set or flag' };
+  const maxValue = body.maxValue;
+  if (!integerWithin(maxValue, 1, MAX_PLAYER_DATA_VALUE)) return { ok: false, message: `maxValue must be an integer 1..${MAX_PLAYER_DATA_VALUE}` };
+  if (mode === 'flag' && maxValue !== 1) return { ok: false, message: 'maxValue of a flag key must be 1' };
+  const maxDelta = body.maxDelta ?? null;
+  if (mode === 'add') {
+    if (!integerWithin(maxDelta, 1, MAX_PLAYER_DATA_VALUE)) return { ok: false, message: `maxDelta must be an integer 1..${MAX_PLAYER_DATA_VALUE}` };
+  } else if (maxDelta !== null) {
+    return { ok: false, message: 'maxDelta is only for add keys' };
+  }
+  return { ok: true, value: { mode: mode as PlayerDataMode, maxValue, maxDelta: maxDelta as number | null } };
+}
+
+/** 実績の宣言の本文を確かめる。key は ID の形、threshold は 1〜MAX_PLAYER_DATA_VALUE の整数。キーの宣言があるかは DB を引く使う側が見る。 */
+export function parseAchievement(body: Record<string, unknown>): Parsed<{ key: string; threshold: number }> {
+  if (!validId(body.key)) return { ok: false, message: 'Invalid key' };
+  if (!integerWithin(body.threshold, 1, MAX_PLAYER_DATA_VALUE)) {
+    return { ok: false, message: `threshold must be an integer 1..${MAX_PLAYER_DATA_VALUE}` };
+  }
+  return { ok: true, value: { key: body.key, threshold: body.threshold } };
+}
+
+/** 値を置く本文の value を確かめる（0〜MAX_PLAYER_DATA_VALUE の整数）。キーの maxValue 以下かは宣言を読む使う側が見る。 */
+export function parsePlayerDataValue(body: Record<string, unknown>): Parsed<number> {
+  return integerWithin(body.value, 0, MAX_PLAYER_DATA_VALUE)
+    ? { ok: true, value: body.value }
+    : { ok: false, message: `value must be an integer 0..${MAX_PLAYER_DATA_VALUE}` };
 }

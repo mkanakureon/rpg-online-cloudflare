@@ -36,6 +36,16 @@ export type EventDefinitionBody = {
 
 export declare function putEventOp(eventId: string, definition: EventDefinitionBody, gameId?: string): AdminOp;
 
+export type PlayerDataKeyDeclaration = { mode: string; maxValue: number; maxDelta?: number | null };
+
+export declare function putDataKeyOp(key: string, declaration: PlayerDataKeyDeclaration, reason: string, gameId?: string): AdminOp;
+
+export declare function putAchievementOp(achievementId: string, key: string, threshold: number, reason: string, gameId?: string): AdminOp;
+
+export declare function setDataOp(playerId: string, key: string, value: number, reason: string, gameId?: string): AdminOp;
+
+export declare function revokeAchievementOp(playerId: string, achievementId: string, reason: string, gameId?: string): AdminOp;
+
 export declare function newIdempotencyKey(): string;
 
 export declare function adminRequest(

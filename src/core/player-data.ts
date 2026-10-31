@@ -1,6 +1,7 @@
 // player-data.ts — プレイヤーデータの値の上限・キーの書き方の名前・1 つの変更の範囲の確かめ（定数と入出力の無い関数の 1 か所）。
 //
-// プレイヤーデータのモジュール（src/modules/player-data/）と、後の束 U3 の管理の口（src/core/admin/）の両方が読むので core に置く。
+// プレイヤーデータのモジュール（src/modules/player-data/）と管理の口（src/core/admin/）の両方が読むので core に置く。
+// MAX_PLAYER_DATA_KEYS は管理のキーの宣言の口が確かめる（1 ゲームの宣言の数。1 プレイヤーの値の行の数の上限にもなる）。
 // MAX_PLAYER_DATA_VALUE は migrations/0013_player_data.sql の player_data_keys.max_value と player_data.value の CHECK にも
 // 書いている（2 か所。片方だけ変えない）。書き方の意味と範囲の正は docs/guides/working/player-data-design.md §3・§5。
 //
@@ -8,6 +9,9 @@
 
 /** 1 キーの値の上限（スコア・所持品の上限と同じ。桁あふれの止め）。 */
 export const MAX_PLAYER_DATA_VALUE = 1_000_000_000;
+
+/** 1 ゲームで宣言できるキーの数（管理の宣言の口が超える新しいキーを 400 で断る）。 */
+export const MAX_PLAYER_DATA_KEYS = 200;
 
 /** キーの書き方（表 player_data_keys の mode）。add・max は統計値、set・flag は進行状態。 */
 export const PLAYER_DATA_MODES = ['add', 'max', 'set', 'flag'] as const;
