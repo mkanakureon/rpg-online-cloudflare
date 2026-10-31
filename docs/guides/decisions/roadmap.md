@@ -39,7 +39,7 @@
 - [x] 期間限定イベント・デイリー／週間の報酬（`docs/guides/working/event-reward-design.md`。Issue #32。2026-10-30 に `npm run cli:smoke` で受け取りと二重にならないことを確認）
 - [x] 所持品・通貨・配布と受領の履歴（Issue #31・#32。消費の口は範囲の外）
 - [ ] クエスト（達成条件・報酬・進捗）
-- [ ] 管理コマンド／管理画面の最小機能（ログ・BAN・データ修正）
+- [x] 管理コマンドの最小機能（ログ・BAN・データ修正・イベントの定義）（`docs/guides/working/admin-design.md`。Issue #34〜#37。2026-10-31 に `node scripts/admin-cli.mjs smoke` と `npm run cli:smoke` で確認。管理画面は Phase 4）
 - [ ] 分析（DAU・継続率）・バックアップ・費用アラート
 
 **完了条件:** MacとCLIだけで、イベントの開始から報酬の受け取りまでのシナリオを通せる。
