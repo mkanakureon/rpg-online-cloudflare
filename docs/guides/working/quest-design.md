@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS quest_claims (
 );
 -- 管理の読み取り（§8）が新しい順に引く
 CREATE INDEX IF NOT EXISTS quest_claims_player ON quest_claims (game_id, player_id, claimed_at);
--- それまでに登録したゲームは quests を使う設定にする（0003・0009・0010・0013 と同じ形。demo-rpg を含む）
+-- それまでに登録したゲームは quests を使う設定にする（0003・0005・0006・0009・0010・0013 と同じ形。demo-rpg を含む）
 INSERT OR IGNORE INTO game_modules (game_id, module) SELECT game_id, 'quests' FROM games;
 -- demo-rpg の手本のクエスト（CLI モックの通しに使う）。スライムを 1 体倒す・金貨 50
 INSERT OR IGNORE INTO quests (game_id, quest_id, kind, starts_at, ends_at, reset_offset_minutes, key, threshold)
@@ -192,7 +192,7 @@ INSERT OR IGNORE INTO quest_rewards (game_id, quest_id, item_id, amount) VALUES 
 | --- | --- | --- |
 | `src/modules/quests/index.ts` | `quests: GameModule`（`name: 'quests'`）。§4 の一覧の `GET` と受け取りの `POST` と §6 の SQL | Q1（区切りは Q2） |
 | `src/modules/quests/shape.ts` | `questStatus(def, progress, claimed)`（達成・受け取り済みを決める。入出力の無い関数）・一覧の行の形 | Q1 |
-| `src/core/period.ts` | `isOpen`・`periodKey`・`nextResetAt`・`isoSeconds`・`QUEST_KINDS`。`src/modules/events/period.ts` から移す（events・quests・player-data のモジュールと管理の口が読む。中身と値は変えない。モジュールどうしを読み込まないため core に置く） | Q2 |
+| `src/core/period.ts` | `isOpen`・`periodKey`・`nextResetAt`・`isoSeconds`・`QUEST_KINDS`。`src/modules/events/period.ts` から移す（events・quests・player-data のモジュールと管理の口が読む。中身と値は変えない。モジュールどうしを読み込まないため core に置く）。管理の口の写し `EVENT_DEFINITION_KINDS`（`src/core/admin/parse.ts`。core が modules を読めないための写し）は、ここを読む形に置き換えて消す | Q2 |
 | `src/core/quests.ts` | `MAX_QUESTS` | Q3 |
 | `src/modules/player-data/index.ts` | 書き込みの `batch` に区切りの値の文を足す（§6） | Q2 |
 
@@ -274,7 +274,7 @@ INSERT INTO quest_claims (game_id, player_id, quest_id, period_key, claim_id, cl
   WHERE x.game_id = :g AND x.quest_id = :q AND x.starts_at <= :now AND :now < x.ends_at
     AND COALESCE(CASE x.kind
           WHEN 'once' THEN (SELECT value FROM player_data WHERE game_id = :g AND player_id = :p AND key = x.key)
-          ELSE (SELECT value FROM player_data_period_values                                   -- Q2 で足す
+          ELSE (SELECT value FROM player_data_period_values                                   -- Q2 で足す（Q1 の文には ELSE の枝ごと書かない。無い表は通らない枝でも SQLite が断る）
                 WHERE game_id = :g AND player_id = :p AND key = x.key AND kind = x.kind AND period_key = :pk)
         END, 0) >= x.threshold
     AND NOT EXISTS (
@@ -329,7 +329,7 @@ INSERT INTO player_data_period_values (game_id, player_id, key, kind, period_key
 ```
 
 - バインドは 1 文で 8。文の数は 1 回の書き込みで最大 `MAX_CHANGES_PER_WRITE` × 2（デイリーと週間）= 40 増える（いまの最大 23 文 → 63 文。D1 の 1 回の `batch` の文の数の上限は**要確認**。上限が足りないと分かったら `MAX_CHANGES_PER_WRITE` を下げる前に、区切りの値の文を 1 文の `INSERT … SELECT … FROM (VALUES …)` にまとめる）。
-- 文 1 の上限の条件（`player_data` の書いた後の値が `max_value` 以下）を通った書き込みだけが書くので、区切りの値は合計の値を超えず、`CHECK` の上限に当たらない。
+- 文 1 の上限の条件（`player_data` の書いた後の値が `max_value` 以下）を通った書き込みだけが書き、管理の値の直しは区切りの値を新しい値で頭打ちにする（§8）ので、区切りの値は合計の値を超えず、`CHECK` の上限に当たらない。
 - 同じ `Idempotency-Key` の送り直しは文 1 で止まり、区切りの値も増えない（二重に数えない）。409 `PLAYER_DATA_LIMIT_EXCEEDED` の書き込みも区切りの値を書かない。
 - 書き込みの応答（`result_json`）と `GET /v1/player-data` の形は変えない（区切りの値はクエストの一覧の `progress` で見せる）。
 - `max`・`set`・`flag` のキーは区切りで数えない（区切りの中の「増えた分」の意味が無い。§16）。
@@ -345,7 +345,7 @@ INSERT INTO player_data_period_values (game_id, player_id, key, kind, period_key
 
 ## 8. 管理との関係（Q3）
 
-`admin-design.md` §13 の行のとおり、クエストの定義は §7 のイベントの定義と同じく管理の口で入れる。どれも管理の口の確かめの順（`checkAdmin`: `requireLocalWrite` → 管理の鍵 → 管理の利用制限 → `gameId` → ゲームの登録 → 書き込みは `X-Admin-Actor` と `reason`）を通る。管理の口は機能の設定（`game_modules` の `quests`）を見ない（`admin-design.md` §2 の決まりのまま）。
+`admin-design.md` §13 の行のとおり、クエストの定義は §7 のイベントの定義と同じく管理の口で入れる。どれも管理の口の確かめの順（`checkAdmin`: `requireLocalWrite` → 管理の利用制限 → 管理の鍵 → `gameId` → ゲームの登録 → 書き込みは `X-Admin-Actor` と `reason`）を通る。管理の口は機能の設定（`game_modules` の `quests`）を見ない（`admin-design.md` §2 の決まりのまま）。
 
 | 口 | 本文 | 応答・決まり | 監査の `action`（前 → 後） |
 | --- | --- | --- | --- |
@@ -354,6 +354,7 @@ INSERT INTO player_data_period_values (game_id, player_id, key, kind, period_key
 
 - `batch`: 監査の行（前の定義と後の定義）→ 区切りの宣言（要るときだけ）→ `quests` を `INSERT … ON CONFLICT (game_id, quest_id) DO UPDATE` → `DELETE FROM quest_rewards WHERE game_id = ? AND quest_id = ?` → 報酬の行を `INSERT`（行の数だけ）。どの文も「この要求の `audit_ref` の行が入ったとき」だけ（イベントの定義と同じ）。
 - 受け取りを直す口は作らない（§13 の決めること 9）。間違って受け取られた報酬は管理の増減（`revoke`）で戻し、進捗は値の直し（`set-data`）で戻す。どちらも今ある口で、監査に前と後が残る。
+- **値の直し（`PUT /v1/admin/players/{playerId}/player-data/{key}`）は、Q3 で区切りの値も同じ `batch` で頭打ちにする**: 監査の行の後に `UPDATE player_data_period_values SET value = MIN(value, :new), updated_at = :now WHERE game_id = :g AND player_id = :p AND key = :k AND EXISTS (この要求の audit_ref)` を足す（バインドは 6）。これがないと、合計を下げても区切りの値が前のまま残り、デイリー・週間のクエストの進捗が直らず、その後の `add` で区切りの値が合計を超えうる。監査の前と後は合計の値のまま（区切りの値は合計から決まる写しとして扱う）。直しで区切りの値を上げることはしない（上げた分がどの区切りの分か決まらない）。
 - 何度送っても結果が同じ（置く）なので `Idempotency-Key` は要らない（イベントの定義と同じ）。
 - 新しいエラーコードは管理のスキーマに足さない（400・404 だけ。既存の試験 `管理のスキーマのErrorCodeの列挙は管理の口が返すコードと一致する` は変わらない）。
 - 管理コマンド `scripts/admin-cli.mjs` に操作 `put-quest`（定義は JSON のファイルを引数で渡す。`put-event` と同じ）を足し、`player` の表示にクエストの受け取りを足す（要求の形の関数は `scripts/admin-requests.mjs`）。いまの `smoke` の流れと `SMOKE_AUDIT_ACTIONS` は変えない（既存の試験 `管理コマンドと同じ流れで付与と取り消しとBANとイベントの定義が監査のログに残る` が見張る）。クエストの管理の通しは §10 の Q3 の `管理コマンドと同じ流れでクエストの定義と受け取りが監査と受領の履歴に残る` で確かめる。
@@ -373,7 +374,7 @@ INSERT INTO player_data_period_values (game_id, player_id, key, kind, period_key
 | 文書 | Q1 | Q2 | Q3 |
 | --- | --- | --- | --- |
 | `docs/api-contract.md` | `GET /v1/quests`・`POST /v1/quests/{questId}/claim` の節。エラーコードの表に 2 つ。「利用制限」の表に `quests` の行。受領の履歴の `sourceType` に `quest-claim` | 一覧の `periodKey`・`nextResetAt` と区切りの進捗の説明 | 「管理の API」にクエストの定義の口と、プレイヤーを読む口の `questClaims` |
-| `openapi/rpg-online.v1.json` | 2 つの操作（`listQuests`・`claimQuest`）と 401・403・429・`Retry-After`・`ErrorCode` の 2 つ・履歴の `sourceType` の列挙 | 一覧の行の `nextResetAt` | — |
+| `openapi/rpg-online.v1.json` | 2 つの操作（`listQuests`・`claimQuest`）と 401・403・429・`Retry-After`・`ErrorCode` の 2 つ・履歴の `sourceType` の説明に `quest-claim`（列挙でなく説明の文字列） | 一覧の行の `nextResetAt` | — |
 | `openapi/rpg-online-admin.v1.json` | — | — | 1 つの操作（`adminPutQuest`）と `adminGetPlayer` の `questClaims` |
 | `docs/guides/working/architecture.md` | 4 のデータ境界に `quests`・`quest_rewards`・`quest_claims` | 同 `player_data_key_periods`・`player_data_period_values` | — |
 | `docs/guides/working/abuse-protection-design.md` | §2 の表に `quests` の行（定数と同じコミット） | — | — |
@@ -439,13 +440,14 @@ INSERT INTO player_data_period_values (game_id, player_id, key, kind, period_key
 | Q3 | `受け取りのあるクエストの区切りと見るキーは変えられない` | L2 | 受け取りの行のあるクエストの `kind`・`startsAt`・`resetOffsetMinutes`・`key` を変える → `endsAt`・`threshold`・`rewards` だけを変える | 前の 4 つは 400・`INVALID_ARGUMENT`。後は 200 |
 | Q3 | `デイリーのクエストの定義は増やすキーだけを受け付け区切りの数え方を宣言する` | L2 | `set` のキーで `daily` → `add` のキーで `daily` | 前は 400。後は 200 で `player_data_key_periods` に行が入る |
 | Q3 | `時差の違う区切りを同じキーに宣言するクエストの定義は400を返す` | L2 | 時差 0 のデイリーのあるキーに、時差 540 のデイリーのクエストを `PUT` | 400・`INVALID_ARGUMENT`。何も書かない |
+| Q3 | `管理で値を下げるとデイリーのクエストの区切りの値も新しい値で頭打ちになる` | L2 | 区切りの値が 5 のプレイヤーの合計を管理で 2 に直し、一覧を読む → 合計を 10 に直す | 1 回目の後は区切りの値が 2・`progress` が 2。2 回目の後も区切りの値は 2（上げない）。監査に `player-data.set` |
 | Q3 | `クエストの定義が上限の数を超えると400を返す` | L2 | `MAX_QUESTS` 個を入れてから新しいクエストを `PUT`・既存のクエストを `PUT` | 新しいのは 400。既存の置き換えは 200 |
 | Q3 | `管理の読み取りはプレイヤーのクエストの受け取りを新しい順に返す` | L2 | 受け取りの行のあるプレイヤーと無いプレイヤーを `GET /v1/admin/players/{playerId}` | `questClaims` が新しい順。無い人は空の配列 |
 | Q3 | `本番の設定ではクエストの管理の口にNOT_READY_FOR_PRODUCTIONの403を返す` | L2 | `APP_ENV: 'disabled'` と正しい管理の鍵で `PUT` | 403・何も書かない |
 | Q3 | `クエストの管理の口の応答は管理のスキーマに合う` | L2 | `PUT` の 200・400・404 と、プレイヤーを読む口の 200 | `openapi/rpg-online-admin.v1.json` に合う |
 | Q3 | `管理コマンドと同じ流れでクエストの定義と受け取りが監査と受領の履歴に残る` | L2 | `scripts/admin-requests.mjs` の関数で、クエストの定義 → ゲストが値を書いて受け取る → プレイヤーを読む → 監査を読む | 各手順の応答が §8 のとおり。`questClaims` に受け取り・`history` に `quest-claim`・監査に `quest.put` |
 
-数（行）: Q1 が 26・Q2 が 9・Q3 が 10。
+数（行）: Q1 が 26・Q2 が 9・Q3 が 11。
 
 ## 11. 挙動が変わる既存の試験と、直す手続き
 
@@ -501,13 +503,15 @@ API を変えたら CLI モックも合わせる（`CLAUDE.md` のプロジェ�
 | 6 | 報酬の受け取り方と二重の止め | A: **受け取りの口（`POST /v1/quests/{questId}/claim`）。一意の鍵（プレイヤー・クエスト・区切り）と 1 つの `batch`。2 回目は 200 で同じ本文。`Idempotency-Key` は読まない**。B: 達成と同時に付与する（プレイヤーデータの書き込みの中で）。C: 受け取りの口で、`Idempotency-Key` を必須にする | **A**。イベントの受け取り（`event-reward-design.md` §5）と同じ形で、クライアントの作り（応答が届かなければ送り直すだけ）が揃う。受け取りには自然な鍵があり、見出しは要らない（`abuse-protection-design.md` §5 の決まり）。B はプレイヤーデータの書き込みが所持品の表に書き、受け取りの演出をクライアントが出す時を選べない。C は自然な鍵で足りる所に、鍵の保存の表と 422 が増える |
 | 7 | 受け取りの 3 文を `src/core/ledger.ts` へ移すか（`admin-design.md` §11 の決めること 7 の続き） | A: **移さない。クエストの受け取りの 3 文はクエストのモジュールに置き、種類の名前だけ `LEDGER_SOURCES.questClaim` を読む。イベントの 3 文は変えない**。B: 受け取りの 3 文を、報酬の表・受け取りの表の名前を引数にした 1 つの関数にして ledger.ts へ移し、イベントもそれを使う。C: 受け取りの表を 1 つ（`reward_claims` に `source_type` の列）にまとめる | **A**。イベントの受け取りの文とその試験に手を入れずに済み、束が小さい。文 1 の条件（期間・進捗）が受け取りの種類で違い、1 つの関数にすると条件の分岐が引数に入るだけ。書く所は 3 つになるが、種類の名前は 1 か所のまま。B は 4 つ目の受け取り（消費の口など）を足すときに、3 つの形を見比べてから決める（§16）。C は既存の `event_claims` を移すマイグレーションが要る |
 | 8 | 新しいエラーコード | A: **`QUEST_NOT_COMPLETED`（409）と `QUEST_NOT_ACTIVE`（409）の 2 つを、ゲームのクライアントのスキーマ `openapi/rpg-online.v1.json` に足す。管理のスキーマには足さない**。B: 期間の外は `EVENT_NOT_ACTIVE` を使い回し、`QUEST_NOT_COMPLETED` だけ足す。C: どちらも 409 `PERMISSION_DENIED` などの既存のコード | **A**。クライアントはコードだけで画面の文を出し分ける（「まだ達成していません」と「期間が終わりました」）。B は「イベント」と書いたコードがクエストで返り、名前が嘘になる。C は状態の 409 を権限の誤りと区別できない。管理の口は 400・404 だけで足りる |
-| 9 | 管理の口 | A: **クエストの定義の口（`PUT /v1/admin/quests/{questId}`。イベントの定義と同じ形・監査に前と後）と、プレイヤーを読む口に `questClaims` の欄。受け取りを直す口は作らない**。B: A に受け取りの行を消す口（もう一度受け取れるようにする）を足す。C: マイグレーションで定義を入れ、管理の口を足さない | **A**。運営で要るのは「クエストを入れる・期間を変える・報酬を変える」と「受け取ったかを見る」。間違った付与は今ある増減の口（`revoke`）で戻せ、進捗は値の直し（`set-data`）で戻せる。B は受け取りの行を消すと履歴の `source_id` が指す先が消え、同じ区切りで二重に受け取れる道を作る。要るときは監査に前と後を残す形で後から足す（§16）。C は運営のたびにマイグレーションを書く（`admin-design.md` §11 の決めること 8 の A と同じ穴） |
+| 9 | 管理の口 | A: **クエストの定義の口（`PUT /v1/admin/quests/{questId}`。イベントの定義と同じ形・監査に前と後）と、プレイヤーを読む口に `questClaims` の欄。受け取りを直す口は作らない。値の直しは区切りの値を頭打ちにする（§8）**。B: A に受け取りの行を消す口（もう一度受け取れるようにする）を足す。C: マイグレーションで定義を入れ、管理の口を足さない | **A**。運営で要るのは「クエストを入れる・期間を変える・報酬を変える」と「受け取ったかを見る」。間違った付与は今ある増減の口（`revoke`）で戻せ、進捗は値の直し（`set-data`）で戻せる。B は受け取りの行を消すと履歴の `source_id` が指す先が消え、同じ区切りで二重に受け取れる道を作る。要るときは監査に前と後を残す形で後から足す（§16）。C は運営のたびにマイグレーションを書く（`admin-design.md` §11 の決めること 8 の A と同じ穴） |
 | 10 | 機能の名前と、ほかの機能への依存 | A: **`quests` の 1 つ。`requireGame` は `quests` だけを見る（`player-data`・`inventory` を使わない設定でも口は通る）**。B: `quests` に加えて `player-data` と `inventory` も使う設定のときだけ通す（どれかが無ければ 404）。C: 管理の定義の口が、`player-data`・`inventory` を使わないゲームのクエストを断る | **A**。表はどのゲームにもあり、機能の設定は認可の代わりにしない（`core-foundation-design.md` の決定のまま）。使わない組み合わせは「進まない・読めない」だけで壊れない。B は `requireGame` に機能の組み合わせの決まりが入り、ほかの機能も同じことを言い出す。C は管理の口が機能の設定を見ない決まり（`admin-design.md` §2）を崩す |
 | 11 | 利用制限 | A: **新しい `RATE_LIMITS.quests`（プレイヤーごと、2 つの口を合わせて 60 秒に 60 回）**。B: `rewards`（所持品・イベント）と同じ回数を分け合う | **A**。クエストの一覧を開くたびに所持品・イベントの口の回数が減らない。数は `rewards`・`playerData` と同じ。B は口を足すたびに既存の口の回数の意味が変わる |
 | 12 | 自己申告をどこまで信じるか | A: **プレイヤーデータの守り（宣言・範囲・`max_delta`・書き方の固定・利用制限）に任せ、クエストは「達成した」の申告を読まない。限界は §5 にそのまま書く**。B: 受け取りの時に、書き込みの記録から「区切りの中で何回に分けて書いたか」などを見て怪しい受け取りを断る。C: クエストの報酬を持たない（達成の印だけ） | **A**。値がゲームの中で取れたかはゲーム固有のルールで、共通のサーバーは確かめられない（ADR 0002）。B は「怪しい」の基準がゲームごとに違い、正しい遊び方を断る。C はロードマップの「報酬」に届かない。不正は管理（値の直し・品目の取り消し・BAN）で対処する |
 | 13 | Cron Triggers・Durable Objects を使うか | A: **使わない（区切りは要求の時に計算・D1 の `batch` と一意の鍵だけ）**。B: 日替わりに Cron Triggers で区切りの値を 0 にする。C: プレイヤーごとの Durable Object で受け取りを順に処理する | **A**。`wrangler.jsonc` もパッケージも変えずに済み、時刻の決まった処理が遅れても判定が変わらない（イベントと同じ）。B は全員の行を書き、遅れると前の日の値が残る。C は一意の鍵で足りる二重の止めにクラスと設定を足す |
 | 14 | CLI モックに足す手順 | A: **一度きりのクエストの成功の道の 4 手順（一覧 → 受け取る → 同じ要求をもう一度 → 一覧）。断られる例とデイリーは §10 の試験で見る**。B: A にデイリーのクエストの受け取りを足す。C: 足さない（試験だけ） | **A**。プレイヤーデータの手順で増やした値でそのまま達成でき、「進む・受け取る・二重にならない」を 1 回の通しで見せられる。B は通しの書き込みを 3 回に増やすことになり、プレイヤーデータの手順（値が 1 になる）の確かめを変える。C は `npm run cli:smoke` で人が通しを見られない |
-| 15 | パッケージ | A: **足さない（D1・Web Crypto だけ）**。B: 日付の計算のライブラリを足す | **A**。区切りの計算はイベントの関数をそのまま使う。`package.json` を変えない |
+| 15 | `scripts/admin-cli.mjs` の `smoke` を変えるか | A: **変えない（`put-quest` の操作だけ足し、クエストの管理の通しは §10 の Q3 の試験と、会話の側で人が回す `put-quest` で見る）**。B: `smoke` の最後にクエストの定義とゲストの受け取りを足す | **A**。`smoke` の流れと `SMOKE_AUDIT_ACTIONS` は既存の試験 `管理コマンドと同じ流れで付与と取り消しとBANとイベントの定義が監査のログに残る` が見張っていて、変えるとその試験の期待を書き換えることになる。B は管理の通しに値の書き込みと受け取り（ゲームのクライアントの道）が入り、`smoke` が何を確かめるかがぼやける |
+| 16 | `LEDGER_SOURCES` に足す名前 | A: **`questClaim: 'quest-claim'`（イベントの `eventClaim: 'event-claim'` と同じ形）**。B: `quest: 'quest'`（`admin-design.md` §13・`event-reward-design.md` §13 が案として書いた名前）。C: イベントと同じ `event-claim` を使い、`source_id` で見分ける | **A**。受領の履歴を読むクライアントと集計（§15 の分析）が、`*-claim` で「受け取り」の種類を揃って見分けられる。B は前の文書の案のままだが、受け取りと管理の増減のどちらの形かが名前から読めない。前の 2 つの行は Q1 でこの設計書を指す形に置き換える（§9）。C は `source_id` から受け取りの表を引き直さないと種類が分からない |
+| 17 | パッケージ | A: **足さない（D1・Web Crypto だけ）**。B: 日付の計算のライブラリを足す | **A**。区切りの計算はイベントの関数をそのまま使う。`package.json` を変えない |
 
 ## 14. 実装の束
 
@@ -517,7 +521,7 @@ API を変えたら CLI モックも合わせる（`CLAUDE.md` のプロジェ�
 | --- | --- | --- | --- | --- |
 | Q1 | 一度きりのクエストと受け取り: `migrations/` の新しい `0015_quests.sql`・`src/modules/quests/`（`index.ts`・`shape.ts`）・`src/modules/index.ts` に足す・`RATE_LIMITS.quests`・`LEDGER_SOURCES.questClaim`・2 つのエラーコード・§12 の CLI モックと `scripts/cli-requests.mjs`・§9 の Q1 の文書と契約・§10 の Q1 の試験 | U3（`player-data-design.md`） | §11 の手続きで 4 本を置き換え・4 本に行を足す | 足さない |
 | Q2 | デイリー・週間: `migrations/` の新しい `0016_player_data_periods.sql`・`src/core/period.ts`（events から移す）・プレイヤーデータの書き込みの区切りの値の文・クエストの一覧と受け取りの区切り・§9 の Q2 の文書と契約・§10 の Q2 の試験 | Q1 | 変えない（イベントの区切りの試験は読み込み先だけ） | 足さない |
-| Q3 | 管理: `src/core/admin/` にクエストの定義の口とプレイヤーを読む口の欄・`src/core/quests.ts` の `MAX_QUESTS`・`scripts/admin-cli.mjs` と `scripts/admin-requests.mjs` に `put-quest`・管理のスキーマ・§9 の Q3 の文書・§10 の Q3 の試験 | Q2 | 変えない | 足さない |
+| Q3 | 管理: `src/core/admin/` にクエストの定義の口とプレイヤーを読む口の欄・値の直しの区切りの値の頭打ち（§8）・`src/core/quests.ts` の `MAX_QUESTS`・`scripts/admin-cli.mjs` と `scripts/admin-requests.mjs` に `put-quest`・管理のスキーマ・§9 の Q3 の文書・§10 の Q3 の試験 | Q2 | 変えない | 足さない |
 
 範囲の外（後の設計書）: §16。
 
@@ -648,7 +652,7 @@ const migrations = ['0001_initial', '0002_games', '0003_game_modules', '0004_acc
   '0008_rate_limits', '0009_inventory', '0010_events', '0011_admin', '0012_player_bans', '0013_player_data', '0014_achievements',
   '0015_quests'].map((m) => `migrations/${m}.sql`);
 const keep = [...migrations, 'src/core/guards.ts', 'src/core/auth.ts', 'src/core/bans.ts', 'src/core/rate-limit.ts', 'src/core/rate-limit-policy.ts',
-  'src/core/ledger.ts', 'src/core/admin/', 'src/modules/saves/', 'src/modules/config/', 'src/modules/rankings/', 'src/modules/announcements/',
+  'src/core/ledger.ts', 'src/modules/saves/', 'src/modules/config/', 'src/modules/rankings/', 'src/modules/announcements/',
   'src/modules/inventory/', 'scripts/', 'openapi/rpg-online-admin.v1.json', 'wrangler.jsonc', 'vitest.config.ts', pkg];
 gitClean(keep, { base });
 done();
@@ -679,6 +683,7 @@ requireTests([
   '受け取りのあるクエストの区切りと見るキーは変えられない',
   'デイリーのクエストの定義は増やすキーだけを受け付け区切りの数え方を宣言する',
   '時差の違う区切りを同じキーに宣言するクエストの定義は400を返す',
+  '管理で値を下げるとデイリーのクエストの区切りの値も新しい値で頭打ちになる',
   'クエストの定義が上限の数を超えると400を返す',
   '管理の読み取りはプレイヤーのクエストの受け取りを新しい順に返す',
   '本番の設定ではクエストの管理の口にNOT_READY_FOR_PRODUCTIONの403を返す',
@@ -737,14 +742,14 @@ done();
 | 進捗の持ち方（キーのいまの値を読むだけか、クエストごとの表か）・受ける操作 | §4・§5・§13 の決めること 3 |
 | デイリー・週間・期間つきのクエストの区切りごとの値（`period_key` を持つ値・宣言をどちらに持つか・今回の範囲か） | §3・§6・§7・§13 の決めること 4 |
 | 達成の判定の時と、報酬の受け取り方 | §5・§13 の決めること 5・6 |
-| 報酬の付与と二重の止め方・`LEDGER_SOURCES` に足す名前・受け取りの文を `src/core/ledger.ts` へ移すか | §6・§13 の決めること 6・7 |
+| 報酬の付与と二重の止め方・`LEDGER_SOURCES` に足す名前・受け取りの文を `src/core/ledger.ts` へ移すか | §6・§13 の決めること 6・7・16 |
 | API とその確かめの順・認証・`APP_ENV`・BAN・利用制限・`game_modules` の機能の名前とほかの機能への依存 | §4・§9・§13 の決めること 10・11 |
 | 管理との関係（定義の口・プレイヤーを読む・直す・監査） | §8・§13 の決めること 9 |
-| `scripts/cli-mock.mjs` と `scripts/admin-cli.mjs` の通しのシナリオ | §8・§12・§13 の決めること 14 |
+| `scripts/cli-mock.mjs` と `scripts/admin-cli.mjs` の通しのシナリオ | §8・§12・§13 の決めること 14・15 |
 | 試験の名前（束は `Q1`・`Q2`…）・名前の中の数の試験・互換と管理の通しと管理のエラーコードの試験 | §10・§11 |
 | 実装の束と、束ごとの確認コマンドの案（`requireTests`・`gitClean` に `base`） | §14 |
 | 新しいエラーコードはどちらのスキーマに入るか | §9・§13 の決めること 8 |
 | Cloudflare の数字・機能は公式で確かめたか「要確認」・D1 のバインドの上限 | §1・§6 |
 | Phase 2 の残りの項目（分析） | §15 |
-| 新しいパッケージは足さない案を推し | §13 の決めること 15 |
+| 新しいパッケージは足さない案を推し | §13 の決めること 17 |
 | 管理の通しは管理の鍵を `--var` で渡す前提・開発サーバーを起動しない | §0・§8・§14 |
