@@ -175,7 +175,7 @@ INSERT OR IGNORE INTO event_rewards (game_id, event_id, item_id, amount) VALUES 
 | --- | --- | --- | --- |
 | `MAX_ITEM_AMOUNT` | 1,000,000,000（スコアの上限と同じ） | `src/core/inventory.ts`（events と inventory の両方のモジュールが読む。モジュールどうしは読み込まないので core に置く）。DB の `CHECK` と 2 か所 | E1 |
 | `HISTORY_LIMIT_DEFAULT`・`HISTORY_LIMIT_MAX` | 20・100 | `src/modules/inventory/limits.ts` | E1 |
-| `MAX_REWARD_LINES` | 10（1 イベントの報酬の行の数。`batch` の文の数を抑える） | `src/modules/events/limits.ts` | E2 |
+| `MAX_REWARD_LINES` | 10（1 イベントの報酬の行の数。`batch` の文の数を抑える） | `src/core/inventory.ts`（events のモジュールと、管理のイベントの定義の口〔`src/core/admin/`〕の両方が読む。`admin-design.md` §7） | E2・O4 |
 | `RATE_LIMITS.rewards` | `{ scope: 'rewards', limit: 60, period: 60 }` | `src/core/rate-limit-policy.ts`（`abuse-protection-design.md` §2 の表にも行を足す。§7） | E1 |
 
 ### モジュールのファイル
@@ -454,7 +454,7 @@ API を変えたら CLI モックも合わせる（`CLAUDE.md` のプロジェ�
 | 4 | 品目の定義をどこに置くか | A: **サーバーの表 `inventory_items` に ID と種類（通貨か所持品か）だけ。名前・効果・値段はマスターデータ**。B: サーバーは ID と数だけ（表を作らず、どんな ID でも残高にできる）。C: マスターデータの JSON をサーバーが読んで品目を知る | **A**。報酬の表と残高が知らない ID を指せない（外部キー）、応答を通貨と所持品に分けられる。意味はゲームが持つ（ADR 0002）。B は書き間違いの ID が黙って残高になる。C はマスターデータを解釈しない決定（`config-design.md`）を崩す |
 | 5 | デイリー・週間の区切りの時刻 | A: **イベントごとの時差（分。既定 0 = UTC）**。B: いつも UTC。C: ゲームごとの時差（`game_configs` に列を足す） | **A**。日本向けのゲームは 540（日本の 0 時）にでき、ゲームの中でイベントごとに変えられる。B は日本の 9 時に日が変わる。C は `ALTER TABLE` が要り、マイグレーションを 2 回当てる試験で落ちる（表を作り直すことになる）。夏時間は持たない（固定の分） |
 | 6 | Cron Triggers・Queues を使うか | A: **使わない。区切りと期間は要求の時にサーバーの時刻で計算する**。B: Cron Triggers で毎日 0 時に「受け取れる」行を作る（`wrangler.jsonc` に `triggers: { crons: ["0 0 * * *"] }` と `scheduled` の入口）。C: Queues で付与を後から流す（`wrangler.jsonc` に `queues.producers`・`queues.consumers`） | **A**。`wrangler.jsonc` もパッケージも変えずに済み、試験で `now` を渡して確かめられる。処理が遅れても止まっても判定が変わらない。B はプレイヤーの数だけ行を作り、時差ごとの cron が要る。C は付与が後になり「受け取ったのに増えていない」間ができる。Cron Triggers は古い行の掃除・集計（§13 の分析）で使う |
-| 7 | イベントの定義を誰がどう入れるか | A: **新しい番号のマイグレーションに `INSERT OR IGNORE`・`ON CONFLICT DO UPDATE` を書く（設定配信と同じ）**。B: ローカルの管理コマンド（`wrangler d1 execute --local` を呼ぶスクリプト）。C: 管理の API（管理の鍵が要る） | **A**。いまの設定の入れ方（`config-design.md`）と同じで、履歴が git に残り、試験とローカルで同じ行になる。B は Phase 2 の管理（§13）で足す（A の SQL を引数で作る形）。C は管理の認証の設計が要る（§13 の管理） |
+| 7 | イベントの定義を誰がどう入れるか | A: 新しい番号のマイグレーションに `INSERT OR IGNORE`・`ON CONFLICT DO UPDATE` を書く（設定配信と同じ）。B: ローカルの管理コマンド。C: 管理の API（管理の鍵が要る） | **`admin-design.md` §7 で決めた: 管理の HTTP の口（品目とイベントの `PUT /v1/admin/items/{itemId}`・`PUT /v1/admin/events/{eventId}`）と、それを呼ぶ管理コマンド（`scripts/admin-cli.mjs` の `put-item`・`put-event`）**。本文の確かめ・受け取りのあるイベントの区切りを変えさせない守り・監査を Worker で持つ。A の形は demo-rpg の手本（`migrations/0010_events.sql`）と試験の行のために残す |
 | 8 | パッケージ | A: **足さない（D1 と `Date` だけ）**。B: 日付のライブラリ（時差の計算）を足す | **A**。時差は固定の分なので、`now + offset * 60` の UTC の日付で計算できる。B は Workers のランタイムでの確かめが増える |
 | 9 | 消費（減らす口）を Phase 2 に入れるか | A: **入れない。§6 の後から足す形を書く**。B: `POST /v1/inventory/consume` を入れる | **A**。Phase 2 の完了条件（イベントの開始から報酬の受け取りまで）に要らず、§6 の限界のとおりサーバーが値段を知らない消費は確かめられない。表は負の `delta` を入れられる形にしておく |
 | 10 | 機能の名前（`game_modules`） | A: **`inventory` と `events` の 2 つ**。B: `rewards` の 1 つ | **A**。所持品は Phase 2 のクエスト・管理でも使い、イベントを使わないゲームも所持品だけ使える。機能の設定は認可の代わりにしない（決定のまま。受け取りは `events` だけを見て、所持品の表に書く） |
@@ -602,7 +602,7 @@ done();
 | 範囲の外 | 後から足す形 |
 | --- | --- |
 | 消費・購入・交換 | §6（`POST /v1/inventory/consume` と `Idempotency-Key`・`exchange_offers`） |
-| イベントを入れる・変える管理の API・画面 | §13 の管理（`admin-design.md`） |
+| イベントを入れる・変える管理画面 | 管理の API と管理コマンドは `admin-design.md` §7 で入った。管理画面（ブラウザ）は Phase 4（`admin-design.md` §11 の決めること 1） |
 | 条件つきの報酬（ログインの連続日数・クエストの達成） | §13 のプレイヤーデータとクエスト。サーバーは数の閾値だけを見る |
 | 抽選・ドロップ率 | ゲーム固有のルール（ADR 0002）。入れない |
 | 品目ごとの所持の上限・期限つきの品目 | `inventory_items` に列を持つ新しい表（`ALTER TABLE` でなく別の表）を足す |
@@ -622,7 +622,7 @@ done();
 | 受け取りの二重を止める方法（一意の制約と `batch`・`Idempotency-Key`・2 回目の応答） | §5・§11 の決めること 1〜3 |
 | 所持品・通貨の増減をどこまでサーバーが持つか。消費を入れるか・申告で減らす限界・後から足せる形 | §6・§11 の決めること 9 |
 | 品目の定義の置き場 | §2・§11 の決めること 4 |
-| イベントの定義を誰がどう入れるか | §11 の決めること 7 |
+| イベントの定義を誰がどう入れるか | §11 の決めること 7（`admin-design.md` §7 の管理の口と管理コマンド） |
 | Cron Triggers・Queues を使うか。`wrangler.jsonc` に足すもの | §4・§11 の決めること 6 |
 | Cloudflare の数字・機能は公式で確かめたか「要確認」 | §1 |
 | 認証・`APP_ENV`・利用制限 | §4・§7 |

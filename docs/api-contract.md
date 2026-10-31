@@ -197,7 +197,7 @@
 - `kind`は区切り: `once`（期間の全体で 1 回）・`daily`（イベントの時差の 0 時で変わる）・`weekly`（イベントの時差の月曜 0 時で変わる）。時差はイベントごとの固定の分（既定 0 = UTC。夏時間は持たない）。
 - `periodKey`はいまの区切り（`once`・デイリーはその日`YYYY-MM-DD`・週間はその週の月曜の日付）。`nextResetAt`は次の区切りの時刻で、`endsAt`を越えない。一度きりのイベントには載らない。時刻はどれも ISO 8601 の UTC（秒まで）。
 - `rewards`は受け取ると付与される品目と数（品目の ID の昇順）。`claimed`はトークンのプレイヤーがいまの区切りで受け取ったか（ほかのプレイヤーの受け取りは数えない）。
-- イベントの定義はマイグレーションで入れる（`migrations/0010_events.sql`。`demo-rpg`はデイリーの`daily-login`・金貨`gold` 100）。イベントを書き換える API は無い。
+- イベントと品目の定義は管理の口（`PUT /v1/admin/events/{eventId}`・`PUT /v1/admin/items/{itemId}`。下の「管理の API」）で入れる・置き換える。`demo-rpg`の手本はマイグレーションで入っている（`migrations/0010_events.sql`。デイリーの`daily-login`・金貨`gold` 100）。ゲームのクライアントの口にイベントを書き換える口は無い。
 - 読むのも`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順は`GET /v1/inventory`と同じ: `APP_ENV`の守り → トークン（401）→ プレイヤーの利用制限（429 `RATE_LIMITED`。所持品・受領の履歴・受け取りと合わせて数える）→ 止めた印（403 `PLAYER_BANNED`）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録と機能の設定（404 `NOT_FOUND`。イベントの機能`events`を使わない設定のゲームは`Feature not enabled for this game`）→ 読む。
 
 ## POST /v1/events/{eventId}/claim?gameId=demo-rpg
@@ -262,16 +262,17 @@
 
 ## 管理の API（ゲームのクライアントは使わない）
 
-運営する人が 1 人のプレイヤーの状態と監査のログを読み、プレイヤーを止め（BAN し）、所持品と通貨を付与・取り消し、スコアを消す口。**ゲームのクライアント（CLI モック・UE・Unity・ブラウザ）は使わず、管理の鍵を持たせない**。形の正は`openapi/rpg-online-admin.v1.json`（ゲームのクライアントのスキーマ`openapi/rpg-online.v1.json`には入れない）、設計の正は`docs/guides/working/admin-design.md`。
+運営する人が 1 人のプレイヤーの状態と監査のログを読み、プレイヤーを止め（BAN し）、所持品と通貨を付与・取り消し、スコアを消し、品目とイベントの定義を入れる口。**ゲームのクライアント（CLI モック・UE・Unity・ブラウザ）は使わず、管理の鍵を持たせない**。形の正は`openapi/rpg-online-admin.v1.json`（ゲームのクライアントのスキーマ`openapi/rpg-online.v1.json`には入れない）、設計の正は`docs/guides/working/admin-design.md`。
 
 - 見出しは`Authorization: Bearer <管理の鍵>`。管理の鍵は Worker ごとに 1 つの`ADMIN_API_KEY`（32 文字以上）。ローカルは人が`.dev.vars`（git に入らない）に`ADMIN_API_KEY=<32 文字以上>`を書き、staging・production は`wrangler secret put ADMIN_API_KEY`で渡す。鍵の値をファイル（`wrangler.jsonc`・ソース・試験・文書）に書かない。
 - **`local`でも既定の鍵を持たない**。`ADMIN_API_KEY`が無いか 32 文字未満の環境では、管理の口はどれも**500 `INTERNAL_ERROR`**（鍵の名前・値は返さない）。
 - 鍵が無い・`Bearer`でない・違う（プレイヤーのトークンも含む）は、どれも**401 `UNAUTHENTICATED`**（`message`は`Invalid admin credentials`。外れた理由は返さない）。鍵は SHA-256 にしてから時間の一定な比べで確かめる。鍵を取り替えると、前の鍵はその時から 401（前の鍵を並べて受ける期間は無い）。
 - 読むのも`APP_ENV=local`の時だけ（ほかは正しい鍵があっても**403 `NOT_READY_FOR_PRODUCTION`**）。
 - 確かめの順（どの口も同じ）: `APP_ENV`の守り（403）→ 管理の鍵の有無（500）→ 管理の利用制限（IP ごと。**429 `RATE_LIMITED`**と`Retry-After`。正しい鍵でも数え、鍵を確かめる前に断る）→ 管理の鍵（401）→ `gameId`の形（**400 `INVALID_ARGUMENT`**）→ ゲームの登録（**404 `NOT_FOUND`**・`Unknown game`。機能の設定は見ない）→ 口ごとの確かめ。
-- 書き込みの口（BAN・BAN を解く・所持品と通貨の増減・スコアを消す）は、口ごとの確かめの前に見出し`X-Admin-Actor`（操作した人のラベル。`^[a-zA-Z0-9_.@-]{1,64}$`。自己申告で、そのまま監査のログに残る）と、本文（JSON でなければ**400 `INVALID_JSON`**）の`reason`（1〜200 文字。空白だけは外れ）を確かめる。外れは**400 `INVALID_ARGUMENT`**。
+- 書き込みの口（BAN・BAN を解く・所持品と通貨の増減・スコアを消す・品目とイベントの定義）は、口ごとの確かめの前に見出し`X-Admin-Actor`（操作した人のラベル。`^[a-zA-Z0-9_.@-]{1,64}$`。自己申告で、そのまま監査のログに残る）と、本文（JSON でなければ**400 `INVALID_JSON`**）の`reason`（1〜200 文字。空白だけは外れ）を確かめる。外れは**400 `INVALID_ARGUMENT`**。
 - 書き込みの口は、操作 1 回で監査のログに 1 行（誰が・いつ・何を・前と後）を残し、書き込みと監査の行を 1 つの`batch`に入れる（片方だけ残らない）。読み取りの口は監査のログに残さない。
 - データ修正は行を直に書き換えず、履歴に残る形にする（所持品と通貨は受領の履歴に`sourceType: "admin"`の行。スコアは消して前のスコアを監査に残す）。セーブは直さない（読むだけ）。
+- ローカルの管理コマンド`node scripts/admin-cli.mjs <操作>`（`player`・`audit`・`grant`・`revoke`・`ban`・`unban`・`delete-score`・`put-item`・`put-event`・`smoke`）がこれらの口を呼ぶ。鍵は環境変数`ADMIN_API_KEY`から読み、無ければ行き先が`127.0.0.1`・`localhost`のときだけ`.dev.vars`の`ADMIN_API_KEY`の行を読む（読むだけ）。`X-Admin-Actor`は`--actor`（既定は`local-admin`）。CLI モック（`scripts/cli-mock.mjs`）は管理の口を呼ばない。
 
 ### GET /v1/admin/players/{playerId}?gameId=demo-rpg
 
@@ -301,7 +302,7 @@
 
 - 並びは`auditId`の降順（新しい順）。`limit`は 1〜100 の整数（無ければ 20）。`before`は 1 以上の整数で、付けるとその`auditId`より古い行だけを返す。外れは**400 `INVALID_ARGUMENT`**。続きがあれば`nextBefore`（最後の行の`auditId`）が載り、無ければ欄ごと載らない（受領の履歴と同じ）。
 - `actor`は書き込みの口の`X-Admin-Actor`（自己申告のラベル）。`before`・`after`は操作の前と後の状態（保存した JSON を読み直した値。無ければ`null`）。`createdAt`はサーバーの時刻（ISO 8601・UTC・秒まで）。トークン・管理の鍵・セーブの本文・IP は記録しない。
-- 監査のログは API から書き換えも消しもしない。保持の期間は 365 日（消す仕組みは後で足す。それまでは残る）。いま行を書く口は BAN と BAN を解く口（`action`は`player.ban`・`player.unban`、`target`は`player:<playerId>`）・所持品と通貨の増減（`inventory.adjust`・`player:<playerId>`）・スコアを消す口（`ranking.delete`・`ranking:<boardId>:<playerId>`）。イベントの定義の口は後で足す。
+- 監査のログは API から書き換えも消しもしない。保持の期間は 365 日（消す仕組みは後で足す。それまでは残る）。いま行を書く口は BAN と BAN を解く口（`action`は`player.ban`・`player.unban`、`target`は`player:<playerId>`）・所持品と通貨の増減（`inventory.adjust`・`player:<playerId>`）・スコアを消す口（`ranking.delete`・`ranking:<boardId>:<playerId>`）・品目の定義（`item.put`・`item:<itemId>`）・イベントの定義（`event.put`・`event:<eventId>`）。
 
 ### PUT /v1/admin/players/{playerId}/ban?gameId=demo-rpg
 
@@ -397,6 +398,54 @@
 - ランキングの行だけを見る（そのゲームに無いプレイヤーの行も消せる）。
 - 監査のログに`ranking.delete`の 1 行（`before`は消した行の`{"score","displayName"}`、`after`は`null`）。
 - 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`（400）→ 書く。
+
+### PUT /v1/admin/items/{itemId}?gameId=demo-rpg
+
+品目（所持品・通貨の種類）を 1 つ入れる。品目を消す口は無い。
+
+見出し: `Authorization: Bearer <管理の鍵>`・`X-Admin-Actor: <ラベル>`。
+
+入力例:
+
+```json
+{"kind":"currency","reason":"11 月のイベントの通貨"}
+```
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","itemId":"gem","kind":"currency"}
+```
+
+- `kind`は`currency`（通貨）か`item`（所持品）。外れは**400 `INVALID_ARGUMENT`**。
+- 無ければ作る。あって`kind`が同じなら何も変えずに 200（監査の行は残す）。**あって`kind`が違えば 400 `INVALID_ARGUMENT`**（残高と報酬が種類を前提にしているので、種類は後から変えられない）。
+- 監査のログに`item.put`の 1 行（`before`は前の`{"kind"}`か`null`、`after`は`{"kind"}`）。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・`kind`（400）→ 種類の違い（400）→ 書く。
+
+### PUT /v1/admin/events/{eventId}?gameId=demo-rpg
+
+イベントの定義（区切り・期間・時差・報酬）を入れる・置き換える。マイグレーションを書かずに新しいイベントを入れられる。イベントを消す口は無い（終えるときは`endsAt`をいまにする）。
+
+見出し: `Authorization: Bearer <管理の鍵>`・`X-Admin-Actor: <ラベル>`。
+
+入力例:
+
+```json
+{"kind":"daily","startsAt":"2026-11-01T00:00:00Z","endsAt":"2026-12-01T00:00:00Z","resetOffsetMinutes":540,"rewards":[{"itemId":"gold","amount":100}],"reason":"11 月のログインボーナス"}
+```
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","eventId":"login-2026-11","kind":"daily","startsAt":"2026-11-01T00:00:00Z","endsAt":"2026-12-01T00:00:00Z","resetOffsetMinutes":540,"rewards":[{"itemId":"gold","amount":100}]}
+```
+
+- `kind`は`once`・`daily`・`weekly`。`startsAt`・`endsAt`は ISO 8601 の UTC（ミリ秒は切り捨て）で、`startsAt < endsAt`。`resetOffsetMinutes`は区切りの時差（分。-720〜840 の整数。無ければ 0）。`rewards`は 1〜10 行で、品目が重ならず、`amount`は 1〜1,000,000,000 の整数。外れは**400 `INVALID_ARGUMENT`**。
+- 報酬の品目がそのゲームに無ければ**404 `NOT_FOUND`**（`Unknown item`。何も書かない）。先に品目の口で入れる。
+- 無ければ作り、あれば置き換える（報酬の行は送った中身だけになる）。**受け取りが 1 つでもあるイベントは`kind`・`startsAt`・`resetOffsetMinutes`を変えられない**（**400 `INVALID_ARGUMENT`**。区切りの意味が変わり、二重の受け取りの止めが崩れるため）。`endsAt`と`rewards`は変えられ、変えた後の受け取りから新しい中身になる。
+- 応答の`startsAt`・`endsAt`は秒まで、`rewards`は品目の ID の昇順（イベントの一覧と同じ欄の名前）。
+- 監査のログに`event.put`の 1 行（`before`は前の定義`{"kind","startsAt","endsAt","resetOffsetMinutes","rewards"}`か`null`、`after`は入れた定義）。監査の行・イベント・報酬の行は 1 つの`batch`で書く。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・定義の本文（400）→ 報酬の品目（404）→ 受け取りのあるイベントの守り（400）→ 書く。
 
 ## エラーレスポンス
 
