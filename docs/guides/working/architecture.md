@@ -37,9 +37,9 @@ CLIモック（Node.js）                Unreal（C++）・Unity（C#）・ブ�
 - 識別：`gameId`、`playerId`、`boardId`は仕様化された文字種・長さのみを受け付ける。
 - 日時：サーバー上はUTCのISO 8601、画面表示のみクライアントローカルに変換。
 - エラー：`{ "error": { "code": "...", "message": "..." } }`。
-- 冪等性：イベントの報酬の受け取りは一意の鍵（プレイヤー・イベント・区切り）で冪等にする（同じ区切りの 2 回目は 200 で 1 回目と同じ本文。見出しは要らない）。自然な鍵の無い状態の更新（消費・購入）に`Idempotency-Key`を使う（`docs/guides/working/event-reward-design.md` §5・§6）。
+- 冪等性：イベントの報酬の受け取りは一意の鍵（プレイヤー・イベント・区切り）で冪等にする（同じ区切りの 2 回目は 200 で 1 回目と同じ本文。見出しは要らない）。自然な鍵の無い状態の更新は`Idempotency-Key`で冪等にする: プレイヤーデータの書き込み（`POST /v1/player-data`）は`Idempotency-Key`が必須で、鍵はプレイヤーごとに書き込みの記録`player_data_writes`の列に入り、同じ鍵と同じ中身の 2 回目は 200 で 1 回目と同じ本文・違う中身は 422 `IDEMPOTENCY_KEY_REUSED`（鍵の形と本文のハッシュは`src/core/idempotency.ts`。`docs/guides/working/player-data-design.md` §6）。消費・購入も同じ考えで足す（`docs/guides/working/event-reward-design.md` §6）。
 - 一覧：ページング／件数上限を必須とする。PoCは最大50件。
-- 利用制限：ゲストの発行（IP ごと・ゲームごと）とスコアの投稿・セーブの操作・所持品の読み取りとイベントの一覧・報酬の受け取り（プレイヤーごと）を D1 の固定窓で数え、上限を超えたら 429 `RATE_LIMITED` と`Retry-After`（秒）。数え方は`src/core/rate-limit.ts`（窓の関数と`consume`）、回数と窓は`src/core/rate-limit-policy.ts`の 1 か所、数は表`rate_limit_counters`（`migrations/0008_rate_limits.sql`）。設計の正は`docs/guides/working/abuse-protection-design.md`。
+- 利用制限：ゲストの発行（IP ごと・ゲームごと）とスコアの投稿・セーブの操作・所持品の読み取りとイベントの一覧・報酬の受け取り・プレイヤーデータの読み書き（プレイヤーごと）を D1 の固定窓で数え、上限を超えたら 429 `RATE_LIMITED` と`Retry-After`（秒）。数え方は`src/core/rate-limit.ts`（窓の関数と`consume`）、回数と窓は`src/core/rate-limit-policy.ts`の 1 か所、数は表`rate_limit_counters`（`migrations/0008_rate_limits.sql`）。設計の正は`docs/guides/working/abuse-protection-design.md`。
 - セキュリティ：本番はBearer認証やプラットフォーム認証の検証を導入。ゲーム内に管理用APIキーを埋め込まない。
 
 詳細は[API仕様（案）](../../api-contract.md)。
@@ -66,10 +66,11 @@ CLIモック（Node.js）                Unreal（C++）・Unity（C#）・ブ�
 - `player_bans`: 止めたプレイヤー（ゲームとプレイヤーごとに 1 行。理由〔管理の人のメモ。プレイヤーには返さない〕・止めた時刻・期限〔無ければずっと〕。行があり期限の前なら、そのプレイヤーのトークンの要求は 403 `PLAYER_BANNED`。解くときは行を消し、記録は`admin_audit_log`に残る。`migrations/0012_player_bans.sql`。引くのは`src/core/bans.ts`〔4 つのモジュールがプレイヤーの利用制限の後に呼ぶ。`requireAuth`は DB を引かないまま〕、書くのは`src/core/admin/`の BAN の口。設計の正は`docs/guides/working/admin-design.md` §4）
 - `messages`: 酒場投稿、削除・通報状態
 - `events`・`event_rewards`・`event_claims`: ゲームごとのイベント（区切り〔一度きり・デイリー・週間〕・期間・区切りの時差）・イベントごとの報酬（品目と数）・プレイヤー・イベント・区切りごとの受け取り（二重を止める一意の鍵。`migrations/0010_events.sql`。置き場は`src/modules/events/`〔一覧の`GET`と受け取りの`POST`。期間と区切りの関数は`period.ts`〕。期間はサーバーの時刻だけで決め、Cron Triggers は使わない。設計の正は`docs/guides/working/event-reward-design.md`）
+- `player_data_keys`・`player_data`・`player_data_writes`: ゲームごとのプレイヤーデータのキーの宣言（キー・書き方〔`add`・`max`・`set`・`flag`〕・値の上限・1 回の増加の上限だけ。名前・説明はマスターデータ）・プレイヤーとキーごとの値（0 以上の整数と最後に変わった時刻。宣言の無いキーは受け付けない）・書き込みの記録（書き込み 1 回で 1 行。二重の止めの`Idempotency-Key`〔プレイヤーごとに一意〕と本文のハッシュ・送り直しに返す応答の写し）。`migrations/0013_player_data.sql`。置き場は`src/core/player-data.ts`〔値の上限・書き方・範囲の確かめ〕と`src/modules/player-data/`〔読む`GET`と書く`POST`。書き込みの記録と値は 1 つの`batch`〕。設計の正は`docs/guides/working/player-data-design.md`）
 - `event_progress`: プレイヤーごとの達成度（クエスト。Phase 2 の残り）
 - `adventurer_profiles`: 公開可能なゴースト用プロフィール
 
-PoCで実際に作るのは`games`（登録だけ。公開状態の欄はまだ無い）と`game_modules`と`accounts`と`game_players`と`ranking_entries`と`saves`と`announcements`と`rate_limit_counters`と`inventory_items`・`inventory_balances`・`inventory_ledger`と`events`・`event_rewards`・`event_claims`と`admin_audit_log`と`player_bans`のみ。`accounts`と`game_players`の境目は`docs/guides/working/account-design.md` §2。
+PoCで実際に作るのは`games`（登録だけ。公開状態の欄はまだ無い）と`game_modules`と`accounts`と`game_players`と`ranking_entries`と`saves`と`announcements`と`rate_limit_counters`と`inventory_items`・`inventory_balances`・`inventory_ledger`と`events`・`event_rewards`・`event_claims`と`admin_audit_log`と`player_bans`と`player_data_keys`・`player_data`・`player_data_writes`のみ。`accounts`と`game_players`の境目は`docs/guides/working/account-design.md` §2。
 
 ## 5. クライアントとの将来の境界
 

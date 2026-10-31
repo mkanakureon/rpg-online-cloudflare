@@ -3,7 +3,7 @@
   "info": {
     "title": "RPG Online Backend (local PoC)",
     "version": "1.0.0",
-    "description": "ローカル専用の PoC。認証はゲストのトークン（POST /v1/accounts/guest が返す Bearer）だけで、ログインは未実装。ゲストの発行・スコアの投稿・セーブの操作・所持品の読み取り・イベントの一覧と報酬の受け取りに回数の制限（429 RATE_LIMITED と Retry-After の秒）があり、スコアは値の範囲と回数までしか確かめない。形（欄・型・範囲・状態コードとエラーコードの組）の正はこのファイル、挙動の説明の正は docs/api-contract.md。本文のある応答はどれも content-type: application/json; charset=utf-8（本文の無い 304 は除く）。状態ごとに返りうるエラーコードは各応答の x-error-codes に書く。スキーマに無いパスとメソッドは 404 NOT_FOUND。"
+    "description": "ローカル専用の PoC。認証はゲストのトークン（POST /v1/accounts/guest が返す Bearer）だけで、ログインは未実装。ゲストの発行・スコアの投稿・セーブの操作・所持品の読み取り・イベントの一覧と報酬の受け取り・プレイヤーデータの読み書きに回数の制限（429 RATE_LIMITED と Retry-After の秒）があり、スコアは値の範囲と回数までしか確かめない。形（欄・型・範囲・状態コードとエラーコードの組）の正はこのファイル、挙動の説明の正は docs/api-contract.md。本文のある応答はどれも content-type: application/json; charset=utf-8（本文の無い 304 は除く）。状態ごとに返りうるエラーコードは各応答の x-error-codes に書く。スキーマに無いパスとメソッドは 404 NOT_FOUND。"
   },
   "servers": [
     {
@@ -2657,6 +2657,457 @@
           }
         }
       }
+    },
+    "/v1/player-data": {
+      "get": {
+        "operationId": "getPlayerData",
+        "summary": "トークンのプレイヤーのプレイヤーデータ（統計値と進行状態。宣言したキーごとの整数）を読む。APP_ENV=local のときだけ受け付ける",
+        "security": [
+          {
+            "bearerToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": true,
+            "description": "トークンのゲーム（g）と同じでなければ 403 PERMISSION_DENIED。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "トークンのプレイヤーが書いたことのあるキーの値（キーの昇順）。何も書いていなければ values は空の配列。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayerData"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "gameId の形が外れている。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization が無い・Bearer でない・トークンの形か署名が正しくない（UNAUTHENTICATED）か、トークンの期限が過ぎた（TOKEN_EXPIRED）。本文を読む前に断る。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED",
+              "TOKEN_EXPIRED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）、トークンのプレイヤーが管理の口で止められている（PLAYER_BANNED。message は Player is banned。理由・期限は返さない。プレイヤーの利用制限の後に確かめる）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION",
+              "PERMISSION_DENIED",
+              "PLAYER_BANNED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "登録の無いゲーム（Unknown game）か、プレイヤーデータの機能を使わない設定のゲーム（Feature not enabled for this game）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "利用制限を超えた（同じプレイヤーのプレイヤーデータの読み書きが合わせて窓の中で上限を超えた）。断ったときは何も書かない。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。クライアントはこの秒だけ待ってから送り直す。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・署名の鍵が無いなど）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "writePlayerData",
+        "summary": "宣言したキーの書き方（add・max・set・flag）でプレイヤーデータを書く。Idempotency-Key が必須で、同じ鍵と同じ中身の 2 回目は 200 で 1 回目と同じ本文を返す。全部書くか、どれも書かない。APP_ENV=local のときだけ受け付ける",
+        "security": [
+          {
+            "bearerToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": true,
+            "description": "トークンのゲーム（g）と同じでなければ 403 PERMISSION_DENIED。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "書き込みごとの鍵（^[a-zA-Z0-9_-]{8,64}$。プレイヤーごと）。同じ鍵と同じ中身（gameId と changes。changes の並びは比べない）はもう一度送っても 200 で 1 回目と同じ本文（何も書かない）、違う中身は 422 IDEMPOTENCY_KEY_REUSED。無い・形の外れは 400 INVALID_ARGUMENT。",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_-]{8,64}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlayerDataWrite"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "書いた（または同じ鍵と同じ中身で書き済みの）結果。送り直しも 1 回目と同じ writeId・values。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayerDataWritten"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "gameId・Idempotency-Key・changes の形が外れている・キーの書き方の範囲の外の値（INVALID_ARGUMENT）か、本文が JSON でない（INVALID_JSON）。何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT",
+              "INVALID_JSON"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization が無い・Bearer でない・トークンの形か署名が正しくない（UNAUTHENTICATED）か、トークンの期限が過ぎた（TOKEN_EXPIRED）。本文を読む前に断る。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED",
+              "TOKEN_EXPIRED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（トークンを見る前に断る。読むのも同じ）か、gameId がトークンのゲームと違う（PERMISSION_DENIED）、トークンのプレイヤーが管理の口で止められている（PLAYER_BANNED。message は Player is banned。理由・期限は返さない。プレイヤーの利用制限の後に確かめる）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION",
+              "PERMISSION_DENIED",
+              "PLAYER_BANNED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "登録の無いゲーム（Unknown game）か、プレイヤーデータの機能を使わない設定のゲーム（Feature not enabled for this game）か、宣言の無いキーがある（Unknown key）。何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "add のキーの書いた後の値がキーの値の上限を超える（PLAYER_DATA_LIMIT_EXCEEDED）。その書き込みを全部断り、何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "PLAYER_DATA_LIMIT_EXCEEDED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "同じプレイヤーの同じ Idempotency-Key を違う中身に使った。何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "IDEMPOTENCY_KEY_REUSED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "利用制限を超えた（同じプレイヤーのプレイヤーデータの読み書きが合わせて窓の中で上限を超えた）。断ったときは何も書かない。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。クライアントはこの秒だけ待ってから送り直す。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・署名の鍵が無いなど）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3459,6 +3910,142 @@
           }
         }
       },
+      "PlayerDataValue": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "mode",
+          "value",
+          "updatedAt"
+        ],
+        "description": "キー 1 つの値。キーの意味（名前・説明）はマスターデータ（サーバーは解釈しない）。",
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "add",
+              "max",
+              "set",
+              "flag"
+            ],
+            "description": "キーの宣言の書き方（add・max は統計値、set・flag は進行状態）。"
+          },
+          "value": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000000,
+            "description": "値（0〜1,000,000,000。MAX_PLAYER_DATA_VALUE）。"
+          },
+          "updatedAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+            "description": "最後に変わった時刻（サーバーの時刻。ISO 8601・UTC）。"
+          }
+        }
+      },
+      "PlayerData": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "values"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "values": {
+            "type": "array",
+            "maxItems": 200,
+            "description": "トークンのプレイヤーが書いたことのあるキーの値（キーの昇順）。1 ゲームの宣言は 200 キーまで。",
+            "items": {
+              "$ref": "#/components/schemas/PlayerDataValue"
+            }
+          }
+        }
+      },
+      "PlayerDataChange": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "value": {
+            "type": "integer",
+            "description": "add は増やす数（1〜キーの 1 回の増加の上限）、max・set は新しい値（0〜キーの値の上限）、flag は 1 だけ。外れは 400 INVALID_ARGUMENT。"
+          }
+        }
+      },
+      "PlayerDataWrite": {
+        "type": "object",
+        "required": [
+          "changes"
+        ],
+        "description": "知らない欄は読まない（時刻・実績の欄を送っても使わない）。",
+        "properties": {
+          "changes": {
+            "type": "array",
+            "maxItems": 20,
+            "description": "1〜20 行（MAX_CHANGES_PER_WRITE）。キーは重ならない。宣言の無いキーが 1 つでもあれば 404。",
+            "items": {
+              "$ref": "#/components/schemas/PlayerDataChange"
+            }
+          }
+        }
+      },
+      "PlayerDataWritten": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "writeId",
+          "values"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "writeId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "サーバーが作った書き込みの ID。同じ鍵の送り直しも同じ。"
+          },
+          "values": {
+            "type": "array",
+            "maxItems": 20,
+            "description": "送ったキーの書いた後の値（キーの昇順）。max で前の値のほうが大きければ前の値。",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "key",
+                "value"
+              ],
+              "properties": {
+                "key": {
+                  "$ref": "#/components/schemas/Id"
+                },
+                "value": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000000000,
+                  "description": "値（0〜1,000,000,000。MAX_PLAYER_DATA_VALUE）。"
+                }
+              }
+            }
+          }
+        }
+      },
       "Error": {
         "type": "object",
         "additionalProperties": false,
@@ -3502,7 +4089,9 @@
           "RATE_LIMITED",
           "EVENT_NOT_ACTIVE",
           "INVENTORY_LIMIT_EXCEEDED",
-          "PLAYER_BANNED"
+          "PLAYER_BANNED",
+          "PLAYER_DATA_LIMIT_EXCEEDED",
+          "IDEMPOTENCY_KEY_REUSED"
         ]
       }
     },

@@ -218,6 +218,56 @@
 - そのゲームに無いイベントは**404 `NOT_FOUND`**（`message`は`Unknown event`）。`eventId`の形（`^[a-zA-Z0-9_-]{1,64}$`）が外れていればどのルートにも当たらず**404 `NOT_FOUND`**（`Endpoint not found`）。
 - 書込み系 API なので`APP_ENV=local`の時だけ・トークンがある時だけ通る（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順: `APP_ENV`の守り → トークン（401。数えない）→ プレイヤーの利用制限（429 `RATE_LIMITED`。一覧・所持品・受領の履歴と合わせて数え、断ったときは何も書かない）→ 止めた印（403 `PLAYER_BANNED`）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403）→ ゲームの登録と機能の設定（404）→ イベントがあるか（404）→ 期間（409 `EVENT_NOT_ACTIVE`）→ 書く（409 `INVENTORY_LIMIT_EXCEEDED`）。
 
+## GET /v1/player-data?gameId=demo-rpg
+
+トークンのプレイヤーのプレイヤーデータ（統計値と進行状態。ゲームが宣言したキーごとの 0 以上の整数）を読む。見出しは`Authorization: Bearer <token>`。設計の正は`docs/guides/working/player-data-design.md`。
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","values":[{"key":"chapter","mode":"set","value":2,"updatedAt":"2026-10-31T15:30:00Z"},{"key":"slimes-defeated","mode":"add","value":3,"updatedAt":"2026-10-31T15:30:00Z"}]}
+```
+
+- `values`はトークンのプレイヤーが書いたことのあるキーだけ（キーの昇順）。何も書いていなければ空の配列。ほかのプレイヤーの値は載らない（本文・問い合わせの`playerId`は受け取らない）。
+- `mode`はキーの宣言の書き方（`add`・`max`は統計値、`set`・`flag`は進行状態）。`updatedAt`は最後に変わった時刻（サーバーの時刻。ISO 8601 の UTC・秒まで）。
+- キーの意味（名前・説明）はサーバーが持たない（マスターデータに置く）。サーバーが持つのはキーの宣言（書き方・値の上限・1 回の増加の上限）だけ。`demo-rpg`の手本の宣言はマイグレーションで入っている（`migrations/0013_player_data.sql`。`slimes-defeated`〔`add`〕・`highest-floor`〔`max`〕・`chapter`〔`set`〕・`boss-1-defeated`〔`flag`〕）。
+- セーブと同じ値を持つときは、プレイヤーデータを正にする（起動の時にここで読み、セーブの中の同じ値と違えばこちらで上書きする）。
+- 読むのも`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順は`APP_ENV`の守り → トークン（401。数えない）→ プレイヤーの利用制限（429 `RATE_LIMITED`。書き込みと合わせて数える）→ 止めた印（403 `PLAYER_BANNED`）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録と機能の設定（404 `NOT_FOUND`。機能`player-data`を使わない設定のゲームは`Feature not enabled for this game`）→ 読む。
+
+## POST /v1/player-data?gameId=demo-rpg
+
+トークンのプレイヤーのプレイヤーデータを、宣言したキーの書き方で書く。見出しは`Authorization: Bearer <token>`と`Idempotency-Key`（必須。`^[a-zA-Z0-9_-]{8,64}$`）。
+
+リクエスト例:
+
+```json
+{"changes":[{"key":"slimes-defeated","value":3},{"key":"highest-floor","value":12},{"key":"boss-1-defeated","value":1}]}
+```
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","writeId":"<writeId>","values":[{"key":"boss-1-defeated","value":1},{"key":"highest-floor","value":12},{"key":"slimes-defeated","value":3}]}
+```
+
+- `changes`は 1〜20 行（`MAX_CHANGES_PER_WRITE`）。キーは ID の形（`^[a-zA-Z0-9_-]{1,64}$`）で重ならない。`value`は整数。外れは**400 `INVALID_ARGUMENT`**。本文が JSON でなければ**400 `INVALID_JSON`**。
+- 書き方はキーの宣言で決まり、クライアントは選べない:
+
+  | 書き方 | 送る`value` | 書いた後の値 | 受け付ける`value` |
+  | --- | --- | --- | --- |
+  | `add`（統計値） | 増やす数 | 前の値 +`value` | 1 以上、キーの 1 回の増加の上限以下 |
+  | `max`（統計値） | 新しい記録 | 前の値と`value`の大きいほう | 0 以上、キーの値の上限以下 |
+  | `set`（進行状態） | 新しい値 | `value`（下げられる） | 0 以上、キーの値の上限以下 |
+  | `flag`（進行状態） | 1 | 1（一度立てたら下がらない） | 1 だけ |
+
+  範囲の外は**400 `INVALID_ARGUMENT`**で、何も書かない。値の上限は 1,000,000,000（`MAX_PLAYER_DATA_VALUE`）を超えない。
+- 宣言の無いキーが 1 つでもあれば**404 `NOT_FOUND`**（`message`は`Unknown key`）で、ほかのキーも書かない。
+- `add`の結果がキーの値の上限を超えるときは**409 `PLAYER_DATA_LIMIT_EXCEEDED`**で、その書き込みを全部断る（上限で丸めない。ほかのキーも書かない）。
+- `values`は送ったキーの書いた後の値（キーの昇順）。`max`で前の値のほうが大きければ前の値のまま返る。1 回の書き込みは全部書くか、どれも書かないか（D1 の`batch`）。
+- **`Idempotency-Key`が無い・形の外れは 400 `INVALID_ARGUMENT`**（`add`以外のキーだけの書き込みも必須）。同じプレイヤーが同じ鍵と同じ中身（`gameId`と`changes`。`changes`の並びは比べない）をもう一度送ると、何も書かずに**200 で 1 回目と同じ本文**（同じ`writeId`・`values`）を返す（並べて送っても 1 回分）。同じ鍵で違う中身は**422 `IDEMPOTENCY_KEY_REUSED`**（何も書かない）。鍵の範囲はプレイヤーごとで、ほかのプレイヤーが同じ鍵を使っても別の書き込みになる。クライアントは書き込みごとに新しい鍵（`crypto.randomUUID()`など）を作り、届かなかった要求の送り直しだけ同じ鍵を使う。鍵は書き込みの記録と一緒に残る。
+- 時刻はサーバーが付ける（本文・`Date`の見出しの時刻は読まない）。値は**自己申告**として扱う（サーバーはゲームの中で取れた値かを確かめられない。守るのは宣言・範囲・1 回の増加の上限・書き方・利用制限だけ）。
+- 書込み系 API なので`APP_ENV=local`の時だけ・トークンがある時だけ通る（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順: `GET /v1/player-data`と同じ（`APP_ENV`の守り → トークン → プレイヤーの利用制限 → 止めた印 →`gameId`の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定）→ `Idempotency-Key`の形（400）→ 本文の JSON（400 `INVALID_JSON`）→ `changes`の形（400）→ キーの宣言（404）→ 書き方ごとの範囲（400）→ 書く（409 `PLAYER_DATA_LIMIT_EXCEEDED`・422 `IDEMPOTENCY_KEY_REUSED`）。
+
 ## GET /v1/config?gameId=demo-rpg&clientVersion=…
 
 ゲームの設定（機能フラグ・クライアントの版・マスターデータのキーと大きさの一覧）を読む。クライアントは起動時に 1 回読む。設計の正は`docs/guides/working/config-design.md`。
@@ -453,17 +503,18 @@
 {"error":{"code":"INVALID_ARGUMENT","message":"Invalid parameters"}}
 ```
 
-現PoCの代表コード: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）、`UNAUTHENTICATED`（401）、`TOKEN_EXPIRED`（401）、`PERMISSION_DENIED`（403）、`SAVE_CONFLICT`（409）、`PAYLOAD_TOO_LARGE`（413）、`SLOT_LIMIT_EXCEEDED`（409）、`RATE_LIMITED`（429）、`EVENT_NOT_ACTIVE`（409）、`INVENTORY_LIMIT_EXCEEDED`（409）、`PLAYER_BANNED`（403）。
+現PoCの代表コード: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）、`UNAUTHENTICATED`（401）、`TOKEN_EXPIRED`（401）、`PERMISSION_DENIED`（403）、`SAVE_CONFLICT`（409）、`PAYLOAD_TOO_LARGE`（413）、`SLOT_LIMIT_EXCEEDED`（409）、`RATE_LIMITED`（429）、`EVENT_NOT_ACTIVE`（409）、`INVENTORY_LIMIT_EXCEEDED`（409）、`PLAYER_BANNED`（403）、`PLAYER_DATA_LIMIT_EXCEEDED`（409）、`IDEMPOTENCY_KEY_REUSED`（422）。
 
-管理の口だけのコード（ゲームのクライアントの口は返さない。形の正は`openapi/rpg-online-admin.v1.json`）: `INSUFFICIENT_BALANCE`（409）、`IDEMPOTENCY_KEY_REUSED`（422）。
+管理の口だけのコード（ゲームのクライアントの口は返さない。形の正は`openapi/rpg-online-admin.v1.json`）: `INSUFFICIENT_BALANCE`（409）。
 
-- **`PLAYER_BANNED`（403）**: トークンの要る口（スコアの投稿・セーブの 4 つ・所持品・受領の履歴・イベントの一覧と受け取り）で、トークンのプレイヤーが管理の口（`PUT /v1/admin/players/{playerId}/ban`）で止められているとき。`message`は`Player is banned`で、止めた理由・期限は返さない。トークンは正しいので、ゲストを発行し直しても同じプレイヤーには戻らない（別の`playerId`の新しいゲストになる）。確かめるのはプレイヤーの利用制限の後（止めた人の要求も数える）で、トークンの無い要求（401）・本文の形の外れ（400）はそれより先に断る。止めた人の要求は何も書かない。トークンを読まない口（お知らせ・ランキングの`GET`・設定）は止めない。
+- **`PLAYER_BANNED`（403）**: トークンの要る口（スコアの投稿・セーブの 4 つ・所持品・受領の履歴・イベントの一覧と受け取り・プレイヤーデータの読み書き）で、トークンのプレイヤーが管理の口（`PUT /v1/admin/players/{playerId}/ban`）で止められているとき。`message`は`Player is banned`で、止めた理由・期限は返さない。トークンは正しいので、ゲストを発行し直しても同じプレイヤーには戻らない（別の`playerId`の新しいゲストになる）。確かめるのはプレイヤーの利用制限の後（止めた人の要求も数える）で、トークンの無い要求（401）・本文の形の外れ（400）はそれより先に断る。止めた人の要求は何も書かない。トークンを読まない口（お知らせ・ランキングの`GET`・設定）は止めない。
 - **`INSUFFICIENT_BALANCE`（409。管理の口だけ）**: 管理の所持品と通貨の増減で、取り消すと残高が 0 未満になるとき。何も書かない。
-- **`IDEMPOTENCY_KEY_REUSED`（422。管理の口だけ）**: 管理の所持品と通貨の増減で、同じゲームの同じ`Idempotency-Key`を違う中身に使ったとき。何も書かない。
+- **`PLAYER_DATA_LIMIT_EXCEEDED`（409）**: プレイヤーデータの書き込み（`POST /v1/player-data`）で、`add`のキーの書いた後の値がキーの値の上限を超えるとき。その書き込みを全部断り、何も書かない。
+- **`IDEMPOTENCY_KEY_REUSED`（422）**: 同じ`Idempotency-Key`を違う中身に使ったとき。プレイヤーデータの書き込み（同じプレイヤーの鍵）と、管理の所持品と通貨の増減（同じゲームの鍵）が返す。何も書かない。
 
 ## 利用制限
 
-ゲストの発行・スコアの投稿・セーブの操作・所持品の読み取り・イベントの一覧と報酬の受け取り・管理の API は、決めた秒の窓（固定。窓の始まりは UNIX 秒を窓の長さで割り切った時刻）の中の回数を数え、上限を超えると断る。設計の正は`docs/guides/working/abuse-protection-design.md`。
+ゲストの発行・スコアの投稿・セーブの操作・所持品の読み取り・イベントの一覧と報酬の受け取り・プレイヤーデータの読み書き・管理の API は、決めた秒の窓（固定。窓の始まりは UNIX 秒を窓の長さで割り切った時刻）の中の回数を数え、上限を超えると断る。設計の正は`docs/guides/working/abuse-protection-design.md`。
 
 | 口 | 数える単位 | 上限 |
 | --- | --- | --- |
@@ -472,6 +523,7 @@
 | `POST /v1/rankings/{boardId}` | プレイヤー（トークンのゲームとプレイヤー） | 60 秒に 30 回 |
 | `PUT`・`GET`・`DELETE /v1/saves/{slotId}`と`GET /v1/saves` | プレイヤー（トークンのゲームとプレイヤー。4 つの操作を合わせて数え、スコアの投稿とは別に数える） | 60 秒に 60 回 |
 | `GET /v1/inventory`・`GET /v1/inventory/history`・`GET /v1/events`・`POST /v1/events/{eventId}/claim` | プレイヤー（トークンのゲームとプレイヤー。報酬の操作として 4 つを合わせて数え、セーブの操作とは別に数える） | 60 秒に 60 回 |
+| `GET`・`POST /v1/player-data`（単位の名前`player-data`） | プレイヤー（トークンのゲームとプレイヤー。2 つの操作を合わせて数え、セーブ・報酬の操作とは別に数える） | 60 秒に 60 回 |
 | 管理の API（`/v1/admin/...`。単位の名前`admin`） | IP（`CF-Connecting-IP`。見出しが無ければ全員で 1 つ。管理の口を全部合わせて数え、正しい鍵でも数える） | 60 秒に 60 回 |
 
 レスポンス例（429。見出し`Retry-After: 37`）:
@@ -483,7 +535,7 @@
 - `Retry-After`は次に送ってよいまでの秒（窓の終わりまで。1〜60 の整数）。クライアントはこの秒だけ待ってから送り直す。どの単位で断ったか・上限の数は返さない。
 - 断った要求も数える。断ったときは行を作らない・変えない。
 - `APP_ENV`の守り（403）が先で、そのときは数えない。IP はハッシュ（SHA-256）にして数え、IP をそのまま残さない。
-- ゲームのクライアントの口は、二重送信の`Idempotency-Key`の見出しを受け取って無視する（スコアは最高スコアだけ残すので、同じ要求を 2 回送っても記録と応答は同じ。回数は 2 回分数える）。管理の所持品と通貨の増減の口だけは必須（上の「管理の API」）。
+- `Idempotency-Key`の見出しが必須なのは、プレイヤーデータの書き込み（`POST /v1/player-data`。上の節）と管理の所持品と通貨の増減の口（上の「管理の API」）だけ。ほかのゲームのクライアントの口は受け取って無視する（スコアは最高スコアだけ残すので、同じ要求を 2 回送っても記録と応答は同じ。回数は 2 回分数える）。
 
 ## 互換の決まり
 
