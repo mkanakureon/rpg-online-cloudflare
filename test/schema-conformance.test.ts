@@ -6,7 +6,8 @@
  * `エラーの応答はスキーマに書いた状態とエラーコードの組で返る` に E2 の 2 つの 409 の行を足した）、
  * `429の応答はスキーマに合う` とエラーコードの数の試験は利用制限の R1 で足し・置き換えたもので docs/guides/working/abuse-protection-design.md §7。
  * エラーコードの数の試験は管理の O2 でも置き換え、`エラーの応答はスキーマに書いた状態とエラーコードの組で返る` に BAN したプレイヤーの行を足した。
- * docs/guides/working/admin-design.md §9）。挙動（状態コード・データ）は
+ * docs/guides/working/admin-design.md §9。操作の数とエラーコードの数の試験はプレイヤーデータの U1 でも置き換え、エラーの組の試験に
+ * プレイヤーデータの書き込みの 409・422 の行を足した。docs/guides/working/player-data-design.md §10・§11）。挙動（状態コード・データ）は
  * test/failure-*.test.ts が見る。ここはスキーマの側から見る。
  * L2 の試験は src/worker.ts の default.fetch を直に呼ぶ（docs/guides/working/failure-case-test-plan.md §2）。
  *
@@ -45,7 +46,7 @@ const spec = specJson as unknown as Spec;
 const methods = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'];
 const errorCodes = ['INVALID_ARGUMENT', 'NOT_FOUND', 'NOT_READY_FOR_PRODUCTION', 'INVALID_JSON', 'INTERNAL_ERROR',
   'UNAUTHENTICATED', 'TOKEN_EXPIRED', 'PERMISSION_DENIED', 'SAVE_CONFLICT', 'PAYLOAD_TOO_LARGE', 'SLOT_LIMIT_EXCEEDED', 'RATE_LIMITED',
-  'EVENT_NOT_ACTIVE', 'INVENTORY_LIMIT_EXCEEDED', 'PLAYER_BANNED'];
+  'EVENT_NOT_ACTIVE', 'INVENTORY_LIMIT_EXCEEDED', 'PLAYER_BANNED', 'PLAYER_DATA_LIMIT_EXCEEDED', 'IDEMPOTENCY_KEY_REUSED'];
 
 // prepare が D1 のエラーに似た例外を投げる偽の DB（本物の D1 を壊さない）
 const brokenDB = {
@@ -163,6 +164,15 @@ async function addSchemaEvents(): Promise<void> {
   ]);
 }
 
+/** プレイヤーデータを書く（POST /v1/player-data?gameId=demo-rpg）。player のトークンと Idempotency-Key を付ける。 */
+async function writePlayerData(player: string, key: string, changes: unknown): Promise<Response> {
+  return worker.fetch(new Request(`${base}/v1/player-data?gameId=demo-rpg`, {
+    method: 'POST',
+    headers: { authorization: await bearer('demo-rpg', player), 'content-type': 'application/json', 'Idempotency-Key': key },
+    body: JSON.stringify({ changes }),
+  }), localEnv as never);
+}
+
 /** 応答の状態・ヘッダー・本文が、スキーマの操作のその状態の応答に合うことを確かめ、その応答の定義を返す。 */
 async function expectConforms(res: Response, operationId: string): Promise<{ spec: ResponseSpec; body: unknown }> {
   const responses = operation(operationId).responses;
@@ -192,11 +202,12 @@ beforeEach(async () => {
 });
 
 describe('S1: スキーマのファイル', () => {
-  it('スキーマのファイルはOpenAPI 3.1で15個の操作を持つ', () => {
+  it('スキーマのファイルはOpenAPI 3.1で17個の操作を持つ', () => {
     expect(spec.openapi).toMatch(/^3\.1\.\d+$/);
     expect(operations().map((o) => o.operationId).sort())
-      .toEqual(['claimEventReward', 'deleteSave', 'getConfig', 'getHealth', 'getInventory', 'getMasterData', 'getRanking', 'getSave',
-        'issueGuest', 'listAnnouncements', 'listEvents', 'listInventoryHistory', 'listSaves', 'putSave', 'submitScore']);
+      .toEqual(['claimEventReward', 'deleteSave', 'getConfig', 'getHealth', 'getInventory', 'getMasterData', 'getPlayerData', 'getRanking',
+        'getSave', 'issueGuest', 'listAnnouncements', 'listEvents', 'listInventoryHistory', 'listSaves', 'putSave', 'submitScore',
+        'writePlayerData']);
     const refs = collectRefs(spec);
     expect(refs.length).toBeGreaterThan(0);
     for (const ref of refs) expect(() => resolveRef(ref, spec), ref).not.toThrow();
@@ -239,7 +250,7 @@ describe('S1: スキーマのファイル', () => {
     expect(() => validate(1, { $ref: 'other.json#/X' }, root)).toThrow();
   });
 
-  it('スキーマのErrorCodeの列挙は15個のエラーコードと一致する', () => {
+  it('スキーマのErrorCodeの列挙は17個のエラーコードと一致する', () => {
     const codes = spec.components.schemas.ErrorCode.enum as string[];
     expect([...codes].sort()).toEqual([...errorCodes].sort());
   });
@@ -347,6 +358,22 @@ describe('S1: 応答がスキーマに合う', () => {
         }), localEnv as never);
         await baseEnv.DB.prepare("DELETE FROM player_bans WHERE game_id = 'demo-rpg' AND player_id = 'schema-banned'").run();
         return res;
+      }],
+      // demo-rpg の手本のキー slimes-defeated（add・上限 1,000,000,000）を上限の 1 つ手前にしてから 2 を足す
+      ['PLAYER_DATA_LIMIT_EXCEEDED', 'writePlayerData', async () => {
+        await baseEnv.DB.prepare("INSERT OR REPLACE INTO player_data (game_id, player_id, key, value, updated_at) VALUES ('demo-rpg', 'schema-pd', 'slimes-defeated', ?, 1)")
+          .bind(1_000_000_000 - 1).run();
+        const res = await writePlayerData('schema-pd', 'schema-pd-limit', [{ key: 'slimes-defeated', value: 2 }]);
+        await baseEnv.DB.prepare("DELETE FROM player_data WHERE game_id = 'demo-rpg' AND player_id = 'schema-pd'").run();
+        return res;
+      }],
+      ['IDEMPOTENCY_KEY_REUSED', 'writePlayerData', async () => {
+        await baseEnv.DB.batch([
+          baseEnv.DB.prepare("DELETE FROM player_data WHERE game_id = 'demo-rpg' AND player_id = 'schema-pd'"),
+          baseEnv.DB.prepare("DELETE FROM player_data_writes WHERE game_id = 'demo-rpg' AND player_id = 'schema-pd'"),
+        ]);
+        expect((await writePlayerData('schema-pd', 'schema-pd-reuse', [{ key: 'chapter', value: 1 }])).status).toBe(200);
+        return writePlayerData('schema-pd', 'schema-pd-reuse', [{ key: 'chapter', value: 2 }]);
       }],
       // p1 のスコアの数を上限まで埋めるので最後に置く（前の行の p1 の投稿を断らせない）
       ['RATE_LIMITED', 'submitScore', async () => { await fillRateLimit(baseEnv.DB, RATE_LIMITS.score, 'demo-rpg:p1'); return post('boss-score', valid); }],

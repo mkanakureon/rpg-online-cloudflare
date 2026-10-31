@@ -330,6 +330,9 @@ describe('O2 スキーマ', () => {
       listInventoryHistory: () => send('GET', '/v1/inventory/history'),
       listEvents: () => send('GET', '/v1/events'),
       claimEventReward: () => claim(),
+      getPlayerData: () => send('GET', '/v1/player-data'),
+      // 止めた印は Idempotency-Key と本文の確かめより先なので、見出しが無くても 403 PLAYER_BANNED
+      writePlayerData: () => send('POST', '/v1/player-data', {}, { changes: [{ key: 'kills', value: 1 }] }),
     };
     // スキーマのトークンの要る操作（401 を持つ操作）を全部送る
     const tokenOps = Object.values(spec.paths).flatMap((item) => methods.filter((m) => m in item).map((m) => item[m]))

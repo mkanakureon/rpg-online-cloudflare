@@ -7,7 +7,7 @@
 // 書き込みの口（BAN・BAN を解く・所持品と通貨の増減・スコアを消す・品目とイベントの定義）は、監査の行を 1 文目にし、続く文は「この要求の監査の行が
 // 入ったとき」だけ書く 1 つの batch で書く（片方だけ残らない）。増減の続く文と受領の履歴の種類の名前は src/core/ledger.ts。
 // 品目の種類の違い・報酬の品目の有無・受け取りのあるイベントの守りは、先に読んで断り、監査の行の文の条件にも入れる（読んでから書くまでの間に変わっても書かない）。
-// 増減は Idempotency-Key が必須で、鍵と中身のハッシュを監査の行の列に入れて二重を止める（同じ中身は 200 で 1 回目と同じ本文・違う中身は 422）。
+// 増減は Idempotency-Key が必須で（形は src/core/idempotency.ts）、鍵と中身のハッシュを監査の行の列に入れて二重を止める（同じ中身は 200 で 1 回目と同じ本文・違う中身は 422）。
 // ルートの一覧はルーター（src/core/router.ts）がゲストの発行の後・機能のルートの前に当てる。形の正は openapi/rpg-online-admin.v1.json、
 // 挙動の説明の正は docs/api-contract.md の「管理の API」、設計の正は docs/guides/working/admin-design.md §2・§4〜§7。
 //
@@ -18,12 +18,13 @@ import { loadGame } from '../games';
 import { requireLocalWrite } from '../guards';
 import { error, json } from '../http';
 import { validId } from '../ids';
+import { parseIdempotencyKey } from '../idempotency';
 import { MAX_ITEM_AMOUNT } from '../inventory';
 import { adjustStatements, LEDGER_SOURCES } from '../ledger';
 import type { Route } from '../module';
 import { consume, ipSubject } from '../rate-limit';
 import { RATE_LIMITS } from '../rate-limit-policy';
-import { isoSeconds, listAuditSql, parseActor, parseIdempotencyKey, parseReason, requestHash, shapeAuditRow, type AuditRow } from './audit';
+import { isoSeconds, listAuditSql, parseActor, parseReason, requestHash, shapeAuditRow, type AuditRow } from './audit';
 import { adminSecret, requireAdmin } from './key';
 import { parseAdjustment, parseAuditQuery, parseEventDefinition, parseExpiresAt, parseItemKind, PLAYER_HISTORY_ROWS, type EventDefinition } from './parse';
 

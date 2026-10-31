@@ -2,11 +2,13 @@
 //
 // 監査の行は管理の書き込みの操作 1 回で 1 行（書く口は BAN・BAN を解く・所持品と通貨の増減・スコアを消す・品目とイベントの定義）。
 // 読み取りの口は監査に残さない。書き込みの口の共通の確かめ（X-Admin-Actor の parseActor・本文の reason の parseReason）と、
-// 増減の二重の止め（Idempotency-Key の parseIdempotencyKey・中身のハッシュ requestHash。鍵とハッシュは監査の行の列に入る）もここに置く。
+// 増減の二重の止めの中身のハッシュ requestHash（鍵とハッシュは監査の行の列に入る）もここに置く。鍵の形 IDEMPOTENCY_KEY_PATTERN・
+// parseIdempotencyKey とハッシュの sha256Hex は src/core/idempotency.ts（プレイヤーデータのモジュールも読む）。
 // before_json・after_json は保存した JSON を読み直して返す。トークン・管理の鍵・セーブの本文・IP は入れない。
 // 表は migrations/0011_admin.sql、形と決まりの正は docs/guides/working/admin-design.md §5。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
+import { sha256Hex } from '../idempotency';
 
 /** 監査の行を残す日数（operations-security.md の 6。消す仕組みは分析の束で足し、それまでは残る）。 */
 export const AUDIT_RETENTION_DAYS = 365;
@@ -27,23 +29,13 @@ export function parseReason(value: unknown): string | null {
   return value;
 }
 
-/** Idempotency-Key の形（増減だけ必須。監査の行の request_key に入る）。 */
-export const IDEMPOTENCY_KEY_PATTERN = /^[a-zA-Z0-9_-]{8,64}$/;
-
-/** Idempotency-Key の値を確かめる。外れ（無い・形の誤り）は null。 */
-export function parseIdempotencyKey(raw: string | null): string | null {
-  return raw !== null && IDEMPOTENCY_KEY_PATTERN.test(raw) ? raw : null;
-}
-
 /** request_hash に入れる中身（actor は入れない。同じ修正を別の人が流し直しても二重にしない）。 */
 export type HashedRequest = { action: string; gameId: string; playerId: string; itemId: string; delta: number; reason: string };
 
 /** 中身を決まった順（action・gameId・playerId・itemId・delta・reason）の JSON にして SHA-256（16 進）にする。 */
 export async function requestHash(r: HashedRequest): Promise<string> {
   // 欄を書いた順に並べ直す（呼ぶ側の object の欄の順に左右されない）
-  const text = JSON.stringify({ action: r.action, gameId: r.gameId, playerId: r.playerId, itemId: r.itemId, delta: r.delta, reason: r.reason });
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return sha256Hex(JSON.stringify({ action: r.action, gameId: r.gameId, playerId: r.playerId, itemId: r.itemId, delta: r.delta, reason: r.reason }));
 }
 
 /** before が無ければ（NULL）全部から。続きがあるかを知るために limit + 1 行を引く。 */
