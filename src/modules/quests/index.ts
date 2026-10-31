@@ -53,7 +53,7 @@ const grantsOf = `SELECT item_id AS itemId, delta AS amount FROM inventory_ledge
   WHERE game_id = ? AND player_id = ? AND source_type = '${LEDGER_SOURCES.questClaim}' AND source_id = ? ORDER BY item_id`;
 
 // §6 の batch の 3 文。? を順に bind する（中身は §6 と同じ。区切りの値の ELSE の枝は Q2 で足す）
-// 1. 受け取りの行。期間の内で、進捗が閾値以上で、付与しても上限を超えないときだけ。同じ区切りの行があれば何もしない（バインドは 18）
+// 1. 受け取りの行。期間の内で、進捗が閾値以上で、付与しても上限を超えないときだけ。同じ区切りの行があれば何もしない（バインドは 16）
 const insertClaim = `INSERT INTO quest_claims (game_id, player_id, quest_id, period_key, claim_id, claimed_at)
   SELECT ?, ?, ?, ?, ?, ? FROM quests x
   WHERE x.game_id = ? AND x.quest_id = ? AND x.starts_at <= ? AND ? < x.ends_at
