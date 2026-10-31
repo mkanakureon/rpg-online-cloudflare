@@ -15,6 +15,30 @@ export declare function playerOp(playerId: string, gameId?: string): AdminOp;
 
 export declare function auditOp(gameId?: string, page?: { limit?: number; before?: number }): AdminOp;
 
+export declare const ANALYTICS_DEFAULT_DAYS: number;
+
+export type AnalyticsRange = { from: string; to: string };
+
+export declare function defaultAnalyticsRange(now?: number, days?: number): AnalyticsRange;
+
+export declare function analyticsPlayersOp(gameId?: string, range?: AnalyticsRange): AdminOp;
+
+export type AnalyticsPlayersBody = {
+  gameId: string;
+  from: string;
+  to: string;
+  timezone: 'UTC';
+  serverTime: string;
+  days: Array<{ date: string; activePlayers: number; newPlayers: number }>;
+  cohorts: Array<{ date: string; newPlayers: number; retained: { d1: number | null; d7: number | null; d30: number | null } }>;
+};
+
+export declare function retentionRates(body: AnalyticsPlayersBody): Array<{
+  date: string;
+  newPlayers: number;
+  rates: Record<string, number | null>;
+}>;
+
 export declare function adjustOp(playerId: string, itemId: string, delta: number, reason: string, gameId?: string): AdminOp;
 
 export declare function banOp(playerId: string, reason: string, expiresAt?: string, gameId?: string): AdminOp;

@@ -13,6 +13,7 @@
 // 順と SQL の正は docs/guides/working/player-data-design.md §4〜§7 と docs/guides/working/quest-design.md §6（区切りごとの値）。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
+import { consumeForPlayer } from '../../core/activity';
 import { requireAuth } from '../../core/auth';
 import { requireNotBanned } from '../../core/bans';
 import type { Database, Env } from '../../core/env';
@@ -24,7 +25,6 @@ import { validId } from '../../core/ids';
 import type { GameModule } from '../../core/module';
 import { isoSeconds, periodKey } from '../../core/period';
 import { checkChange, type PlayerDataKey, type PlayerDataMode } from '../../core/player-data';
-import { consume } from '../../core/rate-limit';
 import { RATE_LIMITS } from '../../core/rate-limit-policy';
 import type { TokenClaims } from '../../core/token';
 import { parseChanges, writeRequestHash, type Change } from './parse';
@@ -99,7 +99,7 @@ async function checkAccess(req: Request, env: Env, url: URL, known: readonly str
   const auth = await requireAuth(req, env);
   if (!auth.ok) return auth;
   // 読み書きを合わせて、トークンのプレイヤーで数える（偽れない鍵）
-  const limited = await consume(env.DB, RATE_LIMITS.playerData, `${auth.claims.gameId}:${auth.claims.playerId}`);
+  const limited = await consumeForPlayer(env.DB, RATE_LIMITS.playerData, auth.claims);
   if (limited) return { ok: false, response: limited };
   // 止めたプレイヤーは利用制限で数えた後に断る（理由・期限は返さない）
   const banned = await requireNotBanned(env, auth.claims);

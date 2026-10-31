@@ -2,7 +2,7 @@
 //
 // scripts/admin-cli.mjs（入口）と test/admin.test.ts の両方がここを読み込む（scripts/cli-requests.mjs と同じ考え）。
 // 操作ごとの関数（playerOp〜putEventOp と、プレイヤーデータの putDataKeyOp・putAchievementOp・setDataOp・revokeAchievementOp と、
-// クエストの定義の putQuestOp）が
+// クエストの定義の putQuestOp と、集計の analyticsPlayersOp〔継続率の割り算は retentionRates〕）が
 // { method, path, body } を作り、adminRequest が管理の鍵・X-Admin-Actor・Idempotency-Key を付けた
 // Request にする。通しの確かめ runSmoke は、送る関数（send）を受け取って docs/guides/working/admin-design.md §7 の smoke の流れを回す
 // （CLI は fetch、試験は src/worker.ts の fetch を渡す。テスト「管理コマンドと同じ流れで付与と取り消しとBANとイベントの定義が監査のログに残る」）。
@@ -31,6 +31,29 @@ export function playerOp(playerId, gameId = DEFAULT_GAME_ID) {
 export function auditOp(gameId = DEFAULT_GAME_ID, { limit, before } = {}) {
   const extra = [limit === undefined ? '' : `&limit=${limit}`, before === undefined ? '' : `&before=${before}`].join('');
   return { method: 'GET', path: `/v1/admin/audit?${query(gameId)}${extra}` };
+}
+
+/** 管理コマンドの analytics の旗が無いときの日の範囲（今日〔UTC〕までの 7 日）。 */
+export const ANALYTICS_DEFAULT_DAYS = 7;
+
+/** 今日（UTC）までの days 日の from・to（YYYY-MM-DD）。now は UNIX 秒。 */
+export function defaultAnalyticsRange(now = Math.floor(Date.now() / 1000), days = ANALYTICS_DEFAULT_DAYS) {
+  const day = (seconds) => new Date(seconds * 1000).toISOString().slice(0, 10);
+  return { from: day(now - (days - 1) * 86400), to: day(now) };
+}
+
+/** 日ごとの遊んだ人・新しい人と、発行の日ごとの D1／D7／D30 の継続の数を読む（GET /v1/admin/analytics/players）。 */
+export function analyticsPlayersOp(gameId = DEFAULT_GAME_ID, { from, to } = defaultAnalyticsRange()) {
+  return { method: 'GET',
+    path: `/v1/admin/analytics/players?${query(gameId)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}` };
+}
+
+/** 集計の応答の cohorts から継続率（retained.dN / newPlayers）を出す。まだ決まらない数（null）は null のまま。 */
+export function retentionRates(body) {
+  return (body.cohorts ?? []).filter((c) => c.newPlayers > 0).map((c) => ({
+    date: c.date, newPlayers: c.newPlayers,
+    rates: Object.fromEntries(Object.entries(c.retained).map(([k, v]) => [k, v === null ? null : v / c.newPlayers])),
+  }));
 }
 
 /** 所持品・通貨の増減（POST /v1/admin/players/{playerId}/inventory。正は付与・負は取り消し）。Idempotency-Key が要る。 */

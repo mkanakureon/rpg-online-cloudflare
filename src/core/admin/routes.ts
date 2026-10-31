@@ -14,9 +14,12 @@
 // ルートの一覧はルーター（src/core/router.ts）がゲストの発行の後・機能のルートの前に当てる。形の正は openapi/rpg-online-admin.v1.json、
 // 挙動の説明の正は docs/api-contract.md の「管理の API」、設計の正は docs/guides/working/admin-design.md §2・§4〜§7
 // （プレイヤーデータの 4 つの口とプレイヤーを読む口の playerData は docs/guides/working/player-data-design.md §8、
-// クエストの定義の口・プレイヤーを読む口の questClaims・値を置く口の区切りの値の頭打ちは docs/guides/working/quest-design.md §8）。
+// クエストの定義の口・プレイヤーを読む口の questClaims・値を置く口の区切りの値の頭打ちは docs/guides/working/quest-design.md §8、
+// 集計の口 /v1/admin/analytics/players〔数だけでプレイヤー ID を返さない。関数と SQL は src/core/analytics.ts〕は docs/guides/working/analytics-design.md §5）。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
+import { activityDay } from '../activity';
+import { cohortRetentionSql, dailyActivitySql, fillDays, parseAnalyticsRange, shapeCohorts, type CohortRow, type DailyRow } from '../analytics';
 import { isBanActive } from '../bans';
 import type { Database, Env } from '../env';
 import { loadGame } from '../games';
@@ -732,6 +735,29 @@ export const adminRoutes: Route[] = [
       const items = page.map(shapeAuditRow);
       const more = rows.results.length > limit;
       return json(more ? { gameId, items, nextBefore: page[page.length - 1].auditId } : { gameId, items });
+    },
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/admin\/analytics\/players$/,
+    async handle(req, env, _match, url, known) {
+      const access = await checkAdmin(req, env, url, known);
+      if (!access.ok) return access.response;
+      const { gameId } = access;
+      const now = serverNow();
+      const range = parseAnalyticsRange(url, now);
+      if (!range.ok) return error('INVALID_ARGUMENT', range.message, 400);
+      const { from, to } = range.value;
+      const [daily, cohorts] = await Promise.all([
+        env.DB.prepare(dailyActivitySql).bind(gameId, from, to).all<DailyRow>(),
+        env.DB.prepare(cohortRetentionSql).bind(gameId, from, to).all<CohortRow>(),
+      ]);
+      // 数と日付だけ（playerId・行ごとの時刻を入れない）
+      return json({
+        gameId, from, to, timezone: 'UTC', serverTime: isoSeconds(now),
+        days: fillDays(from, to, daily.results),
+        cohorts: shapeCohorts(cohorts.results, activityDay(now)),
+      });
     },
   },
 ];

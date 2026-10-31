@@ -9,6 +9,7 @@
 // docs/guides/working/event-reward-design.md §4・§5。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
+import { consumeForPlayer } from '../../core/activity';
 import { requireAuth } from '../../core/auth';
 import { requireNotBanned } from '../../core/bans';
 import type { Env } from '../../core/env';
@@ -20,7 +21,6 @@ import { MAX_ITEM_AMOUNT, MAX_REWARD_LINES } from '../../core/inventory';
 import { LEDGER_SOURCES } from '../../core/ledger';
 import type { GameModule } from '../../core/module';
 import { isOpen, isoSeconds, nextResetAt, periodKey, type EventKind } from '../../core/period';
-import { consume } from '../../core/rate-limit';
 import { RATE_LIMITS } from '../../core/rate-limit-policy';
 import type { TokenClaims } from '../../core/token';
 
@@ -71,7 +71,7 @@ async function checkAccess(req: Request, env: Env, url: URL, known: readonly str
   const auth = await requireAuth(req, env);
   if (!auth.ok) return auth;
   // 報酬の操作（所持品・受領の履歴・イベントの一覧・受け取り）を合わせて、トークンのプレイヤーで数える（偽れない鍵）
-  const limited = await consume(env.DB, RATE_LIMITS.rewards, `${auth.claims.gameId}:${auth.claims.playerId}`);
+  const limited = await consumeForPlayer(env.DB, RATE_LIMITS.rewards, auth.claims);
   if (limited) return { ok: false, response: limited };
   // 止めたプレイヤーは利用制限で数えた後に断る（トークンの g・p で引く。理由・期限は返さない）
   const banned = await requireNotBanned(env, auth.claims);

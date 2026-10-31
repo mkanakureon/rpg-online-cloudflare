@@ -2924,6 +2924,216 @@
           }
         }
       }
+    },
+    "/v1/admin/analytics/players": {
+      "get": {
+        "operationId": "adminAnalyticsPlayers",
+        "summary": "日ごとの遊んだ人（DAU）・新しい人の数と、発行の日ごとの D1／D7／D30 に戻った人の数を読む（UTC の日付。数だけでプレイヤー ID を返さない）",
+        "security": [
+          {
+            "adminKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": true,
+            "description": "登録のあるゲーム。形が外れれば 400 INVALID_ARGUMENT、登録が無ければ 404 NOT_FOUND（Unknown game）。機能の設定は見ない。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "description": "始まりの日（UTC の YYYY-MM-DD・含む）。形の外れ・to より後は 400 INVALID_ARGUMENT。",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "description": "終わりの日（UTC の YYYY-MM-DD・含む）。サーバーの今日（UTC）より後・from〜to が 92 日を越えると 400 INVALID_ARGUMENT。",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "日ごとの数（from〜to の全部の日。数の無い日は 0）と、新しい人のいた日ごとの継続の数（N 日目が今日より後なら null）。継続率の割り算はクライアントがする。ゲストのトークンは 30 日で切れ更新の口が無いため、D30 は低く・newPlayers は高く出る。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAnalyticsPlayers"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "gameId・from・to の形が外れている・from が to より後・日数が 92 を越える・to が今日（UTC）より後。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization が無い・Bearer でない・管理の鍵と違う（プレイヤーのトークンも含む）。外れた理由は返さない（message は Invalid admin credentials）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（正しい管理の鍵があっても断る。鍵を見る前・数える前）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "登録の無いゲーム（Unknown game）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "管理の口の利用制限を超えた（IP ごと。正しい鍵でも数え、鍵を確かめる前に断る）。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・管理の鍵 ADMIN_API_KEY が無いか 32 文字未満）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4051,6 +4261,139 @@
             "type": "string",
             "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$",
             "description": "受け取った時刻（サーバーの時刻）。"
+          }
+        }
+      },
+      "AdminAnalyticsDay": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "date",
+          "activePlayers",
+          "newPlayers"
+        ],
+        "properties": {
+          "date": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "UTC の日付（YYYY-MM-DD）。"
+          },
+          "activePlayers": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "その日に遊んだ人の数（DAU。トークンの要る要求かゲストの発行が 1 回でもあった人）。"
+          },
+          "newPlayers": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "その日にゲストを発行した人の数。"
+          }
+        }
+      },
+      "AdminAnalyticsCohort": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "date",
+          "newPlayers",
+          "retained"
+        ],
+        "properties": {
+          "date": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "発行の日（0 日目。UTC）。"
+          },
+          "newPlayers": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "その日に発行した人の数（0 の日は行を出さない）。"
+          },
+          "retained": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "d1",
+              "d7",
+              "d30"
+            ],
+            "description": "ちょうど 1・7・30 日目に遊んだ人の数。その日が今日（UTC）より後なら null。",
+            "properties": {
+              "d1": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "d7": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "d30": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "description": "トークンの 30 日の期限のため低く出る。"
+              }
+            }
+          }
+        }
+      },
+      "AdminAnalyticsPlayers": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "from",
+          "to",
+          "timezone",
+          "serverTime",
+          "days",
+          "cohorts"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "from": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "UTC の日付（YYYY-MM-DD）。"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "UTC の日付（YYYY-MM-DD）。"
+          },
+          "timezone": {
+            "type": "string",
+            "const": "UTC",
+            "description": "日の区切り（全部のゲームで UTC の 0 時）。"
+          },
+          "serverTime": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+            "description": "サーバーの時刻（ISO 8601・UTC・秒まで）。"
+          },
+          "days": {
+            "type": "array",
+            "maxItems": 92,
+            "items": {
+              "$ref": "#/components/schemas/AdminAnalyticsDay"
+            }
+          },
+          "cohorts": {
+            "type": "array",
+            "maxItems": 92,
+            "items": {
+              "$ref": "#/components/schemas/AdminAnalyticsCohort"
+            }
           }
         }
       }

@@ -34,6 +34,7 @@
 - 書込み系 API なので、`npm run dev`でローカル実行し`APP_ENV=local`を与えた時のみ発行できる（ほかは本文を読む前に**403 `NOT_READY_FOR_PRODUCTION`**）。
 - 同じ IP（`CF-Connecting-IP`）からは 60 秒の窓に 10 回、同じゲームへは 60 秒の窓に 300 回まで。超えると**429 `RATE_LIMITED`**と`Retry-After`で、行を作らない（下の「利用制限」）。
 - 確かめの順: `APP_ENV`の守り（403）→ IP の利用制限（429。本文を読む前）→ 本文の JSON（400 `INVALID_JSON`）→ 欄の形（400 `INVALID_ARGUMENT`）→ ゲームの登録（404 `NOT_FOUND`）→ ゲームの利用制限（429）→ 書き込み。
+- 発行した日（UTC）の「遊んだ」の印を、新しい人として同じ書き込みで 1 行残す（下の「管理の API」の`GET /v1/admin/analytics/players`が数える。応答は変わらない）。
 
 ## GET /v1/announcements?gameId=demo-rpg
 
@@ -348,7 +349,7 @@
 
 ## 管理の API（ゲームのクライアントは使わない）
 
-運営する人が 1 人のプレイヤーの状態と監査のログを読み、プレイヤーを止め（BAN し）、所持品と通貨を付与・取り消し、スコアを消し、品目とイベントとクエストの定義を入れ、プレイヤーデータのキーと実績を宣言し、プレイヤーデータの値を直し、解いた実績を取り消す口。**ゲームのクライアント（CLI モック・UE・Unity・ブラウザ）は使わず、管理の鍵を持たせない**。形の正は`openapi/rpg-online-admin.v1.json`（ゲームのクライアントのスキーマ`openapi/rpg-online.v1.json`には入れない）、設計の正は`docs/guides/working/admin-design.md`。
+運営する人が 1 人のプレイヤーの状態と監査のログと日ごとの遊んだ人の数（DAU・継続の数）を読み、プレイヤーを止め（BAN し）、所持品と通貨を付与・取り消し、スコアを消し、品目とイベントとクエストの定義を入れ、プレイヤーデータのキーと実績を宣言し、プレイヤーデータの値を直し、解いた実績を取り消す口。**ゲームのクライアント（CLI モック・UE・Unity・ブラウザ）は使わず、管理の鍵を持たせない**。形の正は`openapi/rpg-online-admin.v1.json`（ゲームのクライアントのスキーマ`openapi/rpg-online.v1.json`には入れない）、設計の正は`docs/guides/working/admin-design.md`。
 
 - 見出しは`Authorization: Bearer <管理の鍵>`。管理の鍵は Worker ごとに 1 つの`ADMIN_API_KEY`（32 文字以上）。ローカルは人が`.dev.vars`（git に入らない）に`ADMIN_API_KEY=<32 文字以上>`を書き、staging・production は`wrangler secret put ADMIN_API_KEY`で渡す。鍵の値をファイル（`wrangler.jsonc`・ソース・試験・文書）に書かない。
 - **`local`でも既定の鍵を持たない**。`ADMIN_API_KEY`が無いか 32 文字未満の環境では、管理の口はどれも**500 `INTERNAL_ERROR`**（鍵の名前・値は返さない）。
@@ -358,7 +359,7 @@
 - 書き込みの口（BAN・BAN を解く・所持品と通貨の増減・スコアを消す・品目とイベントとクエストの定義・プレイヤーデータのキーと実績の宣言・値を置く・実績の取り消し）は、口ごとの確かめの前に見出し`X-Admin-Actor`（操作した人のラベル。`^[a-zA-Z0-9_.@-]{1,64}$`。自己申告で、そのまま監査のログに残る）と、本文（JSON でなければ**400 `INVALID_JSON`**）の`reason`（1〜200 文字。空白だけは外れ）を確かめる。外れは**400 `INVALID_ARGUMENT`**。
 - 書き込みの口は、操作 1 回で監査のログに 1 行（誰が・いつ・何を・前と後）を残し、書き込みと監査の行を 1 つの`batch`に入れる（片方だけ残らない）。読み取りの口は監査のログに残さない。
 - データ修正は行を直に書き換えず、履歴に残る形にする（所持品と通貨は受領の履歴に`sourceType: "admin"`の行。スコアは消して前のスコアを監査に残す。プレイヤーデータは台帳を持たないので、値を置く・実績を取り消すときの前と後を監査に残し、監査のログが直しの履歴になる）。セーブは直さない（読むだけ）。
-- ローカルの管理コマンド`node scripts/admin-cli.mjs <操作>`（`player`・`audit`・`grant`・`revoke`・`ban`・`unban`・`delete-score`・`put-item`・`put-event`・`put-quest`・`put-data-key`・`put-achievement`・`set-data`・`revoke-achievement`・`smoke`）がこれらの口を呼ぶ。鍵は環境変数`ADMIN_API_KEY`から読み、無ければ行き先が`127.0.0.1`・`localhost`のときだけ`.dev.vars`の`ADMIN_API_KEY`の行を読む（読むだけ）。`X-Admin-Actor`は`--actor`（既定は`local-admin`）。CLI モック（`scripts/cli-mock.mjs`）は管理の口を呼ばない。
+- ローカルの管理コマンド`node scripts/admin-cli.mjs <操作>`（`player`・`audit`・`analytics`・`grant`・`revoke`・`ban`・`unban`・`delete-score`・`put-item`・`put-event`・`put-quest`・`put-data-key`・`put-achievement`・`set-data`・`revoke-achievement`・`smoke`）がこれらの口を呼ぶ。鍵は環境変数`ADMIN_API_KEY`から読み、無ければ行き先が`127.0.0.1`・`localhost`のときだけ`.dev.vars`の`ADMIN_API_KEY`の行を読む（読むだけ）。`X-Admin-Actor`は`--actor`（既定は`local-admin`）。CLI モック（`scripts/cli-mock.mjs`）は管理の口を呼ばない。
 
 ### GET /v1/admin/players/{playerId}?gameId=demo-rpg
 
@@ -391,6 +392,23 @@
 - 並びは`auditId`の降順（新しい順）。`limit`は 1〜100 の整数（無ければ 20）。`before`は 1 以上の整数で、付けるとその`auditId`より古い行だけを返す。外れは**400 `INVALID_ARGUMENT`**。続きがあれば`nextBefore`（最後の行の`auditId`）が載り、無ければ欄ごと載らない（受領の履歴と同じ）。
 - `actor`は書き込みの口の`X-Admin-Actor`（自己申告のラベル）。`before`・`after`は操作の前と後の状態（保存した JSON を読み直した値。無ければ`null`）。`createdAt`はサーバーの時刻（ISO 8601・UTC・秒まで）。トークン・管理の鍵・セーブの本文・IP は記録しない。
 - 監査のログは API から書き換えも消しもしない。保持の期間は 365 日（消す仕組みは後で足す。それまでは残る）。いま行を書く口は BAN と BAN を解く口（`action`は`player.ban`・`player.unban`、`target`は`player:<playerId>`）・所持品と通貨の増減（`inventory.adjust`・`player:<playerId>`）・スコアを消す口（`ranking.delete`・`ranking:<boardId>:<playerId>`）・品目の定義（`item.put`・`item:<itemId>`）・イベントの定義（`event.put`・`event:<eventId>`）・クエストの定義（`quest.put`・`quest:<questId>`）・プレイヤーデータのキーの宣言（`player-data-key.put`・`player-data-key:<key>`）・実績の宣言（`achievement.put`・`achievement:<achievementId>`）・プレイヤーデータの値を置く口（`player-data.set`・`player:<playerId>`）・実績の取り消し（`achievement.revoke`・`player:<playerId>`）。
+
+### GET /v1/admin/analytics/players?gameId=demo-rpg&from=2026-10-01&to=2026-10-31
+
+日ごとの遊んだ人の数（DAU）・新しい人の数と、発行の日ごとの D1／D7／D30 に戻った人の数を読む。数と日付だけで、**プレイヤー ID も行ごとの時刻も返さない**。設計の正は`docs/guides/working/analytics-design.md` §4・§5。
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","from":"2026-10-01","to":"2026-10-31","timezone":"UTC","serverTime":"2026-10-31T12:00:00Z","days":[{"date":"2026-10-01","activePlayers":12,"newPlayers":3}],"cohorts":[{"date":"2026-10-01","newPlayers":3,"retained":{"d1":2,"d7":1,"d30":1}}]}
+```
+
+- 「遊んだ」: その日（UTC）に、トークンの要る口（スコアの投稿・セーブの 4 つ・所持品・受領の履歴・イベントの一覧と受け取り・プレイヤーデータの読み書き・クエストの一覧と受け取り）でトークンの確かめとプレイヤーの利用制限の数えまで届いた要求を 1 回でも送ったか、ゲストを発行した人。利用制限（429）や BAN（403）で断られた要求も数える。トークンの無い口・外れたトークン・登録の無いゲームのトークン・スコアの投稿の本文の誤り（400）・管理の口は数えない。1 人 1 日 1 行で、同じ日に何回送っても 1 人。
+- `from`・`to`は UTC の`YYYY-MM-DD`で両方要る（両端を含む）。`from`が`to`より後・日数が 92 を越える・`to`がサーバーの今日（UTC）より後・形の外れは**400 `INVALID_ARGUMENT`**。日の区切りは全部のゲームで UTC の 0 時（日本の 9 時）。
+- `days`は`from`〜`to`の全部の日の昇順で、数の無い日は 0。`activePlayers`はその日の DAU、`newPlayers`はその日にゲストを発行した人の数。
+- `cohorts`は新しい人のいた日（0 日目）ごとに、ちょうど 1・7・30 日目に遊んだ人の数（`retained.d1`・`d7`・`d30`）。その日がサーバーの今日より後なら`null`（まだ決まらない）。新しい人のいない日は行が無い。**継続率**（`retained.dN / newPlayers`）の割り算はクライアントがする（管理コマンドの`analytics`が出す）。
+- **トークンの 30 日の期限による偏り**: ゲストのトークンは 30 日で切れ、更新の口が無い（切れたらゲストを発行し直し、前のプレイヤーを引き継がない）。そのため 30 日目は発行の時刻より前に遊んだときだけ数えられ、31 日目からは同じ人が新しい`playerId`で戻る。**D30 は低く、`newPlayers`は高く出る**（D1・D7 は効かない）。トークンの更新か、アカウントの引き継ぎが入るまでの限界。
+- 記録は`0017`のマイグレーションの後から始まり、それより前に発行したプレイヤーは新しい人に数えない。読み取りなので監査のログに残さない。機能の設定（`game_modules`）は見ない。
 
 ### PUT /v1/admin/players/{playerId}/ban?gameId=demo-rpg
 

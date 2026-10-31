@@ -16,6 +16,7 @@
 //   put-achievement <achievementId> <key> <threshold> --reason <理由>             実績を宣言する
 //   set-data <playerId> <key> <value> --reason <理由>                              プレイヤーデータの値を置く（実績は判定しない）
 //   revoke-achievement <playerId> <achievementId> --reason <理由>                  解いた実績を取り消す
+//   analytics [--from YYYY-MM-DD] [--to YYYY-MM-DD]     日ごとの遊んだ人（DAU）・新しい人と D1／D7／D30 の継続の数・継続率を読む（UTC。既定は今日までの 7 日）
 //   smoke                                               通しの確かめ（docs/guides/working/admin-design.md §7。最後に PASS）
 // 行き先は RPG_API_BASE（既定 http://127.0.0.1:8787。CLI モックと同じ）。X-Admin-Actor は --actor（既定 local-admin。OS の名前は使わない）。
 // 管理の鍵は環境変数 ADMIN_API_KEY から読み、無ければ行き先が 127.0.0.1・localhost のときだけリポジトリの .dev.vars の ADMIN_API_KEY の行を
@@ -25,8 +26,8 @@
 // 概要記述: Claude Opus 5.5 — 2026-10-31
 import { readFileSync } from 'node:fs';
 import {
-  DEFAULT_GAME_ID, adjustOp, adminRequest, auditOp, banOp, deleteScoreOp, newIdempotencyKey, playerOp, putAchievementOp, putDataKeyOp,
-  putEventOp, putItemOp, putQuestOp, revokeAchievementOp, runSmoke, setDataOp, unbanOp
+  DEFAULT_GAME_ID, adjustOp, adminRequest, analyticsPlayersOp, auditOp, banOp, deleteScoreOp, newIdempotencyKey, playerOp, putAchievementOp, putDataKeyOp,
+  defaultAnalyticsRange, putEventOp, putItemOp, putQuestOp, retentionRates, revokeAchievementOp, runSmoke, setDataOp, unbanOp
 } from './admin-requests.mjs';
 
 const base = process.env.RPG_API_BASE || 'http://127.0.0.1:8787';
@@ -150,6 +151,13 @@ const commands = {
   'revoke-achievement': (k, [playerId, achievementId], f, actor, gameId) =>
     send(k, revokeAchievementOp(required(playerId, '<playerId>'), required(achievementId, '<achievementId>'), required(f.reason, '--reason'),
       gameId), { actor }),
+  'analytics': async (k, _a, f, actor, gameId) => {
+    const range = defaultAnalyticsRange();
+    const body = await send(k, analyticsPlayersOp(gameId, { from: f.from ?? range.from, to: f.to ?? range.to }), { actor });
+    console.log('日の区切りは UTC の 0 時（日本の 9 時）。継続率 = retained.dN / newPlayers（null はまだ N 日目が来ていない）:');
+    for (const row of retentionRates(body)) console.log(`  ${row.date} newPlayers=${row.newPlayers}`, JSON.stringify(row.rates));
+    console.log('注意: ゲストのトークンは 30 日で切れ更新の口が無いため、D30 は低く・newPlayers は高く出る（docs/api-contract.md の「管理の API」）。');
+  },
   'smoke': async (k, _a, _f, actor) => {
     await runSmoke({
       send: (request) => fetch(request), baseUrl: base, adminKey: k, actor,

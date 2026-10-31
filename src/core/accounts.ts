@@ -2,11 +2,12 @@
 //
 // 検査の順は docs/guides/working/account-design.md §3 と abuse-protection-design.md §3: APP_ENV=local の門（本文を読む前）
 // → IP ごとの利用制限（本文を読む前。429）→ JSON → 本文の形 → ゲームの登録（game_modules は見ない。アカウントはどのゲームにも
-// 要る土台）→ ゲームごとの利用制限（429）→ 鍵 → accounts と game_players に
-// 1 行ずつ（batch で両方か無し）→ トークン。応答・トークン・ログに account_id を出さない。
+// 要る土台）→ ゲームごとの利用制限（429）→ 鍵 → accounts と game_players と、発行の日の遊んだ行（player_activity_days の is_new = 1。
+// docs/guides/working/analytics-design.md §4）に 1 行ずつ（batch で全部か無し）→ トークン。応答・トークン・ログに account_id を出さない。
 // モジュールでなく core に置き、src/core/router.ts が /health の次に当てる。
 //
-// 概要記述: Claude Opus 5.5 — 2026-10-30
+// 概要記述: Claude Opus 5.5 — 2026-10-31
+import { activityDay } from './activity';
 import { loadGame } from './games';
 import { requireLocalWrite } from './guards';
 import { error, json } from './http';
@@ -46,11 +47,15 @@ export const guestRoute: Route = {
     if (!secret) throw new Error('Token signing secret is not configured');
     const accountId = crypto.randomUUID();
     const playerId = crypto.randomUUID();
+    const now = Math.floor(Date.now() / 1000);
     await env.DB.batch([
       env.DB.prepare('INSERT INTO accounts (account_id) VALUES (?)').bind(accountId),
       env.DB.prepare('INSERT INTO game_players (game_id, player_id, account_id) VALUES (?, ?, ?)').bind(gameId, playerId, accountId),
+      // 発行の日の遊んだ行（新しい人。新しいプレイヤーなので衝突しない）
+      env.DB.prepare('INSERT INTO player_activity_days (game_id, day, player_id, is_new) VALUES (?, ?, ?, 1)')
+        .bind(gameId, activityDay(now), playerId),
     ]);
-    const exp = Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS;
+    const exp = now + TOKEN_TTL_SECONDS;
     const token = await signToken({ gameId, playerId, exp }, secret);
     return json({ gameId, playerId, token, expiresAt: new Date(exp * 1000).toISOString() });
   },

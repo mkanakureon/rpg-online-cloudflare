@@ -11,6 +11,7 @@
 // 順と SQL の正は docs/guides/working/quest-design.md §4〜§7。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
+import { consumeForPlayer } from '../../core/activity';
 import { requireAuth } from '../../core/auth';
 import { requireNotBanned } from '../../core/bans';
 import type { Env } from '../../core/env';
@@ -22,7 +23,6 @@ import { MAX_ITEM_AMOUNT, MAX_REWARD_LINES } from '../../core/inventory';
 import { LEDGER_SOURCES } from '../../core/ledger';
 import type { GameModule } from '../../core/module';
 import { isoSeconds, nextResetAt, periodKey, type QuestKind } from '../../core/period';
-import { consume } from '../../core/rate-limit';
 import { RATE_LIMITS } from '../../core/rate-limit-policy';
 import type { TokenClaims } from '../../core/token';
 import { questItem, questStatus, type Grant } from './shape';
@@ -96,7 +96,7 @@ async function checkAccess(req: Request, env: Env, url: URL, known: readonly str
   const auth = await requireAuth(req, env);
   if (!auth.ok) return auth;
   // クエストの 2 つの口を合わせて、トークンのプレイヤーで数える（偽れない鍵）
-  const limited = await consume(env.DB, RATE_LIMITS.quests, `${auth.claims.gameId}:${auth.claims.playerId}`);
+  const limited = await consumeForPlayer(env.DB, RATE_LIMITS.quests, auth.claims);
   if (limited) return { ok: false, response: limited };
   // 止めたプレイヤーは利用制限で数えた後に断る（トークンの g・p で引く。理由・期限は返さない）
   const banned = await requireNotBanned(env, auth.claims);

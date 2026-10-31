@@ -6,6 +6,7 @@
 // → ゲームの登録と機能の設定 → 書き込み（高いほうのスコアを残す）。順の正は docs/guides/working/account-design.md §5。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
+import { consumeForPlayer } from '../../core/activity';
 import { requireAuth, requireSamePlayer } from '../../core/auth';
 import { requireNotBanned } from '../../core/bans';
 import { requireGame } from '../../core/games';
@@ -13,7 +14,6 @@ import { requireLocalWrite } from '../../core/guards';
 import { error, json } from '../../core/http';
 import { validId } from '../../core/ids';
 import type { GameModule } from '../../core/module';
-import { consume } from '../../core/rate-limit';
 import { RATE_LIMITS } from '../../core/rate-limit-policy';
 import { parseLimit, parseScoreSubmission } from './validate';
 
@@ -62,7 +62,7 @@ export const rankings: GameModule = {
         if (!parsed.ok) return error('INVALID_ARGUMENT', parsed.message, 400);
         const { gameId, playerId, displayName, score } = parsed.value;
         // 本文の playerId でなくトークンのプレイヤーで数える（偽れない鍵）
-        const limited = await consume(env.DB, RATE_LIMITS.score, `${auth.claims.gameId}:${auth.claims.playerId}`);
+        const limited = await consumeForPlayer(env.DB, RATE_LIMITS.score, auth.claims);
         if (limited) return limited;
         // 止めたプレイヤーは利用制限で数えた後に断る（トークンの g・p で引く）
         const banned = await requireNotBanned(env, auth.claims);
