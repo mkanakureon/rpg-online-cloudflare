@@ -333,6 +333,9 @@ describe('O2 スキーマ', () => {
       getPlayerData: () => send('GET', '/v1/player-data'),
       // 止めた印は Idempotency-Key と本文の確かめより先なので、見出しが無くても 403 PLAYER_BANNED
       writePlayerData: () => send('POST', '/v1/player-data', {}, { changes: [{ key: 'kills', value: 1 }] }),
+      // クエストの 2 つの口も、止めた印は利用制限の直後（クエストの宣言が無くても 403 PLAYER_BANNED。quest-design.md §11）
+      listQuests: () => send('GET', '/v1/quests'),
+      claimQuest: () => send('POST', '/v1/quests/first-hunt/claim'),
     };
     // スキーマのトークンの要る操作（401 を持つ操作）を全部送る
     const tokenOps = Object.values(spec.paths).flatMap((item) => methods.filter((m) => m in item).map((m) => item[m]))

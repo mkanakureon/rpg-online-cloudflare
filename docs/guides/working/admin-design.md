@@ -296,7 +296,7 @@ DELETE FROM inventory_balances
 **1 品目の増減の文（上の 2〜5）と受領の履歴の種類の名前（`LEDGER_SOURCES = { eventClaim: 'event-claim', admin: 'admin' }`）を `src/core/ledger.ts` に置く。イベントの受け取りの 3 文は events のモジュールに残す**（種類の名前だけ `LEDGER_SOURCES.eventClaim` を読むように直す）。
 
 - 受け取りの文は報酬の中身を `event_rewards` から SQL の中で読む（O4 で管理の口がイベントの報酬を置き換えるようになるので、TypeScript で先に読んだ行を渡す形に変えると、読んでから書くまでの間の置き換えで中身がずれる）。1 品目の増減と形が違い、1 つの関数にまとめると引数が増えるだけ。
-- これで `inventory_ledger` に書く所は 2 つ（events の受け取り・ledger.ts の増減）。種類の名前は 1 か所。Phase 2 のクエスト（§13）は受け取りと同じ形（報酬の表から読む）なので、そのときに受け取りの 3 文を報酬の表の名前を引数にして ledger.ts へ移すかを決める。
+- `inventory_ledger` に書く所は 3 つ（events の受け取り・quests の受け取り・ledger.ts の増減）。種類の名前は `LEDGER_SOURCES` の 1 か所（クエストは `questClaim: 'quest-claim'`）。受け取りの 3 文は ledger.ts へ移さず、イベントとクエストのモジュールにそれぞれ置く（`quest-design.md` §6・§13 の決めること 7。共通にするかは 4 つ目の受け取りを足すときに決める）。
 
 ## 7. イベントの定義の入れ方と、管理コマンド
 
@@ -691,7 +691,7 @@ done();
 | 項目（`roadmap.md` Phase 2） | この設計との関係 |
 | --- | --- |
 | プレイヤーデータ（実績・進行状態・統計値） | `player-data-design.md` §8 のとおり（U3）。プレイヤーを読む口（§5）に欄 `playerData`（値と解いた実績）を足し、キーと実績の宣言・値を置く・実績の取り消しの 4 つの口は §6 と同じく監査に前と後を残す（`player-data-key.put`・`achievement.put`・`player-data.set`・`achievement.revoke`）。管理コマンド（§7）に操作 `put-data-key`・`put-achievement`・`set-data`・`revoke-achievement` |
-| クエスト（達成条件・報酬・進捗） | 報酬の付与は受け取りと同じ形（報酬の表から SQL で読む・一意の鍵・1 つの `batch`）で、`source_type` は `LEDGER_SOURCES` に `quest` を足す（§6）。クエストの定義は §7 のイベントの定義と同じく管理の口で入れる |
+| クエスト（達成条件・報酬・進捗） | 報酬の付与は受け取りと同じ形（報酬の表から SQL で読む・一意の鍵・1 つの `batch`）で、種類の名前は `LEDGER_SOURCES.questClaim`（`quest-claim`）。受け取りの 3 文はクエストのモジュールに置き、`src/core/ledger.ts` へ移さない。正は `quest-design.md` §6。クエストの定義は §7 のイベントの定義と同じく管理の口で入れる（`quest-design.md` §8。Q3） |
 | 分析（DAU・継続率）・バックアップ・費用アラート | 監査のログの保持（365 日）を過ぎた行の掃除を Cron Triggers で作る（§5・§11 の決めること 13）。受領の履歴の `source_type = 'admin'` の行は、管理の付与と取り消しの集計の元になる。バックアップと費用アラートは管理の口と関係しない |
 
 ## 14. 範囲の外と、後から足せる形

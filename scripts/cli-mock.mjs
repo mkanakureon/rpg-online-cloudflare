@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-/** CLI モック（将来の UE・Unity・ブラウザの HTTP クライアントの代わり。ローカル専用）: 設定とマスターデータ → スコア → セーブ → イベントの報酬 → プレイヤーデータと実績の流れを通す。 */
+/** CLI モック（将来の UE・Unity・ブラウザの HTTP クライアントの代わり。ローカル専用）: 設定とマスターデータ → スコア → セーブ → イベントの報酬 → プレイヤーデータと実績 → クエストの流れを通す。 */
 import {
-  SMOKE_ACHIEVEMENT_ID, SMOKE_EVENT_ID, SMOKE_PLAYER_DATA_KEY, SMOKE_SLOT_ID, authHeaders, claimPath, configPath, eventsPath, guestRequest,
-  historyPath, inventoryPath, masterDataPath, newIdempotencyKey, playerDataHeaders, playerDataPath, playerDataWrite, saveData, saveWrite,
-  scoreSubmission, sha256Hex, smokeBoardId, utf8Bytes
+  SMOKE_ACHIEVEMENT_ID, SMOKE_EVENT_ID, SMOKE_PLAYER_DATA_KEY, SMOKE_QUEST_ID, SMOKE_SLOT_ID, authHeaders, claimPath, configPath, eventsPath,
+  guestRequest, historyPath, inventoryPath, masterDataPath, newIdempotencyKey, playerDataHeaders, playerDataPath, playerDataWrite, questClaimPath,
+  questsPath, saveData, saveWrite, scoreSubmission, sha256Hex, smokeBoardId, utf8Bytes
 } from './cli-requests.mjs';
 
 const base = process.env.API_BASE_URL || 'http://127.0.0.1:8787';
@@ -143,6 +143,20 @@ try {
   if (after.achievements.filter((a) => a.achievementId === SMOKE_ACHIEVEMENT_ID).length !== 1) {
     throw new Error(`Achievement ${SMOKE_ACHIEVEMENT_ID} is not unlocked exactly once`);
   }
+
+  // 同じトークンでクエストの一覧を読み、統計値の 1 で達成した一度きりのクエストを受け取る。もう一度受け取っても同じ本文で、
+  // 最後の一覧で受け取り済みになる（docs/guides/working/quest-design.md §12）。404 は 0015 の当て忘れなので call() が止める
+  const questOf = (body) => body.items.find((item) => item.questId === SMOKE_QUEST_ID);
+  const questsBefore = await call(questsPath(submission.gameId), { headers: authHeaders(guest.token) });
+  const quest = questOf(questsBefore);
+  if (!quest || quest.completed !== true || quest.claimed !== false) throw new Error(`Quest ${SMOKE_QUEST_ID} is not completed and unclaimed`);
+  const questClaimUrl = questClaimPath(SMOKE_QUEST_ID, submission.gameId);
+  const questClaimed = await call(questClaimUrl, { method: 'POST', headers: authHeaders(guest.token) });
+  if (!questClaimed.grants.some((g) => g.itemId === 'gold' && g.amount > 0)) throw new Error(`Quest ${SMOKE_QUEST_ID} granted no gold`);
+  const questAgain = await call(questClaimUrl, { method: 'POST', headers: authHeaders(guest.token) });
+  if (JSON.stringify(questAgain) !== JSON.stringify(questClaimed)) throw new Error('Second quest claim returned a different body');
+  const questsAfter = await call(questsPath(submission.gameId), { headers: authHeaders(guest.token) });
+  if (questOf(questsAfter)?.claimed !== true) throw new Error(`Quest ${SMOKE_QUEST_ID} is not marked as claimed`);
   console.log('\nPASS: local CLI smoke test');
 } catch (error) {
   console.error('\nFAIL: local CLI smoke test', error);

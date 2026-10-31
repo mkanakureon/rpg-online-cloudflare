@@ -7,7 +7,8 @@
  * `429の応答はスキーマに合う` とエラーコードの数の試験は利用制限の R1 で足し・置き換えたもので docs/guides/working/abuse-protection-design.md §7。
  * エラーコードの数の試験は管理の O2 でも置き換え、`エラーの応答はスキーマに書いた状態とエラーコードの組で返る` に BAN したプレイヤーの行を足した。
  * docs/guides/working/admin-design.md §9。操作の数とエラーコードの数の試験はプレイヤーデータの U1 でも置き換え、エラーの組の試験に
- * プレイヤーデータの書き込みの 409・422 の行を足した。docs/guides/working/player-data-design.md §10・§11）。挙動（状態コード・データ）は
+ * プレイヤーデータの書き込みの 409・422 の行を足した。docs/guides/working/player-data-design.md §10・§11。クエストの Q1 でも操作の数と
+ * エラーコードの数の試験を置き換え、エラーの組の試験にクエストの受け取りの 2 つの 409 の行を足した。docs/guides/working/quest-design.md §10・§11）。挙動（状態コード・データ）は
  * test/failure-*.test.ts が見る。ここはスキーマの側から見る。
  * L2 の試験は src/worker.ts の default.fetch を直に呼ぶ（docs/guides/working/failure-case-test-plan.md §2）。
  *
@@ -46,7 +47,8 @@ const spec = specJson as unknown as Spec;
 const methods = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'];
 const errorCodes = ['INVALID_ARGUMENT', 'NOT_FOUND', 'NOT_READY_FOR_PRODUCTION', 'INVALID_JSON', 'INTERNAL_ERROR',
   'UNAUTHENTICATED', 'TOKEN_EXPIRED', 'PERMISSION_DENIED', 'SAVE_CONFLICT', 'PAYLOAD_TOO_LARGE', 'SLOT_LIMIT_EXCEEDED', 'RATE_LIMITED',
-  'EVENT_NOT_ACTIVE', 'INVENTORY_LIMIT_EXCEEDED', 'PLAYER_BANNED', 'PLAYER_DATA_LIMIT_EXCEEDED', 'IDEMPOTENCY_KEY_REUSED'];
+  'EVENT_NOT_ACTIVE', 'INVENTORY_LIMIT_EXCEEDED', 'PLAYER_BANNED', 'PLAYER_DATA_LIMIT_EXCEEDED', 'IDEMPOTENCY_KEY_REUSED',
+  'QUEST_NOT_COMPLETED', 'QUEST_NOT_ACTIVE'];
 
 // prepare が D1 のエラーに似た例外を投げる偽の DB（本物の D1 を壊さない）
 const brokenDB = {
@@ -150,6 +152,12 @@ async function claimEvent(eventId: string): Promise<Response> {
     method: 'POST', headers: { authorization: await bearer('demo-rpg', 'p1') },
   }), localEnv as never);
 }
+/** クエストの報酬を受け取る（POST /v1/quests/{questId}/claim）。demo-rpg・playerId のトークン。 */
+async function claimQuest(questId: string, playerId: string): Promise<Response> {
+  return worker.fetch(new Request(`${base}/v1/quests/${questId}/claim?gameId=demo-rpg`, {
+    method: 'POST', headers: { authorization: await bearer('demo-rpg', playerId) },
+  }), localEnv as never);
+}
 /** E2 の 2 つの 409 を起こすイベント（demo-rpg に、終わったイベントと、p1 の残高が上限に近い品目の報酬のイベント）を入れる。 */
 async function addSchemaEvents(): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
@@ -202,12 +210,12 @@ beforeEach(async () => {
 });
 
 describe('S1: スキーマのファイル', () => {
-  it('スキーマのファイルはOpenAPI 3.1で17個の操作を持つ', () => {
+  it('スキーマのファイルはOpenAPI 3.1で19個の操作を持つ', () => {
     expect(spec.openapi).toMatch(/^3\.1\.\d+$/);
     expect(operations().map((o) => o.operationId).sort())
-      .toEqual(['claimEventReward', 'deleteSave', 'getConfig', 'getHealth', 'getInventory', 'getMasterData', 'getPlayerData', 'getRanking',
-        'getSave', 'issueGuest', 'listAnnouncements', 'listEvents', 'listInventoryHistory', 'listSaves', 'putSave', 'submitScore',
-        'writePlayerData']);
+      .toEqual(['claimEventReward', 'claimQuest', 'deleteSave', 'getConfig', 'getHealth', 'getInventory', 'getMasterData', 'getPlayerData',
+        'getRanking', 'getSave', 'issueGuest', 'listAnnouncements', 'listEvents', 'listInventoryHistory', 'listQuests', 'listSaves', 'putSave',
+        'submitScore', 'writePlayerData']);
     const refs = collectRefs(spec);
     expect(refs.length).toBeGreaterThan(0);
     for (const ref of refs) expect(() => resolveRef(ref, spec), ref).not.toThrow();
@@ -250,7 +258,7 @@ describe('S1: スキーマのファイル', () => {
     expect(() => validate(1, { $ref: 'other.json#/X' }, root)).toThrow();
   });
 
-  it('スキーマのErrorCodeの列挙は17個のエラーコードと一致する', () => {
+  it('スキーマのErrorCodeの列挙は19個のエラーコードと一致する', () => {
     const codes = spec.components.schemas.ErrorCode.enum as string[];
     expect([...codes].sort()).toEqual([...errorCodes].sort());
   });
@@ -351,6 +359,15 @@ describe('S1: 応答がスキーマに合う', () => {
       ['SLOT_LIMIT_EXCEEDED', 'putSave', async () => putSave('one-more', await saveBody('x', 0), { authorization: await fillSlots('schema-slots') })],
       ['EVENT_NOT_ACTIVE', 'claimEventReward', async () => claimEvent('schema-ended')],
       ['INVENTORY_LIMIT_EXCEEDED', 'claimEventReward', async () => claimEvent('schema-big')],
+      // demo-rpg の手本の first-hunt（slimes-defeated が 1 以上）を、値を書いていないプレイヤーで受け取る
+      ['QUEST_NOT_COMPLETED', 'claimQuest', async () => claimQuest('first-hunt', 'schema-quest')],
+      // demo-rpg に終わった一度きりのクエストを入れて受け取る
+      ['QUEST_NOT_ACTIVE', 'claimQuest', async () => {
+        const now = Math.floor(Date.now() / 1000);
+        await baseEnv.DB.prepare(`INSERT OR IGNORE INTO quests (game_id, quest_id, kind, starts_at, ends_at, key, threshold)
+          VALUES ('demo-rpg', 'schema-quest-ended', 'once', ?, ?, 'slimes-defeated', 1)`).bind(now - 86400, now - 1).run();
+        return claimQuest('schema-quest-ended', 'schema-quest');
+      }],
       ['PLAYER_BANNED', 'getInventory', async () => {
         await baseEnv.DB.prepare("INSERT OR REPLACE INTO player_bans (game_id, player_id, reason, banned_at) VALUES ('demo-rpg', 'schema-banned', 'test', 1)").run();
         const res = await worker.fetch(new Request(`${base}/v1/inventory?gameId=demo-rpg`, {

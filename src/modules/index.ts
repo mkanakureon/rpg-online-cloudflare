@@ -10,7 +10,8 @@ import { config } from './config';
 import { events } from './events';
 import { inventory } from './inventory';
 import { playerData } from './player-data';
+import { quests } from './quests';
 import { rankings } from './rankings';
 import { saves } from './saves';
 
-export const modules: GameModule[] = [announcements, rankings, saves, config, inventory, events, playerData];
+export const modules: GameModule[] = [announcements, rankings, saves, config, inventory, events, playerData, quests];

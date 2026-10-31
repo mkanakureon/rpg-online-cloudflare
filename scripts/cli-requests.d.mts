@@ -68,3 +68,9 @@ export declare function playerDataHeaders(token: string, idempotencyKey: string)
   Authorization: string;
   'Idempotency-Key': string;
 };
+
+export declare const SMOKE_QUEST_ID: string;
+
+export declare function questsPath(gameId?: string): string;
+
+export declare function questClaimPath(questId?: string, gameId?: string): string;

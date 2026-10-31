@@ -15,8 +15,8 @@ import { bearerForBody } from './support/auth';
 import { registerGame } from './support/games';
 import {
   CLI_CLIENT_VERSION, SMOKE_BOARD_ID, SMOKE_EVENT_ID, SMOKE_SLOT_ID, authHeaders, claimPath, configPath, eventsPath, guestRequest, historyPath,
-  inventoryPath, masterDataPath, newIdempotencyKey, playerDataHeaders, playerDataPath, playerDataWrite, saveData, saveWrite, scoreSubmission,
-  sha256Hex, smokeBoardId, utf8Bytes,
+  inventoryPath, masterDataPath, newIdempotencyKey, playerDataHeaders, playerDataPath, playerDataWrite, questClaimPath, questsPath, saveData,
+  saveWrite, scoreSubmission, sha256Hex, smokeBoardId, utf8Bytes,
 } from '../scripts/cli-requests.mjs';
 
 type Migration = { name: string; queries: string[] };
@@ -285,7 +285,7 @@ describe('ケース 7: マイグレーションと互換', () => {
   });
 
   it('CLIモックの通しの流れを続けて2回回しても利用制限に掛からない', async () => {
-    // scripts/cli-mock.mjs の書き込みの流れ（ゲストの発行 → スコア → セーブの書く・読む・一覧・消す → イベントの報酬 → プレイヤーデータ）を、
+    // scripts/cli-mock.mjs の書き込みの流れ（ゲストの発行 → スコア → セーブの書く・読む・一覧・消す → イベントの報酬 → プレイヤーデータ → クエスト）を、
     // 同じ IP から 2 回続けて回す。
     // 1 つでも 429 になったら利用制限の数（src/core/rate-limit-policy.ts）が CLI モックの使い方より小さい合図
     // （docs/guides/working/abuse-protection-design.md §7）
@@ -324,8 +324,13 @@ describe('ケース 7: マイグレーションと互換', () => {
       await send(playerDataUrl, writeInit);
       await send(playerDataUrl, writeInit);
       await send(playerDataUrl, { headers });
+      // プレイヤーデータの後のクエストの 4 手順（一覧 → 受け取り → もう一度受け取り → 一覧。クエストの利用制限を 4 回。quest-design.md §12）
+      await send(questsPath(submission.gameId), { headers });
+      await send(questClaimPath(undefined, submission.gameId), { method: 'POST', headers });
+      await send(questClaimPath(undefined, submission.gameId), { method: 'POST', headers });
+      await send(questsPath(submission.gameId), { headers });
     }
-    expect(statuses).toEqual(Array(32).fill(200));
+    expect(statuses).toEqual(Array(40).fill(200));
   });
 
   it('CLIモックの通しは同点のスコアが上位10件を埋めていても自分の投稿を見つける', async () => {

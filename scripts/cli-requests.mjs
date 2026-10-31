@@ -14,6 +14,9 @@
 // イベントの後、同じトークンでプレイヤーデータを読み、新しい Idempotency-Key で統計値を 1 増やし、同じ鍵と本文で送り直して二重にならず、
 // 実績が解けたことを読み直して見る（SMOKE_PLAYER_DATA_KEY・SMOKE_ACHIEVEMENT_ID・playerDataPath・playerDataWrite・newIdempotencyKey・
 // playerDataHeaders。テスト「CLIモックと同じ流れで統計値を増やし送り直しても二重にならず実績が解ける」）。
+// プレイヤーデータの後、同じトークンでクエストの一覧を読み、統計値の 1 で達成した一度きりのクエストを 2 回受け取って同じ claimId で、
+// 最後の一覧で受け取り済みになったことを見る（SMOKE_QUEST_ID・questsPath・questClaimPath。
+// テスト「CLIモックと同じ流れでクエストを達成して報酬を受け取り二回目は二重にならない」）。
 // スコアはローカルの D1 に積み上がっても上位 10 件に入るよう、回すたびに smokeBoardId(now) の別のボードに送る
 // （テスト「CLIモックの通しは同点のスコアが上位10件を埋めていても自分の投稿を見つける」）。
 // Node.js と Workers のランタイムの両方で読めるよう、Node.js の API を使わない（チェックサムは crypto.subtle）。型は cli-requests.d.mts。
@@ -130,4 +133,17 @@ export function newIdempotencyKey() {
 /** プレイヤーデータの書き込みに付ける見出し（トークンと Idempotency-Key。鍵は必須）。 */
 export function playerDataHeaders(token, idempotencyKey) {
   return { ...authHeaders(token), 'Idempotency-Key': idempotencyKey };
+}
+
+/** CLI モックの通しで報酬を受け取るクエスト（SMOKE_PLAYER_DATA_KEY が 1 以上で達成する demo-rpg の手本の一度きり。migrations/0015_quests.sql）。 */
+export const SMOKE_QUEST_ID = 'first-hunt';
+
+/** 開いているクエストの一覧のパス（GET /v1/quests。docs/guides/working/quest-design.md §4）。 */
+export function questsPath(gameId = 'demo-rpg') {
+  return `/v1/quests?gameId=${encodeURIComponent(gameId)}`;
+}
+
+/** クエストの報酬を受け取るパス（POST /v1/quests/{questId}/claim。本文は要らない）。 */
+export function questClaimPath(questId = SMOKE_QUEST_ID, gameId = 'demo-rpg') {
+  return `/v1/quests/${encodeURIComponent(questId)}/claim?gameId=${encodeURIComponent(gameId)}`;
 }
