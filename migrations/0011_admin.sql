@@ -2,7 +2,7 @@
 -- 管理の書き込みの操作 1 回で 1 行。API からは書き換えない・消さない。ゲームの行を消したときだけ CASCADE で消える
 -- （0003〜0010 と同じ理由。ゲームの行だけを消す試験の beforeEach が外部キーで断られないため）。
 -- トークン・管理の鍵・セーブの本文・IP は入れない。保持は 365 日（src/core/admin/audit.ts の AUDIT_RETENTION_DAYS。消す仕組みは後で足す）。
--- IF NOT EXISTS だけで ALTER TABLE を使わないので、2 回当てても壊れない。初期データは入れない。
+-- IF NOT EXISTS だけで、既存の表に列を足す文を使わないので、2 回当てても壊れない。初期データは入れない。
 CREATE TABLE IF NOT EXISTS admin_audit_log (
   audit_id INTEGER PRIMARY KEY,                 -- 増える番号（順と続きの鍵）
   audit_ref TEXT NOT NULL UNIQUE,               -- 要求ごとにサーバーが作る（crypto.randomUUID()）。続く文の「この要求の行が入ったか」に使う
