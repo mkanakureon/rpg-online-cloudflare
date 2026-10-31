@@ -3,7 +3,7 @@
 -- day は UTC の 'YYYY-MM-DD'（src/core/activity.ts の activityDay = periodKey('daily', now, 0)）。
 -- player_id はトークンの p。外部キーは付けない（player_data と同じ理由）。IP・トークン・時刻は持たない。
 -- 索引 (day) は掃除（N2）が日付だけで探すため。設計の正は docs/guides/working/analytics-design.md §3・§4。
--- IF NOT EXISTS だけで、2 回当てても壊れない（ALTER TABLE を使わない）。
+-- IF NOT EXISTS だけで、2 回当てても壊れない（既存の表に列を足さない）。
 CREATE TABLE IF NOT EXISTS player_activity_days (
   game_id TEXT NOT NULL REFERENCES games(game_id) ON DELETE CASCADE,
   day TEXT NOT NULL,
