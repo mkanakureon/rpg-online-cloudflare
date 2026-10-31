@@ -314,31 +314,32 @@
 
 ## 管理の API（ゲームのクライアントは使わない）
 
-運営する人が 1 人のプレイヤーの状態と監査のログを読み、プレイヤーを止め（BAN し）、所持品と通貨を付与・取り消し、スコアを消し、品目とイベントの定義を入れる口。**ゲームのクライアント（CLI モック・UE・Unity・ブラウザ）は使わず、管理の鍵を持たせない**。形の正は`openapi/rpg-online-admin.v1.json`（ゲームのクライアントのスキーマ`openapi/rpg-online.v1.json`には入れない）、設計の正は`docs/guides/working/admin-design.md`。
+運営する人が 1 人のプレイヤーの状態と監査のログを読み、プレイヤーを止め（BAN し）、所持品と通貨を付与・取り消し、スコアを消し、品目とイベントの定義を入れ、プレイヤーデータのキーと実績を宣言し、プレイヤーデータの値を直し、解いた実績を取り消す口。**ゲームのクライアント（CLI モック・UE・Unity・ブラウザ）は使わず、管理の鍵を持たせない**。形の正は`openapi/rpg-online-admin.v1.json`（ゲームのクライアントのスキーマ`openapi/rpg-online.v1.json`には入れない）、設計の正は`docs/guides/working/admin-design.md`。
 
 - 見出しは`Authorization: Bearer <管理の鍵>`。管理の鍵は Worker ごとに 1 つの`ADMIN_API_KEY`（32 文字以上）。ローカルは人が`.dev.vars`（git に入らない）に`ADMIN_API_KEY=<32 文字以上>`を書き、staging・production は`wrangler secret put ADMIN_API_KEY`で渡す。鍵の値をファイル（`wrangler.jsonc`・ソース・試験・文書）に書かない。
 - **`local`でも既定の鍵を持たない**。`ADMIN_API_KEY`が無いか 32 文字未満の環境では、管理の口はどれも**500 `INTERNAL_ERROR`**（鍵の名前・値は返さない）。
 - 鍵が無い・`Bearer`でない・違う（プレイヤーのトークンも含む）は、どれも**401 `UNAUTHENTICATED`**（`message`は`Invalid admin credentials`。外れた理由は返さない）。鍵は SHA-256 にしてから時間の一定な比べで確かめる。鍵を取り替えると、前の鍵はその時から 401（前の鍵を並べて受ける期間は無い）。
 - 読むのも`APP_ENV=local`の時だけ（ほかは正しい鍵があっても**403 `NOT_READY_FOR_PRODUCTION`**）。
 - 確かめの順（どの口も同じ）: `APP_ENV`の守り（403）→ 管理の鍵の有無（500）→ 管理の利用制限（IP ごと。**429 `RATE_LIMITED`**と`Retry-After`。正しい鍵でも数え、鍵を確かめる前に断る）→ 管理の鍵（401）→ `gameId`の形（**400 `INVALID_ARGUMENT`**）→ ゲームの登録（**404 `NOT_FOUND`**・`Unknown game`。機能の設定は見ない）→ 口ごとの確かめ。
-- 書き込みの口（BAN・BAN を解く・所持品と通貨の増減・スコアを消す・品目とイベントの定義）は、口ごとの確かめの前に見出し`X-Admin-Actor`（操作した人のラベル。`^[a-zA-Z0-9_.@-]{1,64}$`。自己申告で、そのまま監査のログに残る）と、本文（JSON でなければ**400 `INVALID_JSON`**）の`reason`（1〜200 文字。空白だけは外れ）を確かめる。外れは**400 `INVALID_ARGUMENT`**。
+- 書き込みの口（BAN・BAN を解く・所持品と通貨の増減・スコアを消す・品目とイベントの定義・プレイヤーデータのキーと実績の宣言・値を置く・実績の取り消し）は、口ごとの確かめの前に見出し`X-Admin-Actor`（操作した人のラベル。`^[a-zA-Z0-9_.@-]{1,64}$`。自己申告で、そのまま監査のログに残る）と、本文（JSON でなければ**400 `INVALID_JSON`**）の`reason`（1〜200 文字。空白だけは外れ）を確かめる。外れは**400 `INVALID_ARGUMENT`**。
 - 書き込みの口は、操作 1 回で監査のログに 1 行（誰が・いつ・何を・前と後）を残し、書き込みと監査の行を 1 つの`batch`に入れる（片方だけ残らない）。読み取りの口は監査のログに残さない。
-- データ修正は行を直に書き換えず、履歴に残る形にする（所持品と通貨は受領の履歴に`sourceType: "admin"`の行。スコアは消して前のスコアを監査に残す）。セーブは直さない（読むだけ）。
-- ローカルの管理コマンド`node scripts/admin-cli.mjs <操作>`（`player`・`audit`・`grant`・`revoke`・`ban`・`unban`・`delete-score`・`put-item`・`put-event`・`smoke`）がこれらの口を呼ぶ。鍵は環境変数`ADMIN_API_KEY`から読み、無ければ行き先が`127.0.0.1`・`localhost`のときだけ`.dev.vars`の`ADMIN_API_KEY`の行を読む（読むだけ）。`X-Admin-Actor`は`--actor`（既定は`local-admin`）。CLI モック（`scripts/cli-mock.mjs`）は管理の口を呼ばない。
+- データ修正は行を直に書き換えず、履歴に残る形にする（所持品と通貨は受領の履歴に`sourceType: "admin"`の行。スコアは消して前のスコアを監査に残す。プレイヤーデータは台帳を持たないので、値を置く・実績を取り消すときの前と後を監査に残し、監査のログが直しの履歴になる）。セーブは直さない（読むだけ）。
+- ローカルの管理コマンド`node scripts/admin-cli.mjs <操作>`（`player`・`audit`・`grant`・`revoke`・`ban`・`unban`・`delete-score`・`put-item`・`put-event`・`put-data-key`・`put-achievement`・`set-data`・`revoke-achievement`・`smoke`）がこれらの口を呼ぶ。鍵は環境変数`ADMIN_API_KEY`から読み、無ければ行き先が`127.0.0.1`・`localhost`のときだけ`.dev.vars`の`ADMIN_API_KEY`の行を読む（読むだけ）。`X-Admin-Actor`は`--actor`（既定は`local-admin`）。CLI モック（`scripts/cli-mock.mjs`）は管理の口を呼ばない。
 
 ### GET /v1/admin/players/{playerId}?gameId=demo-rpg
 
-1 人のプレイヤーの所持品・受領の履歴・セーブの一覧・スコアを読む。
+1 人のプレイヤーの所持品・受領の履歴・セーブの一覧・スコア・プレイヤーデータを読む。
 
 レスポンス例（200）:
 
 ```json
-{"gameId":"demo-rpg","playerId":"<playerId>","createdAt":"2026-10-31T01:02:03Z","ban":{"reason":"チートの疑い","bannedAt":"2026-10-31T02:00:00Z","expiresAt":null},"balances":[{"itemId":"gold","kind":"currency","amount":100}],"history":[{"entryId":7,"itemId":"gold","delta":100,"sourceType":"event-claim","sourceId":"<claimId>","createdAt":"2026-10-31T01:05:00Z"}],"saves":[{"slotId":"auto","revision":3,"size":120,"deleted":false,"updatedAt":"2026-10-31T01:06:00.123Z"}],"rankings":[{"boardId":"boss-score","score":1200,"displayName":"Hero"}]}
+{"gameId":"demo-rpg","playerId":"<playerId>","createdAt":"2026-10-31T01:02:03Z","ban":{"reason":"チートの疑い","bannedAt":"2026-10-31T02:00:00Z","expiresAt":null},"balances":[{"itemId":"gold","kind":"currency","amount":100}],"history":[{"entryId":7,"itemId":"gold","delta":100,"sourceType":"event-claim","sourceId":"<claimId>","createdAt":"2026-10-31T01:05:00Z"}],"saves":[{"slotId":"auto","revision":3,"size":120,"deleted":false,"updatedAt":"2026-10-31T01:06:00.123Z"}],"rankings":[{"boardId":"boss-score","score":1200,"displayName":"Hero"}],"playerData":{"values":[{"key":"slimes-defeated","mode":"add","value":3,"updatedAt":"2026-10-31T01:07:00Z"}],"achievements":[{"achievementId":"first-slime","unlockedAt":"2026-10-31T01:07:00Z","writeId":"<writeId>"}]}}
 ```
 
 - `createdAt`はプレイヤーを作った時刻（ISO 8601・UTC・秒まで）。
 - `ban`は止めた印（`reason`・`bannedAt`・`expiresAt`。時刻は ISO 8601・UTC・秒まで、`expiresAt`は期限が無ければ`null`）。**止めていなければ（印が無い・期限が過ぎた）欄ごと載らない**。
 - `balances`は残高のある品目（品目の ID の昇順。`kind`は`currency`か`item`）。`history`は受領の履歴の新しい順に 20 行まで（`GET /v1/inventory/history`の行と同じ欄）。`saves`はスロットの ID の昇順で、消した印のある行も`deleted: true`で載る（`updatedAt`はセーブの API と同じ値）。`rankings`はボードの ID の昇順。
+- `playerData`はいつも載る。`values`はプレイヤーが書いたことのあるキーの値（キーの昇順。`mode`はキーの宣言の書き方、`updatedAt`は最後に変わった時刻）、`achievements`は解いた実績（実績の ID の昇順。`writeId`は解いた書き込みの`writeId`〔`POST /v1/player-data`の応答と同じ値〕）。無ければどちらも空の配列。プレイヤーデータの機能の設定は見ない。
 - **セーブの本文（`data`）とチェックサムは返さない**。
 - そのゲームに無いプレイヤー（`game_players`に行が無い）は**404 `NOT_FOUND`**（`message`は`Unknown player`）。`playerId`の形（`^[a-zA-Z0-9_-]{1,64}$`）が外れていればどのルートにも当たらず**404 `NOT_FOUND`**（`Endpoint not found`）。
 
@@ -354,7 +355,7 @@
 
 - 並びは`auditId`の降順（新しい順）。`limit`は 1〜100 の整数（無ければ 20）。`before`は 1 以上の整数で、付けるとその`auditId`より古い行だけを返す。外れは**400 `INVALID_ARGUMENT`**。続きがあれば`nextBefore`（最後の行の`auditId`）が載り、無ければ欄ごと載らない（受領の履歴と同じ）。
 - `actor`は書き込みの口の`X-Admin-Actor`（自己申告のラベル）。`before`・`after`は操作の前と後の状態（保存した JSON を読み直した値。無ければ`null`）。`createdAt`はサーバーの時刻（ISO 8601・UTC・秒まで）。トークン・管理の鍵・セーブの本文・IP は記録しない。
-- 監査のログは API から書き換えも消しもしない。保持の期間は 365 日（消す仕組みは後で足す。それまでは残る）。いま行を書く口は BAN と BAN を解く口（`action`は`player.ban`・`player.unban`、`target`は`player:<playerId>`）・所持品と通貨の増減（`inventory.adjust`・`player:<playerId>`）・スコアを消す口（`ranking.delete`・`ranking:<boardId>:<playerId>`）・品目の定義（`item.put`・`item:<itemId>`）・イベントの定義（`event.put`・`event:<eventId>`）。
+- 監査のログは API から書き換えも消しもしない。保持の期間は 365 日（消す仕組みは後で足す。それまでは残る）。いま行を書く口は BAN と BAN を解く口（`action`は`player.ban`・`player.unban`、`target`は`player:<playerId>`）・所持品と通貨の増減（`inventory.adjust`・`player:<playerId>`）・スコアを消す口（`ranking.delete`・`ranking:<boardId>:<playerId>`）・品目の定義（`item.put`・`item:<itemId>`）・イベントの定義（`event.put`・`event:<eventId>`）・プレイヤーデータのキーの宣言（`player-data-key.put`・`player-data-key:<key>`）・実績の宣言（`achievement.put`・`achievement:<achievementId>`）・プレイヤーデータの値を置く口（`player-data.set`・`player:<playerId>`）・実績の取り消し（`achievement.revoke`・`player:<playerId>`）。
 
 ### PUT /v1/admin/players/{playerId}/ban?gameId=demo-rpg
 
@@ -498,6 +499,100 @@
 - 応答の`startsAt`・`endsAt`は秒まで、`rewards`は品目の ID の昇順（イベントの一覧と同じ欄の名前）。
 - 監査のログに`event.put`の 1 行（`before`は前の定義`{"kind","startsAt","endsAt","resetOffsetMinutes","rewards"}`か`null`、`after`は入れた定義）。監査の行・イベント・報酬の行は 1 つの`batch`で書く。
 - 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・定義の本文（400）→ 報酬の品目（404）→ 受け取りのあるイベントの守り（400）→ 書く。
+
+### PUT /v1/admin/player-data/keys/{key}?gameId=demo-rpg
+
+プレイヤーデータのキーを 1 つ宣言する（書き方と上限）。無ければ作り、あれば置き換える。キーを消す口は無い（使わなくなったキーはそのまま残る）。設計の正は`docs/guides/working/player-data-design.md` §8。
+
+見出し: `Authorization: Bearer <管理の鍵>`・`X-Admin-Actor: <ラベル>`。
+
+入力例:
+
+```json
+{"mode":"add","maxValue":1000000000,"maxDelta":100,"reason":"倒した数を数える"}
+```
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","key":"slimes-defeated","mode":"add","maxValue":1000000000,"maxDelta":100}
+```
+
+- `mode`は`add`・`max`・`set`・`flag`（`POST /v1/player-data`の表の書き方）。`maxValue`は 1〜1,000,000,000 の整数で、`flag`は 1 だけ。`maxDelta`（1 回の増加の上限。1〜1,000,000,000 の整数）は`add`のときだけ必須で、ほかの書き方では送らない（応答は`null`）。外れは**400 `INVALID_ARGUMENT`**。
+- プレイヤーの値の行が 1 つでもあるキーの`mode`は変えられない（**400 `INVALID_ARGUMENT`**）。`maxValue`・`maxDelta`は変えられる（前に書いた値が新しい上限を超えても消さない。次の書き込みから効く）。
+- 1 ゲームの宣言は 200 個まで（`MAX_PLAYER_DATA_KEYS`）。超える新しいキーは**400 `INVALID_ARGUMENT`**。
+- 監査のログに`player-data-key.put`の 1 行（`before`は前の宣言`{"mode","maxValue","maxDelta"}`か`null`、`after`は入れた宣言）。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・宣言の本文（400）→ 値のあるキーの`mode`（400）→ 宣言の数（400）→ 書く。
+
+### PUT /v1/admin/achievements/{achievementId}?gameId=demo-rpg
+
+実績を 1 つ宣言する（見るキーと閾値）。無ければ作り、あれば置き換える。実績の宣言を消す口は無い。キーの値が閾値以上になった書き込み（`POST /v1/player-data`）で解ける（宣言の時にさかのぼって解かない）。
+
+見出し: `Authorization: Bearer <管理の鍵>`・`X-Admin-Actor: <ラベル>`。
+
+入力例:
+
+```json
+{"key":"slimes-defeated","threshold":10,"reason":"10 体倒した実績"}
+```
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","achievementId":"slime-hunter","key":"slimes-defeated","threshold":10}
+```
+
+- `key`は ID の形、`threshold`は 1〜1,000,000,000 の整数。外れは**400 `INVALID_ARGUMENT`**。
+- 宣言の無いキーは**404 `NOT_FOUND`**（`Unknown key`。何も書かない）。先にキーを宣言する。
+- 解いたプレイヤーがいる実績の`key`は変えられない（**400 `INVALID_ARGUMENT`**）。`threshold`は変えられる（解いた人の行は消さない）。
+- 監査のログに`achievement.put`の 1 行（`before`は前の宣言`{"key","threshold"}`か`null`、`after`は入れた宣言）。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・宣言の本文（400）→ キーの宣言（404）→ 解いた人のいる実績の`key`（400）→ 書く。
+
+### PUT /v1/admin/players/{playerId}/player-data/{key}?gameId=demo-rpg
+
+1 人のプレイヤーの 1 つのキーの値を置く（不正な値を戻すなど）。
+
+見出し: `Authorization: Bearer <管理の鍵>`・`X-Admin-Actor: <ラベル>`。
+
+入力例:
+
+```json
+{"value":0,"reason":"不正な連打の分を戻す"}
+```
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","playerId":"<playerId>","key":"slimes-defeated","value":0,"auditId":44}
+```
+
+- `value`は 0 以上の整数で、キーの書き方に関わらず 0〜キーの`maxValue`（`add`でも減らせ、`flag`も 0 に戻せる）。外れは**400 `INVALID_ARGUMENT`**。
+- そのゲームに無いプレイヤーは**404 `NOT_FOUND`**（`Unknown player`）、宣言の無いキーは**404 `NOT_FOUND`**（`Unknown key`）。
+- **実績は判定しない**（閾値を超える値に置いても解かず、解いた人の値を下げても取り消さない。取り消すのは下の口）。値の`updatedAt`はサーバーの時刻になる。`Idempotency-Key`は要らない（何度送っても同じ値）。
+- 監査のログに`player-data.set`の 1 行（`before`は前の`{"key","value"}`か、値の行が無ければ`null`、`after`は`{"key","value"}`）。`auditId`はその行の番号。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・`value`（400）→ プレイヤー（404）→ キー（404）→ キーの`maxValue`（400）→ 書く。
+
+### DELETE /v1/admin/players/{playerId}/achievements/{achievementId}?gameId=demo-rpg
+
+1 人のプレイヤーの解いた実績を取り消す（誤って解けた実績を消す）。取り消した後に値が閾値以上の書き込みをすると、また解ける。
+
+見出し: `Authorization: Bearer <管理の鍵>`・`X-Admin-Actor: <ラベル>`。
+
+入力例:
+
+```json
+{"reason":"不正な値で解けた"}
+```
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","playerId":"<playerId>","achievementId":"first-slime","revoked":true,"auditId":45}
+```
+
+- 解いた行が無ければ**404 `NOT_FOUND`**（`Unknown achievement`。監査のログに残さない）。2 回目は 404（もう無い）。`Idempotency-Key`は要らない。
+- 監査のログに`achievement.revoke`の 1 行（`before`は消した行の`{"achievementId","unlockedAt"}`、`after`は`null`）。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`（400）→ 書く。
 
 ## エラーレスポンス
 

@@ -15,7 +15,7 @@
     "/v1/admin/players/{playerId}": {
       "get": {
         "operationId": "adminGetPlayer",
-        "summary": "1 人のプレイヤーの所持品・受領の履歴（新しい順に 20 行）・セーブの一覧・スコアを読む。セーブの本文とチェックサムは返さない。監査に残さない",
+        "summary": "1 人のプレイヤーの所持品・受領の履歴（新しい順に 20 行）・セーブの一覧・スコア・プレイヤーデータ（値と解いた実績）を読む。セーブの本文とチェックサムは返さない。監査に残さない",
         "security": [
           {
             "adminKey": []
@@ -1806,6 +1806,904 @@
           }
         }
       }
+    },
+    "/v1/admin/player-data/keys/{key}": {
+      "put": {
+        "operationId": "adminPutPlayerDataKey",
+        "summary": "プレイヤーデータのキーを 1 つ宣言する（書き方と上限）。無ければ作り、あれば置き換える。値の行があるキーの mode は変えられない。宣言は 1 ゲーム 200 個まで（MAX_PLAYER_DATA_KEYS）。監査の行 player-data-key.put と 1 つの batch。キーを消す口は無い",
+        "security": [
+          {
+            "adminKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "description": "プレイヤーデータのキー。形が外れればどのルートにも当たらず 404 NOT_FOUND（Endpoint not found）。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": true,
+            "description": "登録のあるゲーム。形が外れれば 400 INVALID_ARGUMENT、登録が無ければ 404 NOT_FOUND（Unknown game）。機能の設定は見ない。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "X-Admin-Actor",
+            "in": "header",
+            "required": true,
+            "description": "操作した人のラベル（^[a-zA-Z0-9_.@-]{1,64}$。自己申告で、そのまま監査のログに残る）。無い・形の外れは 400 INVALID_ARGUMENT。",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.@-]{1,64}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminPlayerDataKeyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "入れた宣言（maxDelta は add のときだけ値があり、ほかは null）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminPlayerDataKeyResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "gameId・X-Admin-Actor・reason・宣言の本文（mode・maxValue・maxDelta）の外れか、値の行があるキーの mode を変えようとした・宣言の数が上限を超える（INVALID_ARGUMENT）か、本文が JSON でない（INVALID_JSON）。何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT",
+              "INVALID_JSON"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization が無い・Bearer でない・管理の鍵と違う（プレイヤーのトークンも含む）。外れた理由は返さない（message は Invalid admin credentials）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（正しい管理の鍵があっても断る。鍵を見る前・数える前）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "登録の無いゲーム（Unknown game）か、形の外れたパス（Endpoint not found）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "管理の口の利用制限を超えた（IP ごと。正しい鍵でも数え、鍵を確かめる前に断る）。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・管理の鍵 ADMIN_API_KEY が無いか 32 文字未満）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/achievements/{achievementId}": {
+      "put": {
+        "operationId": "adminPutAchievement",
+        "summary": "実績を 1 つ宣言する（見るキーと閾値）。無ければ作り、あれば置き換える。解いた人がいる実績の key は変えられない。監査の行 achievement.put と 1 つの batch。宣言の時にさかのぼって解かない",
+        "security": [
+          {
+            "adminKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "achievementId",
+            "in": "path",
+            "required": true,
+            "description": "実績の ID。形が外れればどのルートにも当たらず 404 NOT_FOUND（Endpoint not found）。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": true,
+            "description": "登録のあるゲーム。形が外れれば 400 INVALID_ARGUMENT、登録が無ければ 404 NOT_FOUND（Unknown game）。機能の設定は見ない。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "X-Admin-Actor",
+            "in": "header",
+            "required": true,
+            "description": "操作した人のラベル（^[a-zA-Z0-9_.@-]{1,64}$。自己申告で、そのまま監査のログに残る）。無い・形の外れは 400 INVALID_ARGUMENT。",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.@-]{1,64}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminAchievementRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "入れた宣言。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAchievementResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "gameId・X-Admin-Actor・reason・key・threshold の外れか、解いた人がいる実績の key を変えようとした（INVALID_ARGUMENT）か、本文が JSON でない（INVALID_JSON）。何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT",
+              "INVALID_JSON"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization が無い・Bearer でない・管理の鍵と違う（プレイヤーのトークンも含む）。外れた理由は返さない（message は Invalid admin credentials）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（正しい管理の鍵があっても断る。鍵を見る前・数える前）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "登録の無いゲーム（Unknown game）か、宣言の無いキー（Unknown key。何も書かない）か、形の外れたパス（Endpoint not found）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "管理の口の利用制限を超えた（IP ごと。正しい鍵でも数え、鍵を確かめる前に断る）。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・管理の鍵 ADMIN_API_KEY が無いか 32 文字未満）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/players/{playerId}/player-data/{key}": {
+      "put": {
+        "operationId": "adminSetPlayerData",
+        "summary": "1 人のプレイヤーの 1 つのキーの値を置く（書き方に関わらず 0〜キーの maxValue）。実績は判定しない（解かない・取り消さない）。監査の行 player-data.set（前と後）と 1 つの batch。Idempotency-Key は要らない",
+        "security": [
+          {
+            "adminKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "playerId",
+            "in": "path",
+            "required": true,
+            "description": "ゲームのプレイヤー（game_players の playerId）。形が外れればどのルートにも当たらず 404 NOT_FOUND（Endpoint not found）。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "description": "プレイヤーデータのキー。形が外れればどのルートにも当たらず 404 NOT_FOUND（Endpoint not found）。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": true,
+            "description": "登録のあるゲーム。形が外れれば 400 INVALID_ARGUMENT、登録が無ければ 404 NOT_FOUND（Unknown game）。機能の設定は見ない。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "X-Admin-Actor",
+            "in": "header",
+            "required": true,
+            "description": "操作した人のラベル（^[a-zA-Z0-9_.@-]{1,64}$。自己申告で、そのまま監査のログに残る）。無い・形の外れは 400 INVALID_ARGUMENT。",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.@-]{1,64}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminPlayerDataSetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "置いた値。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminPlayerDataSetResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "gameId・X-Admin-Actor・reason・value の外れか、value がキーの maxValue を超える（INVALID_ARGUMENT）か、本文が JSON でない（INVALID_JSON）。何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT",
+              "INVALID_JSON"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization が無い・Bearer でない・管理の鍵と違う（プレイヤーのトークンも含む）。外れた理由は返さない（message は Invalid admin credentials）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（正しい管理の鍵があっても断る。鍵を見る前・数える前）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "登録の無いゲーム（Unknown game）か、そのゲームに無いプレイヤー（Unknown player）か、宣言の無いキー（Unknown key）か、形の外れたパス（Endpoint not found）。何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "管理の口の利用制限を超えた（IP ごと。正しい鍵でも数え、鍵を確かめる前に断る）。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・管理の鍵 ADMIN_API_KEY が無いか 32 文字未満）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/players/{playerId}/achievements/{achievementId}": {
+      "delete": {
+        "operationId": "adminRevokeAchievement",
+        "summary": "1 人のプレイヤーの解いた実績を取り消す（解いた行を消す）。消す文と監査の行（achievement.revoke。前は消した行）は 1 つの batch。Idempotency-Key は要らない",
+        "security": [
+          {
+            "adminKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "playerId",
+            "in": "path",
+            "required": true,
+            "description": "ゲームのプレイヤー（game_players の playerId）。形が外れればどのルートにも当たらず 404 NOT_FOUND（Endpoint not found）。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "achievementId",
+            "in": "path",
+            "required": true,
+            "description": "実績の ID。形が外れればどのルートにも当たらず 404 NOT_FOUND（Endpoint not found）。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": true,
+            "description": "登録のあるゲーム。形が外れれば 400 INVALID_ARGUMENT、登録が無ければ 404 NOT_FOUND（Unknown game）。機能の設定は見ない。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "X-Admin-Actor",
+            "in": "header",
+            "required": true,
+            "description": "操作した人のラベル（^[a-zA-Z0-9_.@-]{1,64}$。自己申告で、そのまま監査のログに残る）。無い・形の外れは 400 INVALID_ARGUMENT。",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.@-]{1,64}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminAchievementRevokeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "取り消した結果。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAchievementRevokeResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "gameId・X-Admin-Actor・reason の外れ（INVALID_ARGUMENT）か、本文が JSON でない（INVALID_JSON）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT",
+              "INVALID_JSON"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization が無い・Bearer でない・管理の鍵と違う（プレイヤーのトークンも含む）。外れた理由は返さない（message は Invalid admin credentials）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（正しい管理の鍵があっても断る。鍵を見る前・数える前）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "登録の無いゲーム（Unknown game）か、そのプレイヤーがその実績を解いていない（Unknown achievement。監査に残さない）か、形の外れたパス（Endpoint not found）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "管理の口の利用制限を超えた（IP ごと。正しい鍵でも数え、鍵を確かめる前に断る）。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・管理の鍵 ADMIN_API_KEY が無いか 32 文字未満）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1947,7 +2845,8 @@
           "balances",
           "history",
           "saves",
-          "rankings"
+          "rankings",
+          "playerData"
         ],
         "properties": {
           "gameId": {
@@ -1992,6 +2891,10 @@
             "items": {
               "$ref": "#/components/schemas/AdminRanking"
             }
+          },
+          "playerData": {
+            "$ref": "#/components/schemas/AdminPlayerData",
+            "description": "プレイヤーデータの値と解いた実績（いつも載る）。"
           }
         }
       },
@@ -2478,6 +3381,299 @@
             "items": {
               "$ref": "#/components/schemas/AdminEventReward"
             }
+          }
+        }
+      },
+      "AdminPlayerDataMode": {
+        "type": "string",
+        "enum": [
+          "add",
+          "max",
+          "set",
+          "flag"
+        ],
+        "description": "書き方（add・max は統計値、set・flag は進行状態）。意味は docs/api-contract.md の POST /v1/player-data の表。"
+      },
+      "AdminPlayerDataValue": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "mode",
+          "value",
+          "updatedAt"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/AdminPlayerDataMode"
+          },
+          "value": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000000
+          },
+          "updatedAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$",
+            "description": "最後に変わった時刻（サーバーの時刻）。"
+          }
+        }
+      },
+      "AdminPlayerAchievement": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "achievementId",
+          "unlockedAt",
+          "writeId"
+        ],
+        "properties": {
+          "achievementId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "unlockedAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$",
+            "description": "解いた時刻（サーバーの時刻）。"
+          },
+          "writeId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "解いた書き込みの writeId（POST /v1/player-data の応答と同じ値）。"
+          }
+        }
+      },
+      "AdminPlayerData": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "values",
+          "achievements"
+        ],
+        "properties": {
+          "values": {
+            "type": "array",
+            "maxItems": 200,
+            "description": "プレイヤーが書いたことのあるキーの値（キーの昇順）。無ければ空の配列。",
+            "items": {
+              "$ref": "#/components/schemas/AdminPlayerDataValue"
+            }
+          },
+          "achievements": {
+            "type": "array",
+            "description": "解いた実績（実績の ID の昇順）。無ければ空の配列。",
+            "items": {
+              "$ref": "#/components/schemas/AdminPlayerAchievement"
+            }
+          }
+        }
+      },
+      "AdminPlayerDataKeyRequest": {
+        "type": "object",
+        "required": [
+          "mode",
+          "maxValue",
+          "reason"
+        ],
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/AdminPlayerDataMode"
+          },
+          "maxValue": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000,
+            "description": "値の上限（flag は 1 だけ）。"
+          },
+          "maxDelta": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000,
+            "description": "add の 1 回の増加の上限。add のときだけ必須で、ほかの書き方では送らない。"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/AdminReason"
+          }
+        }
+      },
+      "AdminPlayerDataKeyResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "key",
+          "mode",
+          "maxValue",
+          "maxDelta"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "key": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/AdminPlayerDataMode"
+          },
+          "maxValue": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000,
+            "description": "値の上限。"
+          },
+          "maxDelta": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 1000000000,
+            "description": "add の 1 回の増加の上限（add でなければ null）。"
+          }
+        }
+      },
+      "AdminAchievementRequest": {
+        "type": "object",
+        "required": [
+          "key",
+          "threshold",
+          "reason"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "threshold": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000,
+            "description": "解ける値（キーの値がこれ以上で解ける）。"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/AdminReason"
+          }
+        }
+      },
+      "AdminAchievementResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "achievementId",
+          "key",
+          "threshold"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "achievementId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "key": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "threshold": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000,
+            "description": "解ける値。"
+          }
+        }
+      },
+      "AdminPlayerDataSetRequest": {
+        "type": "object",
+        "required": [
+          "value",
+          "reason"
+        ],
+        "properties": {
+          "value": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000000,
+            "description": "置く値（書き方に関わらず 0〜キーの maxValue）。"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/AdminReason"
+          }
+        }
+      },
+      "AdminPlayerDataSetResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "playerId",
+          "key",
+          "value",
+          "auditId"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "playerId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "key": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "value": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000000,
+            "description": "置いた値。"
+          },
+          "auditId": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "置いた操作の監査の行の番号。"
+          }
+        }
+      },
+      "AdminAchievementRevokeRequest": {
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/AdminReason"
+          }
+        }
+      },
+      "AdminAchievementRevokeResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "playerId",
+          "achievementId",
+          "revoked",
+          "auditId"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "playerId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "achievementId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "revoked": {
+            "const": true
+          },
+          "auditId": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "取り消した操作の監査の行の番号。"
           }
         }
       }
