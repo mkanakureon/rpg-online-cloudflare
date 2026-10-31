@@ -2,7 +2,7 @@
 //
 // scripts/admin-cli.mjs（入口）と test/admin.test.ts の両方がここを読み込む（scripts/cli-requests.mjs と同じ考え）。
 // 操作ごとの関数（playerOp〜putEventOp と、プレイヤーデータの putDataKeyOp・putAchievementOp・setDataOp・revokeAchievementOp と、
-// クエストの定義の putQuestOp と、集計の analyticsPlayersOp〔継続率の割り算は retentionRates〕）が
+// クエストの定義の putQuestOp と、集計の analyticsPlayersOp〔継続率の割り算は retentionRates〕・配った量の analyticsGrantsOp）が
 // { method, path, body } を作り、adminRequest が管理の鍵・X-Admin-Actor・Idempotency-Key を付けた
 // Request にする。通しの確かめ runSmoke は、送る関数（send）を受け取って docs/guides/working/admin-design.md §7 の smoke の流れを回す
 // （CLI は fetch、試験は src/worker.ts の fetch を渡す。テスト「管理コマンドと同じ流れで付与と取り消しとBANとイベントの定義が監査のログに残る」）。
@@ -46,6 +46,12 @@ export function defaultAnalyticsRange(now = Math.floor(Date.now() / 1000), days 
 export function analyticsPlayersOp(gameId = DEFAULT_GAME_ID, { from, to } = defaultAnalyticsRange()) {
   return { method: 'GET',
     path: `/v1/admin/analytics/players?${query(gameId)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}` };
+}
+
+/** 日・種類・品目ごとの配った量（増やした量・減らした量・行の数）と、日・クエストごとの受け取りの数を読む（GET /v1/admin/analytics/grants）。 */
+export function analyticsGrantsOp(gameId = DEFAULT_GAME_ID, { from, to } = defaultAnalyticsRange()) {
+  return { method: 'GET',
+    path: `/v1/admin/analytics/grants?${query(gameId)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}` };
 }
 
 /** 集計の応答の cohorts から継続率（retained.dN / newPlayers）を出す。まだ決まらない数（null）は null のまま。 */

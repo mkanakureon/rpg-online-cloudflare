@@ -17,6 +17,7 @@
 //   set-data <playerId> <key> <value> --reason <理由>                              プレイヤーデータの値を置く（実績は判定しない）
 //   revoke-achievement <playerId> <achievementId> --reason <理由>                  解いた実績を取り消す
 //   analytics [--from YYYY-MM-DD] [--to YYYY-MM-DD]     日ごとの遊んだ人（DAU）・新しい人と D1／D7／D30 の継続の数・継続率を読む（UTC。既定は今日までの 7 日）
+//   analytics-grants [--from YYYY-MM-DD] [--to YYYY-MM-DD]  日・種類・品目ごとの配った量と、日・クエストごとの受け取りの数を読む（UTC。既定は今日までの 7 日）
 //   smoke                                               通しの確かめ（docs/guides/working/admin-design.md §7。最後に PASS）
 // 行き先は RPG_API_BASE（既定 http://127.0.0.1:8787。CLI モックと同じ）。X-Admin-Actor は --actor（既定 local-admin。OS の名前は使わない）。
 // 管理の鍵は環境変数 ADMIN_API_KEY から読み、無ければ行き先が 127.0.0.1・localhost のときだけリポジトリの .dev.vars の ADMIN_API_KEY の行を
@@ -26,7 +27,7 @@
 // 概要記述: Claude Opus 5.5 — 2026-10-31
 import { readFileSync } from 'node:fs';
 import {
-  DEFAULT_GAME_ID, adjustOp, adminRequest, analyticsPlayersOp, auditOp, banOp, deleteScoreOp, newIdempotencyKey, playerOp, putAchievementOp, putDataKeyOp,
+  DEFAULT_GAME_ID, adjustOp, adminRequest, analyticsGrantsOp, analyticsPlayersOp, auditOp, banOp, deleteScoreOp, newIdempotencyKey, playerOp, putAchievementOp, putDataKeyOp,
   defaultAnalyticsRange, putEventOp, putItemOp, putQuestOp, retentionRates, revokeAchievementOp, runSmoke, setDataOp, unbanOp
 } from './admin-requests.mjs';
 
@@ -157,6 +158,10 @@ const commands = {
     console.log('日の区切りは UTC の 0 時（日本の 9 時）。継続率 = retained.dN / newPlayers（null はまだ N 日目が来ていない）:');
     for (const row of retentionRates(body)) console.log(`  ${row.date} newPlayers=${row.newPlayers}`, JSON.stringify(row.rates));
     console.log('注意: ゲストのトークンは 30 日で切れ更新の口が無いため、D30 は低く・newPlayers は高く出る（docs/api-contract.md の「管理の API」）。');
+  },
+  'analytics-grants': async (k, _a, f, actor, gameId) => {
+    const range = defaultAnalyticsRange();
+    await send(k, analyticsGrantsOp(gameId, { from: f.from ?? range.from, to: f.to ?? range.to }), { actor });
   },
   'smoke': async (k, _a, _f, actor) => {
     await runSmoke({

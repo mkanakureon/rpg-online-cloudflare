@@ -1,11 +1,14 @@
-// analytics.ts — 管理の集計の口（GET /v1/admin/analytics/players）の、入出力の無い関数と SQL の文字列。
+// analytics.ts — 管理の集計の口（GET /v1/admin/analytics/players・GET /v1/admin/analytics/grants）の、入出力の無い関数と SQL の文字列。
 //
 // parseAnalyticsRange は問い合わせの from・to（UTC の YYYY-MM-DD）の形・順・日数の上限（MAX_ANALYTICS_RANGE_DAYS・両端を含む）・
 // 今日（サーバーの時刻の UTC）までを確かめる。fillDays は数の無い日を 0 で埋めて昇順に並べ、retentionCell は N 日目が今日より後なら null
 // （まだ決まらない）にする。集計は要求の時に表 player_activity_days を数え（まとめた表を持たない）、応答に playerId も行ごとの時刻も入れない。
 // 継続の文の '+N day' は定数 RETENTION_OFFSETS の整数から作る（要求の値は文に入れず、バインドは gameId・from・to の 3 つ）。
 // 継続率の割り算はクライアント（scripts/admin-cli.mjs の analytics）がする。ゲストのトークンは 30 日で切れて更新の口が無いので、
-// D30 は低く、newPlayers は高く出る（docs/api-contract.md の「管理の API」に書く）。管理の口（src/core/admin/routes.ts）が読む。
+// D30 は低く、newPlayers は高く出る（docs/api-contract.md の「管理の API」に書く）。
+// 配った量の口は受領の履歴 inventory_ledger を日・種類・品目ごとに、受け取りの行 quest_claims を日・クエストごとにまとめる。日の範囲は
+// rangeSeconds で UNIX 秒にして比べ（バインドは gameId・始まりの秒・終わりの秒の 3 つ）、文の LIMIT は定数 MAX_ANALYTICS_ROWS より 1 多くして、
+// shapeGrants が日付の昇順で切って truncated を立てる。管理の口（src/core/admin/routes.ts）が読む。
 // core はモジュールを読み込まない。設計の正は docs/guides/working/analytics-design.md §3・§5。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
@@ -16,6 +19,8 @@ export const MAX_ANALYTICS_RANGE_DAYS = 92;
 /** 継続の数を出す、発行の日から何日目か（D1・D7・D30）。 */
 export const RETENTION_OFFSETS = [1, 7, 30] as const;
 export type RetentionOffset = (typeof RETENTION_OFFSETS)[number];
+/** 配った量の口の grants・questClaims のそれぞれの行の上限（越えたら日付の昇順で切って truncated: true）。 */
+export const MAX_ANALYTICS_ROWS = 5000;
 
 const DAY = 86_400;
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
@@ -91,4 +96,37 @@ export function shapeCohorts(rows: readonly CohortRow[], today: string): Cohort[
     newPlayers: row.new_players,
     retained: Object.fromEntries(RETENTION_OFFSETS.map((n) => [`d${n}`, retentionCell(row.day, today, n, row[`d${n}`])])) as Cohort['retained'],
   }));
+}
+
+/** 日の範囲（両端の日を含む）を UNIX 秒の [始まり, 終わり) にする。範囲は parseAnalyticsRange で確かめた後の値。 */
+export function rangeSeconds(range: AnalyticsRange): { start: number; end: number } {
+  return { start: dayStart(range.from)!, end: dayStart(range.to)! + DAY };
+}
+
+/** 日・種類・品目ごとの増やした量・減らした量（負の delta の絶対値）・行の数（バインドは gameId・始まりの秒・終わりの秒）。 */
+export const grantsSql = `SELECT date(created_at, 'unixepoch') AS day, source_type, item_id,
+  SUM(CASE WHEN delta > 0 THEN delta ELSE 0 END) AS added, SUM(CASE WHEN delta < 0 THEN -delta ELSE 0 END) AS removed, COUNT(*) AS entries
+  FROM inventory_ledger WHERE game_id = ? AND created_at >= ? AND created_at < ?
+  GROUP BY day, source_type, item_id ORDER BY day, source_type, item_id LIMIT ${MAX_ANALYTICS_ROWS + 1}`;
+
+/** 日・クエストごとの受け取りの数（バインドは gameId・始まりの秒・終わりの秒）。 */
+export const questClaimsSql = `SELECT date(claimed_at, 'unixepoch') AS day, quest_id, COUNT(*) AS claims
+  FROM quest_claims WHERE game_id = ? AND claimed_at >= ? AND claimed_at < ?
+  GROUP BY day, quest_id ORDER BY day, quest_id LIMIT ${MAX_ANALYTICS_ROWS + 1}`;
+
+export type GrantRow = { day: string; source_type: string; item_id: string; added: number; removed: number; entries: number };
+export type QuestClaimCountRow = { day: string; quest_id: string; claims: number };
+export type Grant = { date: string; sourceType: string; itemId: string; added: number; removed: number; entries: number };
+export type QuestClaimCount = { date: string; questId: string; claims: number };
+export type GrantsSummary = { grants: Grant[]; questClaims: QuestClaimCount[]; truncated: boolean };
+
+/** 2 つの文の行（日付の昇順）を応答の形にする。どちらかが limit を越えたら、その並びを先頭の limit 行で切って truncated: true。 */
+export function shapeGrants(grantRows: readonly GrantRow[], claimRows: readonly QuestClaimCountRow[], limit = MAX_ANALYTICS_ROWS): GrantsSummary {
+  return {
+    grants: grantRows.slice(0, limit).map((row) => ({
+      date: row.day, sourceType: row.source_type, itemId: row.item_id, added: row.added, removed: row.removed, entries: row.entries,
+    })),
+    questClaims: claimRows.slice(0, limit).map((row) => ({ date: row.day, questId: row.quest_id, claims: row.claims })),
+    truncated: grantRows.length > limit || claimRows.length > limit,
+  };
 }

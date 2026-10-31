@@ -15,11 +15,15 @@
 // 挙動の説明の正は docs/api-contract.md の「管理の API」、設計の正は docs/guides/working/admin-design.md §2・§4〜§7
 // （プレイヤーデータの 4 つの口とプレイヤーを読む口の playerData は docs/guides/working/player-data-design.md §8、
 // クエストの定義の口・プレイヤーを読む口の questClaims・値を置く口の区切りの値の頭打ちは docs/guides/working/quest-design.md §8、
-// 集計の口 /v1/admin/analytics/players〔数だけでプレイヤー ID を返さない。関数と SQL は src/core/analytics.ts〕は docs/guides/working/analytics-design.md §5）。
+// 集計の口 /v1/admin/analytics/players と配った量の口 /v1/admin/analytics/grants〔数だけでプレイヤー ID を返さない。関数と SQL は
+// src/core/analytics.ts〕は docs/guides/working/analytics-design.md §5）。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
 import { activityDay } from '../activity';
-import { cohortRetentionSql, dailyActivitySql, fillDays, parseAnalyticsRange, shapeCohorts, type CohortRow, type DailyRow } from '../analytics';
+import {
+  cohortRetentionSql, dailyActivitySql, fillDays, grantsSql, parseAnalyticsRange, questClaimsSql, rangeSeconds, shapeCohorts, shapeGrants,
+  type CohortRow, type DailyRow, type GrantRow, type QuestClaimCountRow,
+} from '../analytics';
 import { isBanActive } from '../bans';
 import type { Database, Env } from '../env';
 import { loadGame } from '../games';
@@ -758,6 +762,26 @@ export const adminRoutes: Route[] = [
         days: fillDays(from, to, daily.results),
         cohorts: shapeCohorts(cohorts.results, activityDay(now)),
       });
+    },
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/admin\/analytics\/grants$/,
+    async handle(req, env, _match, url, known) {
+      const access = await checkAdmin(req, env, url, known);
+      if (!access.ok) return access.response;
+      const { gameId } = access;
+      const now = serverNow();
+      const range = parseAnalyticsRange(url, now);
+      if (!range.ok) return error('INVALID_ARGUMENT', range.message, 400);
+      const { from, to } = range.value;
+      const { start, end } = rangeSeconds(range.value);
+      const [grants, claims] = await Promise.all([
+        env.DB.prepare(grantsSql).bind(gameId, start, end).all<GrantRow>(),
+        env.DB.prepare(questClaimsSql).bind(gameId, start, end).all<QuestClaimCountRow>(),
+      ]);
+      // 数と日付と品目・クエストの ID だけ（playerId・行ごとの時刻を入れない）
+      return json({ gameId, from, to, timezone: 'UTC', serverTime: isoSeconds(now), ...shapeGrants(grants.results, claims.results) });
     },
   },
 ];

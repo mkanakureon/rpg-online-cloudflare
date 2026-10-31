@@ -39,6 +39,19 @@ export declare function retentionRates(body: AnalyticsPlayersBody): Array<{
   rates: Record<string, number | null>;
 }>;
 
+export declare function analyticsGrantsOp(gameId?: string, range?: AnalyticsRange): AdminOp;
+
+export type AnalyticsGrantsBody = {
+  gameId: string;
+  from: string;
+  to: string;
+  timezone: 'UTC';
+  serverTime: string;
+  grants: Array<{ date: string; sourceType: string; itemId: string; added: number; removed: number; entries: number }>;
+  questClaims: Array<{ date: string; questId: string; claims: number }>;
+  truncated: boolean;
+};
+
 export declare function adjustOp(playerId: string, itemId: string, delta: number, reason: string, gameId?: string): AdminOp;
 
 export declare function banOp(playerId: string, reason: string, expiresAt?: string, gameId?: string): AdminOp;

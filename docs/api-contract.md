@@ -349,7 +349,7 @@
 
 ## 管理の API（ゲームのクライアントは使わない）
 
-運営する人が 1 人のプレイヤーの状態と監査のログと日ごとの遊んだ人の数（DAU・継続の数）を読み、プレイヤーを止め（BAN し）、所持品と通貨を付与・取り消し、スコアを消し、品目とイベントとクエストの定義を入れ、プレイヤーデータのキーと実績を宣言し、プレイヤーデータの値を直し、解いた実績を取り消す口。**ゲームのクライアント（CLI モック・UE・Unity・ブラウザ）は使わず、管理の鍵を持たせない**。形の正は`openapi/rpg-online-admin.v1.json`（ゲームのクライアントのスキーマ`openapi/rpg-online.v1.json`には入れない）、設計の正は`docs/guides/working/admin-design.md`。
+運営する人が 1 人のプレイヤーの状態と監査のログと日ごとの遊んだ人の数（DAU・継続の数）と配った量・クエストの受け取りの数を読み、プレイヤーを止め（BAN し）、所持品と通貨を付与・取り消し、スコアを消し、品目とイベントとクエストの定義を入れ、プレイヤーデータのキーと実績を宣言し、プレイヤーデータの値を直し、解いた実績を取り消す口。**ゲームのクライアント（CLI モック・UE・Unity・ブラウザ）は使わず、管理の鍵を持たせない**。形の正は`openapi/rpg-online-admin.v1.json`（ゲームのクライアントのスキーマ`openapi/rpg-online.v1.json`には入れない）、設計の正は`docs/guides/working/admin-design.md`。
 
 - 見出しは`Authorization: Bearer <管理の鍵>`。管理の鍵は Worker ごとに 1 つの`ADMIN_API_KEY`（32 文字以上）。ローカルは人が`.dev.vars`（git に入らない）に`ADMIN_API_KEY=<32 文字以上>`を書き、staging・production は`wrangler secret put ADMIN_API_KEY`で渡す。鍵の値をファイル（`wrangler.jsonc`・ソース・試験・文書）に書かない。
 - **`local`でも既定の鍵を持たない**。`ADMIN_API_KEY`が無いか 32 文字未満の環境では、管理の口はどれも**500 `INTERNAL_ERROR`**（鍵の名前・値は返さない）。
@@ -359,7 +359,7 @@
 - 書き込みの口（BAN・BAN を解く・所持品と通貨の増減・スコアを消す・品目とイベントとクエストの定義・プレイヤーデータのキーと実績の宣言・値を置く・実績の取り消し）は、口ごとの確かめの前に見出し`X-Admin-Actor`（操作した人のラベル。`^[a-zA-Z0-9_.@-]{1,64}$`。自己申告で、そのまま監査のログに残る）と、本文（JSON でなければ**400 `INVALID_JSON`**）の`reason`（1〜200 文字。空白だけは外れ）を確かめる。外れは**400 `INVALID_ARGUMENT`**。
 - 書き込みの口は、操作 1 回で監査のログに 1 行（誰が・いつ・何を・前と後）を残し、書き込みと監査の行を 1 つの`batch`に入れる（片方だけ残らない）。読み取りの口は監査のログに残さない。
 - データ修正は行を直に書き換えず、履歴に残る形にする（所持品と通貨は受領の履歴に`sourceType: "admin"`の行。スコアは消して前のスコアを監査に残す。プレイヤーデータは台帳を持たないので、値を置く・実績を取り消すときの前と後を監査に残し、監査のログが直しの履歴になる）。セーブは直さない（読むだけ）。
-- ローカルの管理コマンド`node scripts/admin-cli.mjs <操作>`（`player`・`audit`・`analytics`・`grant`・`revoke`・`ban`・`unban`・`delete-score`・`put-item`・`put-event`・`put-quest`・`put-data-key`・`put-achievement`・`set-data`・`revoke-achievement`・`smoke`）がこれらの口を呼ぶ。鍵は環境変数`ADMIN_API_KEY`から読み、無ければ行き先が`127.0.0.1`・`localhost`のときだけ`.dev.vars`の`ADMIN_API_KEY`の行を読む（読むだけ）。`X-Admin-Actor`は`--actor`（既定は`local-admin`）。CLI モック（`scripts/cli-mock.mjs`）は管理の口を呼ばない。
+- ローカルの管理コマンド`node scripts/admin-cli.mjs <操作>`（`player`・`audit`・`analytics`・`analytics-grants`・`grant`・`revoke`・`ban`・`unban`・`delete-score`・`put-item`・`put-event`・`put-quest`・`put-data-key`・`put-achievement`・`set-data`・`revoke-achievement`・`smoke`）がこれらの口を呼ぶ。鍵は環境変数`ADMIN_API_KEY`から読み、無ければ行き先が`127.0.0.1`・`localhost`のときだけ`.dev.vars`の`ADMIN_API_KEY`の行を読む（読むだけ）。`X-Admin-Actor`は`--actor`（既定は`local-admin`）。CLI モック（`scripts/cli-mock.mjs`）は管理の口を呼ばない。
 
 ### GET /v1/admin/players/{playerId}?gameId=demo-rpg
 
@@ -409,6 +409,22 @@
 - `cohorts`は新しい人のいた日（0 日目）ごとに、ちょうど 1・7・30 日目に遊んだ人の数（`retained.d1`・`d7`・`d30`）。その日がサーバーの今日より後なら`null`（まだ決まらない）。新しい人のいない日は行が無い。**継続率**（`retained.dN / newPlayers`）の割り算はクライアントがする（管理コマンドの`analytics`が出す）。
 - **トークンの 30 日の期限による偏り**: ゲストのトークンは 30 日で切れ、更新の口が無い（切れたらゲストを発行し直し、前のプレイヤーを引き継がない）。そのため 30 日目は発行の時刻より前に遊んだときだけ数えられ、31 日目からは同じ人が新しい`playerId`で戻る。**D30 は低く、`newPlayers`は高く出る**（D1・D7 は効かない）。トークンの更新か、アカウントの引き継ぎが入るまでの限界。
 - 記録は`0017`のマイグレーションの後から始まり、それより前に発行したプレイヤーは新しい人に数えない。読み取りなので監査のログに残さない。機能の設定（`game_modules`）は見ない。
+
+### GET /v1/admin/analytics/grants?gameId=demo-rpg&from=2026-10-01&to=2026-10-31
+
+日・種類・品目ごとに配った量（受領の履歴の増やした量・減らした量・行の数）と、日・クエストごとの受け取りの数を読む。数と日付と、ID の決まった品目・クエストだけで、**プレイヤー ID も行ごとの時刻も返さない**。設計の正は`docs/guides/working/analytics-design.md` §5。
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","from":"2026-10-01","to":"2026-10-31","timezone":"UTC","serverTime":"2026-10-31T12:00:00Z","grants":[{"date":"2026-10-01","sourceType":"quest-claim","itemId":"gold","added":500,"removed":0,"entries":10}],"questClaims":[{"date":"2026-10-01","questId":"first-hunt","claims":10}],"truncated":false}
+```
+
+- `from`・`to`の決まりと断り方は`GET /v1/admin/analytics/players`と同じ（UTC の`YYYY-MM-DD`・両端を含む・92 日まで・今日まで。外れは**400 `INVALID_ARGUMENT`**、知らないゲームは**404 `NOT_FOUND`**）。日は行の時刻（UNIX 秒）の UTC の日付。
+- `grants`は受領の履歴を日・`sourceType`（`event-claim`・`quest-claim`・`admin`）・`itemId`ごとにまとめる。`added`は正の増減の合計、`removed`は負の増減の絶対値の合計（管理の取り消しはここに出る）、`entries`は行の数。行の無い組は載らない。
+- `questClaims`はクエストの受け取りを日・`questId`ごとにまとめた数。クエストの**達成率**の割り算はクライアントがする（分母はその日の`GET /v1/admin/analytics/players`の`activePlayers`）。
+- どちらも日付の昇順。どちらかが 5000 行を越えたら、日付の昇順で先頭の 5000 行に切って`truncated`が`true`（日の範囲を狭めて読み直す）。
+- 読み取りなので監査のログに残さない。機能の設定（`game_modules`）は見ない。
 
 ### PUT /v1/admin/players/{playerId}/ban?gameId=demo-rpg
 

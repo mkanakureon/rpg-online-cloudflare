@@ -1,9 +1,11 @@
 /**
  * 分析 N1: 「遊んだ」の印（表 player_activity_days・src/core/activity.ts の activityDay と consumeForPlayer・ゲストの発行の is_new の行）と、
  * 管理の集計の口（GET /v1/admin/analytics/players・src/core/analytics.ts）と、管理コマンドの要求の形（scripts/admin-requests.mjs の
- * analyticsPlayersOp）の試験。名前と期待する結果の正は docs/guides/working/analytics-design.md §10 の N1 の行。
+ * analyticsPlayersOp）の試験と、分析 N3: 管理の配った量の口（GET /v1/admin/analytics/grants・src/core/analytics.ts の shapeGrants）と
+ * 管理コマンドの要求の形（analyticsGrantsOp）の試験。名前と期待する結果の正は docs/guides/working/analytics-design.md §10 の N1・N3 の行。
  * L1 は関数を直に呼ぶ（now を渡す。時計を動かさない）。L2 は src/worker.ts の default.fetch を直に呼ぶ。過去の日の行は表に直に入れる。
- * 試験のゲームは専用の analytics-game（全部の機能を使う設定）。beforeEach で利用制限の数と遊んだ行を消す。
+ * 試験のゲームは専用の analytics-game（全部の機能を使う設定）。beforeEach で利用制限の数と遊んだ行を消す。N3 は受領の履歴と受け取りの行を
+ * 表に直に入れ（ほかのゲームの行は analytics-other）、N3 の beforeEach で 2 つのゲームの行を消す。
  * 管理の鍵は試験の中で作る秘密でない値（'a'.repeat(32)）。
  *
  * 概要記述: Claude Opus 5.5 — 2026-10-31
@@ -12,12 +14,17 @@ import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
 import { activityDay } from '../src/core/activity';
-import { addDays, fillDays, MAX_ANALYTICS_RANGE_DAYS, parseAnalyticsRange, retentionCell } from '../src/core/analytics';
+import {
+  addDays, fillDays, grantsSql, MAX_ANALYTICS_RANGE_DAYS, MAX_ANALYTICS_ROWS, parseAnalyticsRange, questClaimsSql, retentionCell, shapeGrants,
+  type GrantRow, type QuestClaimCountRow,
+} from '../src/core/analytics';
 import { windowStart } from '../src/core/rate-limit';
 import { RATE_LIMITS } from '../src/core/rate-limit-policy';
 import adminSpecJson from '../openapi/rpg-online-admin.v1.json';
-import { adminRequest, analyticsPlayersOp, retentionRates, type AnalyticsPlayersBody } from '../scripts/admin-requests.mjs';
-import { authHeaders, guestRequest, inventoryPath } from '../scripts/cli-requests.mjs';
+import {
+  adminRequest, analyticsGrantsOp, analyticsPlayersOp, retentionRates, type AnalyticsGrantsBody, type AnalyticsPlayersBody,
+} from '../scripts/admin-requests.mjs';
+import { authHeaders, claimPath, guestRequest, inventoryPath, SMOKE_EVENT_ID } from '../scripts/cli-requests.mjs';
 import { tokenFor } from './support/auth';
 import { registerGame } from './support/games';
 import { fillRateLimit, resetRateLimits } from './support/rate-limits';
@@ -56,17 +63,17 @@ async function expectError(res: Response, status: number, code: string): Promise
   expect(res.status, code).toBe(status);
   expect((await res.json<ErrorBody>()).error.code).toBe(code);
 }
-/** 管理のスキーマの集計の口の、その状態の形に応答を当てる。 */
-async function expectConforms(res: Response): Promise<unknown> {
-  const r = adminSpec.paths[specPath].get.responses[String(res.status)];
-  expect(r, `${specPath} の応答に状態 ${res.status} がある`).toBeDefined();
+/** 管理のスキーマの集計の口（既定は遊んだ人の口）の、その状態の形に応答を当てる。 */
+async function expectConforms(res: Response, path = specPath): Promise<unknown> {
+  const r = adminSpec.paths[path].get.responses[String(res.status)];
+  expect(r, `${path} の応答に状態 ${res.status} がある`).toBeDefined();
   for (const [name, h] of Object.entries(r.headers ?? {})) {
     const value = res.headers.get(name);
     if (h.required) expect(value, `ヘッダー ${name} がある`).not.toBeNull();
     if (value !== null) expect(validate(value, h.schema, adminSpec), `ヘッダー ${name}`).toEqual([]);
   }
   const body = await res.json();
-  expect(validate(body, r.content!['application/json'].schema, adminSpec), `${specPath} ${res.status} の本文`).toEqual([]);
+  expect(validate(body, r.content!['application/json'].schema, adminSpec), `${path} ${res.status} の本文`).toEqual([]);
   const codes = r['x-error-codes'];
   if (codes) expect(codes).toContain((body as ErrorBody).error.code);
   return body;
@@ -318,5 +325,165 @@ describe('N1 L2: 管理の集計の口', () => {
     // 管理コマンドの既定は今日までの 7 日。継続率の割り算は管理コマンドの側
     expect(body.days).toHaveLength(7);
     expect(retentionRates(body).find((row) => row.date === today())?.rates).toEqual({ d1: null, d7: null, d30: null });
+  });
+});
+
+// ---- N3 配った量とクエストの受け取りの数 ----
+
+const grantsSpecPath = '/v1/admin/analytics/grants';
+const otherGame = 'analytics-other';
+const grantsPath = (from: string, to: string, gameId = game) => `${grantsSpecPath}?gameId=${gameId}&from=${from}&to=${to}`;
+/** その日（UTC）の 0 時から seconds 秒後の UNIX 秒。 */
+const at = (day: string, seconds = 0) => Date.parse(`${day}T00:00:00Z`) / 1000 + seconds;
+
+async function addLedger(playerId: string, itemId: string, delta: number, sourceType: string, createdAt: number, gameId = game): Promise<void> {
+  await baseEnv.DB.prepare('INSERT INTO inventory_ledger (game_id, player_id, item_id, delta, source_type, source_id, created_at) '
+    + 'VALUES (?, ?, ?, ?, ?, ?, ?)').bind(gameId, playerId, itemId, delta, sourceType, crypto.randomUUID(), createdAt).run();
+}
+async function addClaim(playerId: string, questId: string, periodKey: string, claimedAt: number, gameId = game): Promise<void> {
+  await baseEnv.DB.prepare('INSERT INTO quest_claims (game_id, player_id, quest_id, period_key, claim_id, claimed_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .bind(gameId, playerId, questId, periodKey, crypto.randomUUID(), claimedAt).run();
+}
+
+describe('N3 L2: 管理の配った量の口', () => {
+  beforeEach(async () => {
+    await registerGame(baseEnv.DB, otherGame, ['inventory', 'player-data', 'quests']);
+    const db = baseEnv.DB;
+    const games = [game, otherGame];
+    const now = nowSeconds();
+    await db.batch([
+      ...['quest_claims', 'quest_rewards', 'quests', 'inventory_ledger', 'inventory_balances', 'player_data_key_periods', 'player_data_keys',
+        'inventory_items'].flatMap((table) => games.map((g) => db.prepare(`DELETE FROM ${table} WHERE game_id = ?`).bind(g))),
+      ...games.flatMap((g) => [
+        db.prepare("INSERT INTO inventory_items (game_id, item_id, kind) VALUES (?, 'gold', 'currency'), (?, 'potion', 'item')").bind(g, g),
+        db.prepare("INSERT INTO player_data_keys (game_id, key, mode, max_value, max_delta) VALUES (?, 'kills', 'add', 1000, 100)").bind(g),
+        db.prepare("INSERT INTO quests (game_id, quest_id, kind, starts_at, ends_at, key, threshold) VALUES (?, 'q-a', 'daily', ?, ?, 'kills', 1), "
+          + "(?, 'q-b', 'daily', ?, ?, 'kills', 1)").bind(g, now - 400 * 86400, now + 86400, g, now - 400 * 86400, now + 86400),
+      ]),
+    ]);
+  });
+
+  it('管理の配った量の集計は日と種類と品目ごとに増やした量と減らした量を返す', async () => {
+    const t = today();
+    const y = addDays(t, -1);
+    const ids = ['secret-player-a', 'secret-player-b', 'secret-player-c'];
+    // 範囲の外（前の日の最後の秒）は数えない
+    await addLedger(ids[0], 'gold', 999, 'event-claim', at(addDays(t, -2), 86399));
+    await addLedger(ids[0], 'gold', 50, 'quest-claim', at(y, 10));
+    await addLedger(ids[1], 'gold', 50, 'quest-claim', at(y, 86399));
+    await addLedger(ids[0], 'gold', 100, 'event-claim', at(y, 20));
+    await addLedger(ids[0], 'gold', 30, 'admin', at(y, 30));
+    // 管理の取り消し（負の数）は removed に出る
+    await addLedger(ids[1], 'gold', -10, 'admin', at(y, 40));
+    await addLedger(ids[1], 'potion', 1, 'admin', at(y, 50));
+    await addLedger(ids[2], 'gold', 100, 'event-claim', at(t));
+    const res = await adminGet(grantsPath(y, t));
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    for (const id of ids) expect(text).not.toContain(id);
+    const body = JSON.parse(text) as AnalyticsGrantsBody;
+    expect(body).toMatchObject({ gameId: game, from: y, to: t, timezone: 'UTC', truncated: false });
+    expect(body.serverTime).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    expect(body.grants).toEqual([
+      { date: y, sourceType: 'admin', itemId: 'gold', added: 30, removed: 10, entries: 2 },
+      { date: y, sourceType: 'admin', itemId: 'potion', added: 1, removed: 0, entries: 1 },
+      { date: y, sourceType: 'event-claim', itemId: 'gold', added: 100, removed: 0, entries: 1 },
+      { date: y, sourceType: 'quest-claim', itemId: 'gold', added: 100, removed: 0, entries: 2 },
+      { date: t, sourceType: 'event-claim', itemId: 'gold', added: 100, removed: 0, entries: 1 },
+    ]);
+    expect(body.questClaims).toEqual([]);
+  });
+
+  it('管理の配った量の集計はクエストごとの受け取りの数を日ごとに返す', async () => {
+    const t = today();
+    const y = addDays(t, -1);
+    await addClaim('p1', 'q-a', y, at(y, 100));
+    await addClaim('p2', 'q-a', y, at(y, 200));
+    await addClaim('p1', 'q-b', y, at(y, 300));
+    await addClaim('p1', 'q-a', t, at(t));
+    await addClaim('p2', 'q-b', t, at(t));
+    await addClaim('p3', 'q-b', t, at(t));
+    // 範囲の外は数えない
+    await addClaim('p1', 'q-a', addDays(t, -2), at(addDays(t, -2), 86399));
+    const res = await adminGet(grantsPath(y, t));
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    for (const id of ['p1', 'p2', 'p3']) expect(text).not.toContain(`"${id}"`);
+    const body = JSON.parse(text) as AnalyticsGrantsBody;
+    expect(body.questClaims).toEqual([
+      { date: y, questId: 'q-a', claims: 2 },
+      { date: y, questId: 'q-b', claims: 1 },
+      { date: t, questId: 'q-a', claims: 1 },
+      { date: t, questId: 'q-b', claims: 2 },
+    ]);
+    expect(body.truncated).toBe(false);
+  });
+
+  it('管理の配った量の集計は行の上限を越えると切ってtruncatedを返す', () => {
+    expect(MAX_ANALYTICS_ROWS).toBe(5000);
+    // 文は上限より 1 行多く読み、越えたかを見分ける
+    expect(grantsSql).toContain(`LIMIT ${MAX_ANALYTICS_ROWS + 1}`);
+    expect(questClaimsSql).toContain(`LIMIT ${MAX_ANALYTICS_ROWS + 1}`);
+    const grant = (day: string, itemId: string): GrantRow => ({ day, source_type: 'admin', item_id: itemId, added: 1, removed: 0, entries: 1 });
+    const claim = (day: string, questId: string): QuestClaimCountRow => ({ day, quest_id: questId, claims: 1 });
+    const grants = [grant('2026-10-01', 'gold'), grant('2026-10-01', 'potion'), grant('2026-10-02', 'gold')];
+    const claims = [claim('2026-10-01', 'q-a'), claim('2026-10-02', 'q-a')];
+    const cut = shapeGrants(grants, claims, 2);
+    expect(cut.truncated).toBe(true);
+    expect(cut.grants.map((g) => [g.date, g.itemId])).toEqual([['2026-10-01', 'gold'], ['2026-10-01', 'potion']]);
+    expect(cut.questClaims).toHaveLength(2);
+    // どちらの並びが越えても立つ
+    expect(shapeGrants(grants.slice(0, 2), [...claims, claim('2026-10-03', 'q-a')], 2).truncated).toBe(true);
+    // ちょうど上限なら切らない
+    expect(shapeGrants(grants.slice(0, 2), claims, 2)).toMatchObject({ truncated: false });
+    expect(shapeGrants(grants, claims).truncated).toBe(false);
+  });
+
+  it('管理の配った量の集計はほかのゲームの履歴を数えない', async () => {
+    const t = today();
+    await addLedger('p1', 'gold', 10, 'event-claim', at(t));
+    await addLedger('p1', 'gold', 70, 'event-claim', at(t), otherGame);
+    await addLedger('p1', 'potion', 3, 'admin', at(t), otherGame);
+    await addClaim('p1', 'q-a', t, at(t));
+    await addClaim('p1', 'q-a', t, at(t), otherGame);
+    await addClaim('p2', 'q-b', t, at(t), otherGame);
+    const body = await (await adminGet(grantsPath(t, t))).json<AnalyticsGrantsBody>();
+    expect(body.grants).toEqual([{ date: t, sourceType: 'event-claim', itemId: 'gold', added: 10, removed: 0, entries: 1 }]);
+    expect(body.questClaims).toEqual([{ date: t, questId: 'q-a', claims: 1 }]);
+    const other = await (await adminGet(grantsPath(t, t, otherGame))).json<AnalyticsGrantsBody>();
+    expect(other.grants).toHaveLength(2);
+    expect(other.questClaims).toHaveLength(2);
+  });
+
+  it('管理の配った量の集計の応答は管理のスキーマに合う', async () => {
+    const t = today();
+    await addLedger('s1', 'gold', 5, 'quest-claim', at(t));
+    await addLedger('s1', 'gold', -5, 'admin', at(t));
+    await addClaim('s1', 'q-a', t, at(t));
+    const ok = await adminGet(grantsPath(addDays(t, -3), t));
+    expect(ok.status).toBe(200);
+    const body = await expectConforms(ok, grantsSpecPath) as AnalyticsGrantsBody;
+    expect(body.grants).toHaveLength(2);
+    expect(body.questClaims).toHaveLength(1);
+    await expectConforms(await adminGet(grantsPath(t, addDays(t, -1))), grantsSpecPath);
+    await expectConforms(await adminGet(grantsPath(t, t, 'no-such-game')), grantsSpecPath);
+  });
+
+  it('管理コマンドと同じ要求の形で配った量を読める', async () => {
+    await resetRateLimits(baseEnv.DB);
+    const guest = await send('/v1/accounts/guest', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(guestRequest()) });
+    expect(guest.status).toBe(200);
+    const { token, gameId } = await guest.json<{ token: string; gameId: string }>();
+    expect((await send(claimPath(SMOKE_EVENT_ID, gameId), { method: 'POST', headers: authHeaders(token) })).status).toBe(200);
+    const res = await worker.fetch(adminRequest(base, adminKey, analyticsGrantsOp(gameId)), adminEnv as never);
+    expect(res.status).toBe(200);
+    const body = await res.json<AnalyticsGrantsBody>();
+    // 管理コマンドの既定は今日までの 7 日
+    expect(body.to).toBe(today());
+    expect(body.from).toBe(addDays(today(), -6));
+    const row = body.grants.find((g) => g.date === today() && g.sourceType === 'event-claim' && g.itemId === 'gold');
+    expect(row?.added).toBeGreaterThanOrEqual(100);
+    expect(row?.entries).toBeGreaterThanOrEqual(1);
   });
 });

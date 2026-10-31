@@ -3134,6 +3134,216 @@
           }
         }
       }
+    },
+    "/v1/admin/analytics/grants": {
+      "get": {
+        "operationId": "adminAnalyticsGrants",
+        "summary": "日・種類・品目ごとの配った量（増やした量・減らした量・行の数）と、日・クエストごとの受け取りの数を読む（UTC の日付。数だけでプレイヤー ID を返さない）",
+        "security": [
+          {
+            "adminKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": true,
+            "description": "登録のあるゲーム。形が外れれば 400 INVALID_ARGUMENT、登録が無ければ 404 NOT_FOUND（Unknown game）。機能の設定は見ない。",
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "description": "始まりの日（UTC の YYYY-MM-DD・含む）。形の外れ・to より後は 400 INVALID_ARGUMENT。",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "description": "終わりの日（UTC の YYYY-MM-DD・含む）。サーバーの今日（UTC）より後・from〜to が 92 日を越えると 400 INVALID_ARGUMENT。",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "受領の履歴を日・種類（sourceType）・品目ごとにまとめた grants と、クエストの受け取りを日・クエストごとにまとめた questClaims（どちらも日付の昇順。行の無い組は載らない）。どちらかが 5000 行を越えたら、日付の昇順で先頭の 5000 行に切って truncated が true。クエストの達成率の割り算はクライアントがする（分母は /v1/admin/analytics/players の activePlayers）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAnalyticsGrants"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "gameId・from・to の形が外れている・from が to より後・日数が 92 を越える・to が今日（UTC）より後。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_ARGUMENT"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization が無い・Bearer でない・管理の鍵と違う（プレイヤーのトークンも含む）。外れた理由は返さない（message は Invalid admin credentials）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（正しい管理の鍵があっても断る。鍵を見る前・数える前）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "登録の無いゲーム（Unknown game）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "管理の口の利用制限を超えた（IP ごと。正しい鍵でも数え、鍵を確かめる前に断る）。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・管理の鍵 ADMIN_API_KEY が無いか 32 文字未満）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4394,6 +4604,128 @@
             "items": {
               "$ref": "#/components/schemas/AdminAnalyticsCohort"
             }
+          }
+        }
+      },
+      "AdminAnalyticsGrant": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "date",
+          "sourceType",
+          "itemId",
+          "added",
+          "removed",
+          "entries"
+        ],
+        "properties": {
+          "date": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "受領の履歴の行の時刻の UTC の日付（YYYY-MM-DD）。"
+          },
+          "sourceType": {
+            "type": "string",
+            "description": "受領の履歴の種類（event-claim・quest-claim・admin）。"
+          },
+          "itemId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "added": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "正の増減の合計（増やした量）。"
+          },
+          "removed": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "負の増減の絶対値の合計（減らした量。管理の取り消しはここに出る）。"
+          },
+          "entries": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "受領の履歴の行の数。"
+          }
+        }
+      },
+      "AdminAnalyticsQuestClaim": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "date",
+          "questId",
+          "claims"
+        ],
+        "properties": {
+          "date": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "受け取りの時刻の UTC の日付（YYYY-MM-DD）。"
+          },
+          "questId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "claims": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "その日にそのクエストを受け取った数。"
+          }
+        }
+      },
+      "AdminAnalyticsGrants": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "from",
+          "to",
+          "timezone",
+          "serverTime",
+          "grants",
+          "questClaims",
+          "truncated"
+        ],
+        "properties": {
+          "gameId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "from": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "UTC の日付（YYYY-MM-DD）。"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "UTC の日付（YYYY-MM-DD）。"
+          },
+          "timezone": {
+            "type": "string",
+            "const": "UTC",
+            "description": "日の区切り（全部のゲームで UTC の 0 時）。"
+          },
+          "serverTime": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+            "description": "サーバーの時刻（ISO 8601・UTC・秒まで）。"
+          },
+          "grants": {
+            "type": "array",
+            "maxItems": 5000,
+            "items": {
+              "$ref": "#/components/schemas/AdminAnalyticsGrant"
+            }
+          },
+          "questClaims": {
+            "type": "array",
+            "maxItems": 5000,
+            "items": {
+              "$ref": "#/components/schemas/AdminAnalyticsQuestClaim"
+            }
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "grants か questClaims が 5000 行を越えて切ったとき true（日の範囲を狭めて読み直す）。"
           }
         }
       }

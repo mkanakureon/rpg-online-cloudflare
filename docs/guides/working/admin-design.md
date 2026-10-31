@@ -331,7 +331,7 @@ DELETE FROM inventory_balances
 
 `scripts/` の下に `admin-cli.mjs`（入口）と `admin-requests.mjs`（要求の形の関数。試験と共有。`scripts/cli-requests.mjs` と同じ考え）と、その型のファイル `admin-requests.d.mts`（試験の TypeScript から読み込むため。`scripts/cli-requests.d.mts` と同じ形。無いと `npm run typecheck` で落ちる）を作る。`package.json` に行を足さない（`node` で直に起動する）。
 
-- 呼び方: `node <scripts の下の admin-cli.mjs> <操作> [引数]`。操作は `player`・`audit`・`analytics`（集計。`docs/guides/working/analytics-design.md` §5）・`grant`・`revoke`・`ban`・`unban`・`delete-score`・`put-item`・`put-event`（定義は JSON のファイルを引数で渡す）・`smoke`。行き先は `RPG_API_BASE`（既定 `http://127.0.0.1:8787`。CLI モックと同じ）。`X-Admin-Actor` は `--actor`（既定は OS のユーザー名でなく `local-admin`。個人の名前を勝手に記録しない）。
+- 呼び方: `node <scripts の下の admin-cli.mjs> <操作> [引数]`。操作は `player`・`audit`・`analytics`・`analytics-grants`（集計と配った量。`docs/guides/working/analytics-design.md` §5）・`grant`・`revoke`・`ban`・`unban`・`delete-score`・`put-item`・`put-event`（定義は JSON のファイルを引数で渡す）・`smoke`。行き先は `RPG_API_BASE`（既定 `http://127.0.0.1:8787`。CLI モックと同じ）。`X-Admin-Actor` は `--actor`（既定は OS のユーザー名でなく `local-admin`。個人の名前を勝手に記録しない）。
 - `grant`・`revoke` は新しい `Idempotency-Key` を作って表示し、`--key <値>` で流し直しに同じ鍵を指定できる。
 - `smoke`（通しの確かめ。人が `npm run dev` を起動した後に回す）: ゲストを発行する（ゲームのクライアントの要求の形の関数 `guestRequest` を `scripts/cli-requests.mjs` から読むだけ）→ プレイヤーを読む → `gold` を 50 付与 → 同じ鍵でもう一度（残高 50 のまま）→ 20 取り消し（残高 30）→ 31 取り消し（409 `INSUFFICIENT_BALANCE`）→ BAN → ゲストのトークンで `GET /v1/inventory` が 403 `PLAYER_BANNED` → 解く → 200 で `gold` 30 → 品目とイベントを入れる（ID に時刻を付けて回すたびに新しく）→ ゲストのトークンでイベントの一覧に載る → 監査を読むと、この回の操作が新しい順に並ぶ。最後に `PASS`。
 - **`scripts/cli-mock.mjs` には管理の操作を入れない**（ゲームのクライアントの代わりで、管理の鍵を持たせない。§3）。CLI モックの流れ・出力は変えないので `npm run cli:smoke` は変わらない。管理の通しは上の `smoke` と §8 の `管理コマンドと同じ流れで付与と取り消しとBANとイベントの定義が監査のログに残る`（試験は `admin-requests.mjs` の関数を使う）で確かめる。
