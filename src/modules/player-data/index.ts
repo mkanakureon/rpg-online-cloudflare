@@ -3,7 +3,7 @@
 // どちらも APP_ENV=local の門 → トークン → プレイヤーの利用制限（2 つの口を合わせて RATE_LIMITS.playerData。429）→
 // 止めた印（403 PLAYER_BANNED）→ gameId の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定 → 口ごとの確かめ の順
 // （イベントの checkAccess と同じ形）。プレイヤーはトークンの p だけで決まる（本文・問い合わせの playerId を読まない）。
-// 書き込みは Idempotency-Key が必須（形は src/core/idempotency.ts。src/core/admin/ は読み込まない）。宣言の無いキーは 404、
+// 書き込みは Idempotency-Key が必須（形は src/core/idempotency.ts。管理の口のコードは読み込まない）。宣言の無いキーは 404、
 // 書き方の範囲の外は 400（src/core/player-data.ts の checkChange）で、どちらも何も書かない。書き込みの記録・値・応答の写しを
 // 1 つの batch で書き、記録の一意の鍵（ゲーム・プレイヤー・鍵）で二重を止める。2 回目は 200 で 1 回目と同じ本文。時刻はサーバーの時刻だけ。
 // 順と SQL の正は docs/guides/working/player-data-design.md §4〜§6。実績（achievements・unlocked）は U2 で足す。
