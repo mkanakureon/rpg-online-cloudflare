@@ -115,6 +115,7 @@ const commands = {
   'put-event': (k, [eventId, file], f, actor, gameId) => {
     const definition = JSON.parse(readFileSync(required(file, '<definition.json>'), 'utf8'));
     if (f.reason !== undefined) definition.reason = f.reason;
+    required(definition.reason, '--reason (or "reason" in the definition file)');
     return send(k, putEventOp(required(eventId, '<eventId>'), definition, gameId), { actor });
   },
   'smoke': async (k, _a, _f, actor) => {
