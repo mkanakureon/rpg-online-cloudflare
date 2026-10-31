@@ -469,7 +469,8 @@ describe('O3 データ修正の関数', () => {
   });
 
   it('受領の履歴の種類の名前は台帳のモジュールの1か所にある', () => {
-    expect(LEDGER_SOURCES).toEqual({ eventClaim: 'event-claim', admin: 'admin' });
+    // クエストの Q1 で questClaim の行を足した（quest-design.md §6。名前は変えず、いまの 2 行は変えない）
+    expect(LEDGER_SOURCES).toEqual({ eventClaim: 'event-claim', questClaim: 'quest-claim', admin: 'admin' });
   });
 });
 
