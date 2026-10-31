@@ -188,7 +188,7 @@ INSERT OR IGNORE INTO event_rewards (game_id, event_id, item_id, amount) VALUES 
 | `src/modules/events/index.ts` | `events: GameModule`（`name: 'events'`）。一覧の `GET` と受け取りの `POST` と §5 の SQL | E2 |
 | `src/modules/events/period.ts` | `isOpen`・`periodKey`・`nextResetAt`（§4。入出力の無い関数） | E2 |
 
-受け取りの SQL は所持品の表にも書くが、events のモジュールの中に置く（inventory のモジュールを読み込まない）。付与する口が 2 つ目（クエスト・管理。§13）になったら、付与の文を作る関数を `src/core/ledger.ts` へ移す（§14）。
+受け取りの SQL は所持品の表にも書くが、events のモジュールの中に置く（inventory のモジュールを読み込まない）。付与の口が 2 つ目（管理の増減）になったときの置き場は `admin-design.md` §6 の決定のとおり: 受領の履歴の種類の名前 `LEDGER_SOURCES` と 1 品目の増減の文を `src/core/ledger.ts` に置き、受け取りの 3 文は events のモジュールに残す（種類の名前だけ `LEDGER_SOURCES.eventClaim` を読む）。
 
 ## 4. API と確かめの順・サーバーの時刻
 
@@ -609,7 +609,7 @@ done();
 | プレイヤーごと・段階的なイベントの配信（一部の人だけに開く） | `event_targets(game_id, event_id, player_id)` を足し、一覧と受け取りの文に条件を足す |
 | 夏時間のある時差 | 区切りの時刻の表を持つ形（いまは固定の分） |
 | 古い受け取りの行・履歴の掃除・まとめ | Cron Triggers（`wrangler.jsonc` の `triggers.crons`）。§13 の分析 |
-| 付与の文の共通化 | 付与の口が 2 つ目になったとき `src/core/ledger.ts` へ（§3） |
+| 付与の文の共通化 | `admin-design.md` §6 の決定（種類の名前と 1 品目の増減の文は `src/core/ledger.ts`、受け取りの 3 文は events に残す）。受け取りの 3 文を `src/core/ledger.ts` へ移すかは、クエスト（§13）を足すときに決める（§3） |
 | UE・Unity・ブラウザでの表示と時刻の扱い | Phase 3。`failure-case-test-plan.md` のケース 6 の `UEクライアントは端末の時刻がずれていても期間の判定にサーバーの時刻を使う`（K4） |
 
 ## 15. 指示の表

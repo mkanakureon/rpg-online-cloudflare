@@ -262,15 +262,16 @@
 
 ## 管理の API（ゲームのクライアントは使わない）
 
-運営する人が 1 人のプレイヤーの状態と監査のログを読み、プレイヤーを止める（BAN する）口。**ゲームのクライアント（CLI モック・UE・Unity・ブラウザ）は使わず、管理の鍵を持たせない**。形の正は`openapi/rpg-online-admin.v1.json`（ゲームのクライアントのスキーマ`openapi/rpg-online.v1.json`には入れない）、設計の正は`docs/guides/working/admin-design.md`。
+運営する人が 1 人のプレイヤーの状態と監査のログを読み、プレイヤーを止め（BAN し）、所持品と通貨を付与・取り消し、スコアを消す口。**ゲームのクライアント（CLI モック・UE・Unity・ブラウザ）は使わず、管理の鍵を持たせない**。形の正は`openapi/rpg-online-admin.v1.json`（ゲームのクライアントのスキーマ`openapi/rpg-online.v1.json`には入れない）、設計の正は`docs/guides/working/admin-design.md`。
 
 - 見出しは`Authorization: Bearer <管理の鍵>`。管理の鍵は Worker ごとに 1 つの`ADMIN_API_KEY`（32 文字以上）。ローカルは人が`.dev.vars`（git に入らない）に`ADMIN_API_KEY=<32 文字以上>`を書き、staging・production は`wrangler secret put ADMIN_API_KEY`で渡す。鍵の値をファイル（`wrangler.jsonc`・ソース・試験・文書）に書かない。
 - **`local`でも既定の鍵を持たない**。`ADMIN_API_KEY`が無いか 32 文字未満の環境では、管理の口はどれも**500 `INTERNAL_ERROR`**（鍵の名前・値は返さない）。
 - 鍵が無い・`Bearer`でない・違う（プレイヤーのトークンも含む）は、どれも**401 `UNAUTHENTICATED`**（`message`は`Invalid admin credentials`。外れた理由は返さない）。鍵は SHA-256 にしてから時間の一定な比べで確かめる。鍵を取り替えると、前の鍵はその時から 401（前の鍵を並べて受ける期間は無い）。
 - 読むのも`APP_ENV=local`の時だけ（ほかは正しい鍵があっても**403 `NOT_READY_FOR_PRODUCTION`**）。
 - 確かめの順（どの口も同じ）: `APP_ENV`の守り（403）→ 管理の鍵の有無（500）→ 管理の利用制限（IP ごと。**429 `RATE_LIMITED`**と`Retry-After`。正しい鍵でも数え、鍵を確かめる前に断る）→ 管理の鍵（401）→ `gameId`の形（**400 `INVALID_ARGUMENT`**）→ ゲームの登録（**404 `NOT_FOUND`**・`Unknown game`。機能の設定は見ない）→ 口ごとの確かめ。
-- 書き込みの口（BAN と BAN を解く）は、口ごとの確かめの前に見出し`X-Admin-Actor`（操作した人のラベル。`^[a-zA-Z0-9_.@-]{1,64}$`。自己申告で、そのまま監査のログに残る）と、本文（JSON でなければ**400 `INVALID_JSON`**）の`reason`（1〜200 文字。空白だけは外れ）を確かめる。外れは**400 `INVALID_ARGUMENT`**。
+- 書き込みの口（BAN・BAN を解く・所持品と通貨の増減・スコアを消す）は、口ごとの確かめの前に見出し`X-Admin-Actor`（操作した人のラベル。`^[a-zA-Z0-9_.@-]{1,64}$`。自己申告で、そのまま監査のログに残る）と、本文（JSON でなければ**400 `INVALID_JSON`**）の`reason`（1〜200 文字。空白だけは外れ）を確かめる。外れは**400 `INVALID_ARGUMENT`**。
 - 書き込みの口は、操作 1 回で監査のログに 1 行（誰が・いつ・何を・前と後）を残し、書き込みと監査の行を 1 つの`batch`に入れる（片方だけ残らない）。読み取りの口は監査のログに残さない。
+- データ修正は行を直に書き換えず、履歴に残る形にする（所持品と通貨は受領の履歴に`sourceType: "admin"`の行。スコアは消して前のスコアを監査に残す）。セーブは直さない（読むだけ）。
 
 ### GET /v1/admin/players/{playerId}?gameId=demo-rpg
 
@@ -300,7 +301,7 @@
 
 - 並びは`auditId`の降順（新しい順）。`limit`は 1〜100 の整数（無ければ 20）。`before`は 1 以上の整数で、付けるとその`auditId`より古い行だけを返す。外れは**400 `INVALID_ARGUMENT`**。続きがあれば`nextBefore`（最後の行の`auditId`）が載り、無ければ欄ごと載らない（受領の履歴と同じ）。
 - `actor`は書き込みの口の`X-Admin-Actor`（自己申告のラベル）。`before`・`after`は操作の前と後の状態（保存した JSON を読み直した値。無ければ`null`）。`createdAt`はサーバーの時刻（ISO 8601・UTC・秒まで）。トークン・管理の鍵・セーブの本文・IP は記録しない。
-- 監査のログは API から書き換えも消しもしない。保持の期間は 365 日（消す仕組みは後で足す。それまでは残る）。いま行を書く口は BAN と BAN を解く口（`action`は`player.ban`・`player.unban`、`target`は`player:<playerId>`）。データ修正・イベントの定義の口は後で足す。
+- 監査のログは API から書き換えも消しもしない。保持の期間は 365 日（消す仕組みは後で足す。それまでは残る）。いま行を書く口は BAN と BAN を解く口（`action`は`player.ban`・`player.unban`、`target`は`player:<playerId>`）・所持品と通貨の増減（`inventory.adjust`・`player:<playerId>`）・スコアを消す口（`ranking.delete`・`ranking:<boardId>:<playerId>`）。イベントの定義の口は後で足す。
 
 ### PUT /v1/admin/players/{playerId}/ban?gameId=demo-rpg
 
@@ -348,6 +349,55 @@
 - 監査のログに`player.unban`の 1 行（`before`は消した印`{"reason","expiresAt"}`か`null`、`after`は`null`）。
 - 確かめの順は`PUT`と同じ（`expiresAt`は無い）。
 
+### POST /v1/admin/players/{playerId}/inventory?gameId=demo-rpg
+
+1 人のプレイヤーの所持品・通貨を 1 品目だけ増やす（付与）・減らす（取り消し）。受領の履歴に`sourceType: "admin"`の行（`sourceId`はこの操作の監査の行の参照）が残り、残高は 0 未満にも上限（1,000,000,000）より大きくもならない。
+
+見出し: `Authorization: Bearer <管理の鍵>`・`X-Admin-Actor: <ラベル>`・**`Idempotency-Key: <鍵>`（必須。`^[a-zA-Z0-9_-]{8,64}$`）**。
+
+入力例:
+
+```json
+{"itemId":"gold","delta":-20,"reason":"二重に配った分を戻す"}
+```
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","playerId":"<playerId>","itemId":"gold","delta":-20,"amount":100,"auditId":42}
+```
+
+- `delta`は 0 でない整数（正は付与・負は取り消し）で、絶対値が 1,000,000,000 以下。外れは**400 `INVALID_ARGUMENT`**。`itemId`の形（`^[a-zA-Z0-9_-]{1,64}$`）の外れも 400。
+- `amount`は後の残高。0 になった品目は残高の行が消え、所持品の一覧に出ない。`auditId`は監査の行の番号。
+- `Idempotency-Key`が無い・形の外れは**400 `INVALID_ARGUMENT`**。同じゲームで同じ鍵と同じ中身（`itemId`・`delta`・`reason`・プレイヤー。`X-Admin-Actor`は比べない）をもう一度送ると、何も書かずに**200 で 1 回目と同じ本文**を返す（並べて送っても 1 回分）。同じ鍵で違う中身は**422 `IDEMPOTENCY_KEY_REUSED`**（何も書かない）。鍵は監査の行と一緒に残り（365 日）、修正ごとに新しい鍵を作る。
+- 知らない品目は**404 `NOT_FOUND`**（`Unknown item`）、そのゲームに無いプレイヤーは**404 `NOT_FOUND`**（`Unknown player`）。
+- 取り消しで残高が 0 未満になるときは**409 `INSUFFICIENT_BALANCE`**、付与で上限を超えるときは**409 `INVENTORY_LIMIT_EXCEEDED`**。どれも何も書かない（同じ鍵で流し直せる）。
+- 監査のログに`inventory.adjust`の 1 行（`before`は`{"itemId","amount"}`の前の残高、`after`は後の残高。残高の行が無ければ`amount`は 0）。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`（400）→ `Idempotency-Key`（400）→ `itemId`・`delta`（400）→ 書く（同じ鍵の行 → 品目・プレイヤー（404）→ 残高（409）の順で見分ける）。
+
+### DELETE /v1/admin/rankings/{boardId}/entries/{playerId}?gameId=demo-rpg
+
+1 つのボードの 1 人のスコアを消す（最高スコアだけを残す表なので、下げる・書き換える口は無い）。消した後もプレイヤーはまた投稿できる。
+
+見出し: `Authorization: Bearer <管理の鍵>`・`X-Admin-Actor: <ラベル>`。
+
+入力例:
+
+```json
+{"reason":"不正なスコア"}
+```
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","boardId":"boss-score","playerId":"<playerId>","deleted":true,"auditId":43}
+```
+
+- スコアの行が無ければ**404 `NOT_FOUND`**（`Unknown ranking entry`。監査のログに残さない）。2 回目は 404（もう無い）。`Idempotency-Key`は要らない。
+- ランキングの行だけを見る（そのゲームに無いプレイヤーの行も消せる）。
+- 監査のログに`ranking.delete`の 1 行（`before`は消した行の`{"score","displayName"}`、`after`は`null`）。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`（400）→ 書く。
+
 ## エラーレスポンス
 
 ```json
@@ -356,7 +406,11 @@
 
 現PoCの代表コード: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）、`UNAUTHENTICATED`（401）、`TOKEN_EXPIRED`（401）、`PERMISSION_DENIED`（403）、`SAVE_CONFLICT`（409）、`PAYLOAD_TOO_LARGE`（413）、`SLOT_LIMIT_EXCEEDED`（409）、`RATE_LIMITED`（429）、`EVENT_NOT_ACTIVE`（409）、`INVENTORY_LIMIT_EXCEEDED`（409）、`PLAYER_BANNED`（403）。
 
+管理の口だけのコード（ゲームのクライアントの口は返さない。形の正は`openapi/rpg-online-admin.v1.json`）: `INSUFFICIENT_BALANCE`（409）、`IDEMPOTENCY_KEY_REUSED`（422）。
+
 - **`PLAYER_BANNED`（403）**: トークンの要る口（スコアの投稿・セーブの 4 つ・所持品・受領の履歴・イベントの一覧と受け取り）で、トークンのプレイヤーが管理の口（`PUT /v1/admin/players/{playerId}/ban`）で止められているとき。`message`は`Player is banned`で、止めた理由・期限は返さない。トークンは正しいので、ゲストを発行し直しても同じプレイヤーには戻らない（別の`playerId`の新しいゲストになる）。確かめるのはプレイヤーの利用制限の後（止めた人の要求も数える）で、トークンの無い要求（401）・本文の形の外れ（400）はそれより先に断る。止めた人の要求は何も書かない。トークンを読まない口（お知らせ・ランキングの`GET`・設定）は止めない。
+- **`INSUFFICIENT_BALANCE`（409。管理の口だけ）**: 管理の所持品と通貨の増減で、取り消すと残高が 0 未満になるとき。何も書かない。
+- **`IDEMPOTENCY_KEY_REUSED`（422。管理の口だけ）**: 管理の所持品と通貨の増減で、同じゲームの同じ`Idempotency-Key`を違う中身に使ったとき。何も書かない。
 
 ## 利用制限
 
@@ -380,7 +434,7 @@
 - `Retry-After`は次に送ってよいまでの秒（窓の終わりまで。1〜60 の整数）。クライアントはこの秒だけ待ってから送り直す。どの単位で断ったか・上限の数は返さない。
 - 断った要求も数える。断ったときは行を作らない・変えない。
 - `APP_ENV`の守り（403）が先で、そのときは数えない。IP はハッシュ（SHA-256）にして数え、IP をそのまま残さない。
-- 二重送信の`Idempotency-Key`の見出しは受け取って無視する（スコアは最高スコアだけ残すので、同じ要求を 2 回送っても記録と応答は同じ。回数は 2 回分数える）。
+- ゲームのクライアントの口は、二重送信の`Idempotency-Key`の見出しを受け取って無視する（スコアは最高スコアだけ残すので、同じ要求を 2 回送っても記録と応答は同じ。回数は 2 回分数える）。管理の所持品と通貨の増減の口だけは必須（上の「管理の API」）。
 
 ## 互換の決まり
 
