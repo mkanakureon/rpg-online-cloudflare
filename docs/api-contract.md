@@ -277,14 +277,14 @@
 レスポンス例（200）:
 
 ```json
-{"gameId":"demo-rpg","serverTime":"2026-10-31T15:30:00Z","items":[{"questId":"first-hunt","kind":"once","startsAt":"2026-01-01T00:00:00Z","endsAt":"2100-01-01T00:00:00Z","periodKey":"once","key":"slimes-defeated","threshold":1,"progress":1,"completed":true,"claimed":false,"rewards":[{"itemId":"gold","amount":50}]}]}
+{"gameId":"demo-rpg","serverTime":"2026-10-31T15:30:00Z","items":[{"questId":"daily-slimes","kind":"daily","startsAt":"2026-01-01T00:00:00Z","endsAt":"2100-01-01T00:00:00Z","periodKey":"2026-10-31","nextResetAt":"2026-11-01T00:00:00Z","key":"slimes-defeated","threshold":3,"progress":1,"completed":false,"claimed":false,"rewards":[{"itemId":"potion","amount":1}]},{"questId":"first-hunt","kind":"once","startsAt":"2026-01-01T00:00:00Z","endsAt":"2100-01-01T00:00:00Z","periodKey":"once","key":"slimes-defeated","threshold":1,"progress":1,"completed":true,"claimed":false,"rewards":[{"itemId":"gold","amount":50}]}]}
 ```
 
-- 載るのは**サーバーの時刻でいま開いているクエストだけ**（`startsAt`以上・`endsAt`未満）。並びは`questId`の昇順。受け取った後も期間の内なら載る（`claimed: true`）。いまは一度きり（`kind: "once"`。`periodKey`は`once`・`nextResetAt`は載らない）のクエストだけが載る。
-- `key`は進捗に使うプレイヤーデータのキー、`threshold`は達成に要る数。`progress`は進捗の数で、一度きりのクエストはトークンのプレイヤーのキーのいまの値（`GET /v1/player-data`の`values`と同じ値。書いたことが無ければ 0）。閾値で丸めない（「3 / 3」のような表示はクライアントが丸める）。
+- 載るのは**サーバーの時刻でいま開いているクエストだけ**（`startsAt`以上・`endsAt`未満）。並びは`questId`の昇順。受け取った後も期間の内なら載る（`claimed: true`）。`kind`は区切りで、一度きり（`once`）・デイリー（`daily`）・週間（`weekly`）。`periodKey`はいまの区切り（一度きりは`once`、デイリーはクエストの時差の日付、週間は時差でその日を含む週の月曜の日付）で、サーバーの時刻で決める（`GET /v1/events`と同じ決め方）。`nextResetAt`は次の区切りの時刻（デイリーは次の時差の 0 時、週間は次の時差の月曜 0 時。クエストの`endsAt`を越えない）で、一度きりのクエストには載らない。
+- `key`は進捗に使うプレイヤーデータのキー、`threshold`は達成に要る数。`progress`は進捗の数で、一度きりのクエストはトークンのプレイヤーのキーのいまの値（`GET /v1/player-data`の`values`と同じ値。書いたことが無ければ 0）、デイリー・週間のクエストは**いまの区切りの中でキーに足した分**（区切りが変わると 0 から数え直す。前の区切りの分は数えない）。区切りの中の分は、区切りで数える宣言のある`add`のキーへの書き込み（`POST /v1/player-data`）が同じまとまりで数え、宣言の後の書き込みだけを数える（さかのぼらない）。送り直し（同じ`Idempotency-Key`）・409 の書き込みは数えない。`GET /v1/player-data`の`values`は合計のままで、区切りの中の分はここの`progress`でだけ見える。閾値で丸めない（「3 / 3」のような表示はクライアントが丸める）。
 - `completed`は`progress`が`threshold`以上か（サーバーがその時の値で決める）。値が下がれば（`set`のキーを下げる・管理の直し）、受け取る前のクエストは`false`に戻る。`claimed`はトークンのプレイヤーがいまの区切りで受け取ったか（ほかのプレイヤーの受け取りは数えない）。
 - `serverTime`はサーバーの時刻（`GET /v1/events`と同じ。端末の時刻で期間を決めない）。`rewards`は受け取ると付与される品目と数（品目の ID の昇順）。
-- クエストの名前・説明・物語はサーバーが持たない（マスターデータに置き、クライアントが`questId`で引く）。サーバーが持つのは区切り・期間・見るキーと閾値・報酬だけ。`demo-rpg`の手本はマイグレーションで入っている（`migrations/0015_quests.sql`。一度きりの`first-hunt`〔`slimes-defeated`が 1 以上〕・金貨`gold` 50）。ゲームのクライアントの口にクエストを書き換える口は無い。
+- クエストの名前・説明・物語はサーバーが持たない（マスターデータに置き、クライアントが`questId`で引く）。サーバーが持つのは区切り・期間・見るキーと閾値・報酬だけ。`demo-rpg`の手本はマイグレーションで入っている（`migrations/0015_quests.sql`の一度きりの`first-hunt`〔`slimes-defeated`が 1 以上〕・金貨`gold` 50 と、`migrations/0016_player_data_periods.sql`のデイリーの`daily-slimes`〔その日に`slimes-defeated`を 3 足す〕・薬`potion` 1）。ゲームのクライアントの口にクエストを書き換える口は無い。
 - 読むのも`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順: `APP_ENV`の守り → トークン（401。数えない）→ プレイヤーの利用制限（429 `RATE_LIMITED`。受け取りと合わせて数える）→ 止めた印（403 `PLAYER_BANNED`）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録と機能の設定（404 `NOT_FOUND`。機能`quests`を使わない設定のゲームは`Feature not enabled for this game`）→ 読む。`player-data`・`inventory`を使わない設定のゲームでも通る（進捗が書かれないので達成しない・受け取った品目を`GET /v1/inventory`で読めない、というだけ）。
 
 ## POST /v1/quests/{questId}/claim?gameId=demo-rpg
@@ -297,11 +297,11 @@
 {"gameId":"demo-rpg","questId":"first-hunt","periodKey":"once","claimId":"<claimId>","claimedAt":"2026-10-31T15:30:00Z","grants":[{"itemId":"gold","amount":50}]}
 ```
 
-- 達成はサーバーが受け取りの時に判定する: トークンのプレイヤーのキーの値（プレイヤーデータ）が`threshold`以上のときだけ受け取れる。値は**自己申告**のプレイヤーデータなので、守りはプレイヤーデータの守り（宣言・範囲・1 回の増加の上限・書き方・利用制限）のまま。
+- 達成はサーバーが受け取りの時に判定する: トークンのプレイヤーの進捗（一度きりはキーの値、デイリー・週間はいまの区切りの中で足した分。`GET /v1/quests`の`progress`と同じ）が`threshold`以上のときだけ受け取れる。デイリー・週間のクエストは区切りごとに 1 回受け取れる（`periodKey`はサーバーの時刻で決めたいまの区切り）。値は**自己申告**のプレイヤーデータなので、守りはプレイヤーデータの守り（宣言・範囲・1 回の増加の上限・書き方・利用制限）のまま。
 - 受け取ると、`grants`の品目がトークンのプレイヤーの所持品に足され、受領の履歴（`GET /v1/inventory/history`）に品目ごとに 1 行（`sourceType: "quest-claim"`・`sourceId`が`claimId`）残る。受け取りの行・履歴・残高は 1 つのまとまり（D1 の`batch`）で書くので、片方だけ残らない。応答に残高は入らない（`GET /v1/inventory`で読む）。
 - **同じ区切りの 2 回目以降は 200 で 1 回目と同じ本文**（同じ`claimId`・`claimedAt`・`grants`）を返し、残高も履歴も増えない。並べて送っても付与は 1 回分（プレイヤー・クエスト・区切りの一意の鍵で止める）。受け取った後に値が下がっても、期間が終わっても、同じ本文の 200 になる。届かなかった要求は同じ要求を送り直すだけでよい。`Idempotency-Key`の見出しは読まない（無くても冪等）。
 - 期間はサーバーの時刻だけで決める。受け取っていないクエストで期間の外（終わった・まだ始まらない）は**409 `QUEST_NOT_ACTIVE`**、進捗が閾値に届いていなければ**409 `QUEST_NOT_COMPLETED`**、付与すると残高が 1,000,000,000（`MAX_ITEM_AMOUNT`）を超える品目があれば**409 `INVENTORY_LIMIT_EXCEEDED`**で、どれも何も書かない（もう一度送れる）。
-- そのゲームに無いクエストは**404 `NOT_FOUND`**（`message`は`Unknown quest`。いまは一度きりでないクエストも同じ）。`questId`の形（`^[a-zA-Z0-9_-]{1,64}$`）が外れていればどのルートにも当たらず**404 `NOT_FOUND`**（`Endpoint not found`）。
+- そのゲームに無いクエストは**404 `NOT_FOUND`**（`message`は`Unknown quest`）。`questId`の形（`^[a-zA-Z0-9_-]{1,64}$`）が外れていればどのルートにも当たらず**404 `NOT_FOUND`**（`Endpoint not found`）。
 - 書込み系 API なので`APP_ENV=local`の時だけ・トークンがある時だけ通る（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順: `APP_ENV`の守り → トークン（401。数えない）→ プレイヤーの利用制限（429 `RATE_LIMITED`。一覧と合わせて数え、断ったときは何も書かない）→ 止めた印（403 `PLAYER_BANNED`）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403）→ ゲームの登録と機能の設定（404）→ クエストがあるか（404）→ 書く（期間・進捗・上限は書く文の条件で見る。409 `QUEST_NOT_ACTIVE`・`QUEST_NOT_COMPLETED`・`INVENTORY_LIMIT_EXCEEDED`）。
 
 ## GET /v1/config?gameId=demo-rpg&clientVersion=…

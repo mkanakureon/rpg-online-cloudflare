@@ -186,7 +186,7 @@ INSERT OR IGNORE INTO event_rewards (game_id, event_id, item_id, amount) VALUES 
 | `src/modules/inventory/index.ts` | `inventory: GameModule`（`name: 'inventory'`）。§4 の所持品と受領の履歴の 2 つの `GET` | E1 |
 | `src/modules/inventory/shape.ts` | `shapeInventory(rows)`（通貨と所持品に分け、品目の ID の昇順）・`parseHistoryQuery(url)`（`limit`・`before`）。入出力の無い関数 | E1 |
 | `src/modules/events/index.ts` | `events: GameModule`（`name: 'events'`）。一覧の `GET` と受け取りの `POST` と §5 の SQL | E2 |
-| `src/modules/events/period.ts` | `isOpen`・`periodKey`・`nextResetAt`（§4。入出力の無い関数） | E2 |
+| `src/core/period.ts` | `isOpen`・`periodKey`・`nextResetAt`・`isoSeconds`（§4。入出力の無い関数。クエスト・プレイヤーデータのモジュールと管理の口も読むので core に置く。置き場の正は `docs/guides/working/quest-design.md` §3） | E2 |
 
 受け取りの SQL は所持品の表にも書くが、events のモジュールの中に置く（inventory のモジュールを読み込まない）。付与の口が 2 つ目（管理の増減）になったときの置き場は `admin-design.md` §6 の決定のとおり: 受領の履歴の種類の名前 `LEDGER_SOURCES` と 1 品目の増減の文を `src/core/ledger.ts` に置き、受け取りの 3 文は events のモジュールに残す（種類の名前だけ `LEDGER_SOURCES.eventClaim` を読む）。
 
@@ -239,7 +239,7 @@ INSERT OR IGNORE INTO event_rewards (game_id, event_id, item_id, amount) VALUES 
 
 - 応答に残高は入れない（2 回目も同じ本文にするため。残高は `GET /v1/inventory` で読む）。
 
-### 期間と区切り（`src/modules/events/period.ts`。サーバーの時刻だけを入力にする）
+### 期間と区切り（`src/core/period.ts`。サーバーの時刻だけを入力にする）
 
 `now` は Worker の `Math.floor(Date.now() / 1000)`。**クライアントの時刻（本文・クエリ・`Date` の見出し）を受け取らない**。試験は関数に `now` を渡して確かめ、L2 はイベントの期間をいまの時刻の前後に置いて確かめる（§8）。
 
