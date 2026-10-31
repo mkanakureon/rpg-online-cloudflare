@@ -458,6 +458,7 @@ INSERT INTO player_data_period_values (game_id, player_id, key, kind, period_key
 | `モジュールの一覧はannouncementsとrankingsとsavesとconfigとinventoryとeventsとplayer-dataでルートが重ならない` | Q1 | 名前の中の機能の一覧が変わる | `…とplayer-dataとquestsで…` に置き換える |
 | `demo-rpgはannouncementsとrankingsとsavesとconfigとinventoryとeventsとplayer-dataを使う設定で登録される` | Q1 | マイグレーションで demo-rpg に機能が足される | `…とplayer-dataとquestsを使う…` に置き換える |
 | `利用制限の回数と窓は定数のモジュールにある`（`test/rate-limits.test.ts`） | Q1 | `RATE_LIMITS` を `toEqual` で比べているので、`quests` を足すと落ちる | 名前は変えず、期待に `quests` の行を足す（いまの 7 行は変えない）。§10 の `クエストの利用制限の回数と窓は定数のモジュールにある` が足した行を別に見る |
+| `受領の履歴の種類の名前は台帳のモジュールの1か所にある`（`test/admin.test.ts`） | Q1 | `LEDGER_SOURCES` を `toEqual` で比べているので、`questClaim` を足すと落ちる | 名前は変えず、期待に `questClaim` の行を足す（いまの 2 行は変えない） |
 | `エラーの応答はスキーマに書いた状態とエラーコードの組で返る`（`test/schema-conformance.test.ts`） | Q1 | 全部のコードを 1 回ずつ出す試験で、2 つの新しいコードが出ないと落ちる | 名前は変えず、`claimQuest` で 2 つの 409 を起こす行を足す。いまの行と期待は変えない |
 | `PLAYER_BANNEDの応答はスキーマに合う`（`test/bans.test.ts`） | Q1 | スキーマの 401 を持つ操作の一覧と試験の要求の表を `toEqual` で比べるので、2 つの操作を足すと落ちる | 名前は変えず、要求の表に `listQuests`・`claimQuest` の 2 行を足す（確かめる中身を弱めない） |
 | `CLIモックの通しの流れを続けて2回回しても利用制限に掛からない`（`test/failure-server.test.ts`） | Q1 | CLI モックの流れにクエストの手順が足される | 流れにクエストの 4 回を足し、期待の件数を 32 から 40 にする（「全部 200」は変えない。見る範囲が増える） |
