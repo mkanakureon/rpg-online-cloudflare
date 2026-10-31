@@ -11,7 +11,7 @@
 
 ### ゴール
 
-開発者（とその代わりに動く無人の Claude）が、§10 の試験の名前を `requireTests` に渡して実装の Issue を U1〜U3 の順に回し、**CLI モック（`scripts/cli-mock.mjs`）がゲストのトークンで、ゲームが宣言したキーの統計値を増やし（同じ `Idempotency-Key` で送り直しても 1 回分にしかならない）、宣言していないキー・範囲の外の値・1 回の上限を超える増加は断られ、統計値が閾値を越えるとサーバーが実績を解いて応答に載せ、管理コマンド（`scripts/admin-cli.mjs`）がそのプレイヤーの値と実績を読み、直すと監査のログに前と後が残る**のを見て、サーバーがゲームの中の意味（実績の名前・説明・解除の意味）を持たずに数と真偽だけを持ち、クエストと分析がそれを数として読めると分かる。
+開発者（とその代わりに動く無人の Claude）が、§10 の試験の名前を `requireTests` に渡して実装の Issue を U1〜U3 の順に回し、**CLI モック（`scripts/cli-mock.mjs`）がゲストのトークンで、ゲームが宣言したキーの統計値を増やし（同じ `Idempotency-Key` で送り直しても 1 回分にしかならない）、統計値が閾値を越えるとサーバーが実績を解いて応答に載せ、宣言していないキー・範囲の外の値・1 回の上限を超える増加が断られることを §10 の試験が確かめ、管理コマンド（`scripts/admin-cli.mjs`）がそのプレイヤーの値と実績を読み、直すと監査のログに前と後が残る**のを見て、サーバーがゲームの中の意味（実績の名前・説明・解除の意味）を持たずに数と真偽だけを持ち、クエストと分析がそれを数として読めると分かる。
 
 ### 合格の条件（この設計書の）
 
@@ -67,7 +67,7 @@
 
 Cloudflare の機能（2026-10-31。確かめたものと、要確認のもの）:
 
-- **D1 の `batch`**: 文を順に流し、どれかが落ちれば全部戻る（`src/core/env.ts` の決まりで、イベントの受け取り・管理の増減が頼っている。`event-reward-design.md` §1 と同じ前提）。
+- **D1 の `batch`**: 文を順に流し、どれかが落ちれば全部戻る（`src/core/env.ts` の決まりで、イベントの受け取り・管理の増減が頼っている。`event-reward-design.md` §1 と同じ前提）。並べて送った要求の `batch` が互いに混ざらず順に流れること（1 つの書き手）は、公式の文書では確かめておらず**要確認**（`abuse-protection-design.md` §3 と同じ前提。イベントの試験 `同じ期間の受け取りを並べて送っても付与は1回分` がローカルの D1 で通っていることだけを確かめた）。
 - **D1 の JSON の関数（`json_object`・`json_group_array`）**: 公式の文書では確かめていない。リポジトリの管理の口（`src/core/admin/routes.ts`）が使っていて、`test/admin.test.ts` が Workers のランタイムと D1 の中で通っていることで動くのを確かめた。§6 の応答の写しを SQL の中で作るのに使う。
 - **D1 の書き込みの速さ・行の数・データベースの大きさの上限**: **要確認**（`operations-security.md` の方針どおり数字を固定しない）。§6 の書き込みの記録（1 回の書き込みで 1 行）が増える量は、利用制限の数で抑える（§9）。
 - Durable Objects・Queues・Cron Triggers: この設計では**使わない**（§13 の決めること 9）。
@@ -177,6 +177,8 @@ CREATE TABLE IF NOT EXISTS player_achievements (
   PRIMARY KEY (game_id, player_id, achievement_id),
   FOREIGN KEY (game_id, achievement_id) REFERENCES achievements(game_id, achievement_id)
 );
+-- §6 の文 4（この書き込みで解いた実績）が write_ref で引く
+CREATE INDEX IF NOT EXISTS player_achievements_write ON player_achievements (write_ref);
 -- demo-rpg の手本の実績
 INSERT OR IGNORE INTO achievements (game_id, achievement_id, key, threshold) VALUES ('demo-rpg', 'first-slime', 'slimes-defeated', 1);
 INSERT OR IGNORE INTO achievements (game_id, achievement_id, key, threshold) VALUES ('demo-rpg', 'boss-1', 'boss-1-defeated', 1);
@@ -193,7 +195,7 @@ INSERT OR IGNORE INTO achievements (game_id, achievement_id, key, threshold) VAL
 | `MAX_PLAYER_DATA_VALUE` | 1,000,000,000（スコア・所持品の上限と同じ） | `src/core/player-data.ts`（モジュールと管理の口〔`src/core/admin/`〕の両方が読む）。DB の `CHECK` と 2 か所 | U1 |
 | `PLAYER_DATA_MODES` | `['add', 'max', 'set', 'flag']` | `src/core/player-data.ts` | U1 |
 | `MAX_CHANGES_PER_WRITE` | 20（1 回の書き込みのキーの数。`batch` の文の数を抑える） | `src/modules/player-data/limits.ts` | U1 |
-| `MAX_PLAYER_DATA_KEYS` | 200（1 ゲームの宣言の数。1 プレイヤーの行の数の上限にもなる） | `src/core/player-data.ts`（管理の宣言の口が確かめる） | U3 |
+| `MAX_PLAYER_DATA_KEYS` | 200（1 ゲームの宣言の数。1 プレイヤーの行の数の上限にもなる。§13 の決めること 14） | `src/core/player-data.ts`（管理の宣言の口が確かめる） | U3 |
 | `RATE_LIMITS.playerData` | `{ scope: 'player-data', limit: 60, period: 60 }` | `src/core/rate-limit-policy.ts`（`abuse-protection-design.md` §2 の表にも行を足す。§9） | U1 |
 
 `IDEMPOTENCY_KEY_PATTERN`・`parseIdempotencyKey` は U1 で `src/core/admin/audit.ts` から `src/core/idempotency.ts` へ移す（管理の口とプレイヤーデータのモジュールの両方が読む。モジュールが `src/core/admin/` を読み込まないように。値と形は変えない）。
@@ -266,7 +268,7 @@ INSERT OR IGNORE INTO achievements (game_id, achievement_id, key, threshold) VAL
 
 ### 自己申告の扱い（`abuse-protection-design.md` §6 のスコアと同じ考え）
 
-サーバーは値がゲームの中で取れたかを確かめられない（ルールを持たない。ADR 0002）。**ゲームを問わず効くものだけ**をやり、値は**自己申告**として扱う。
+サーバーは値がゲームの中で取れたかを確かめられない（ルールを持たない。ADR 0002）。**ゲームを問わず効くものだけ**をやり、値は**自己申告**として扱う（§13 の決めること 12・13）。
 
 | やる（ゲームを問わない） | 何を止めるか |
 | --- | --- |
@@ -318,7 +320,7 @@ UPDATE player_data_writes SET result_json = json_object(
 | 行がある・`request_hash` が違う | 422 `IDEMPOTENCY_KEY_REUSED`（管理のスキーマにあるコードを、ゲームのクライアントのスキーマにも足す） |
 | 行が無い | 409 `PLAYER_DATA_LIMIT_EXCEEDED`（文 1 の `add` の上限の条件で止まった） |
 
-- 並べて送っても: D1 は `batch` を順に流すので、2 つ目の `batch` の文 1 は一意の鍵で何もせず、その `write_ref` の行が無いので文 2〜4 も何もしない（イベントの受け取り・管理の増減と同じ）。
+- 並べて送っても: D1 は `batch` を順に流すので（§1 の**要確認**の前提）、2 つ目の `batch` の文 1 は一意の鍵で何もせず、その `write_ref` の行が無いので文 2〜4 も何もしない（イベントの受け取り・管理の増減と同じ）。
 - 違う鍵の `add` を並べて送ると、どちらも足される（別の書き込み）。上限の条件は文 1 が書く前の値で見るので、2 つ合わせて `max_value` を超えれば後の方が 409。
 - `request_hash` は `{"gameId","changes"}`（`changes` はキーの昇順に並べ直す）を決まった順の JSON にして SHA-256（16 進）。並びだけ違う同じ本文は同じ書き込みとみなす。
 - 鍵の範囲はプレイヤーごと（`UNIQUE (game_id, player_id, request_key)`）。別のプレイヤーが同じ鍵を使っても当たらない。
@@ -354,7 +356,7 @@ INSERT INTO player_achievements (game_id, player_id, achievement_id, unlocked_at
 | 口 | 本文 | 応答・決まり | 監査の `action`（前 → 後） |
 | --- | --- | --- | --- |
 | `GET /v1/admin/players/{playerId}` に欄を足す | — | `"playerData":{"values":[{"key","mode","value","updatedAt"}],"achievements":[{"achievementId","unlockedAt","writeId"}]}`（いつも載せる。無ければ空の配列） | 残さない（読み取り） |
-| `PUT /v1/admin/player-data/keys/{key}?gameId=…` | `{"mode":"add","maxValue":1000000000,"maxDelta":100,"reason":"…"}` | 無ければ作る。値の行があるキーの `mode` は変えられない（400）。`maxValue`・`maxDelta` は変えられる（前に書いた値が新しい上限を超えても消さない。次の `add` から効く）。宣言が `MAX_PLAYER_DATA_KEYS` を超えるなら 400 | `player-data-key.put`（前の宣言 → 後の宣言） |
+| `PUT /v1/admin/player-data/keys/{key}?gameId=…` | `{"mode":"add","maxValue":1000000000,"maxDelta":100,"reason":"…"}` | 無ければ作る。値の行があるキーの `mode` は変えられない（400）。`maxValue`・`maxDelta` は変えられる（前に書いた値が新しい上限を超えても消さない。次の `add` から効く）。宣言が `MAX_PLAYER_DATA_KEYS` を超えるなら 400。本文の確かめ（`parsePlayerDataKey`。400）で表の `CHECK` と同じ決まり（`maxDelta` は `add` のときだけ必須で、ほかは送らない・`flag` の `maxValue` は 1・`maxValue` と `maxDelta` は 1〜`MAX_PLAYER_DATA_VALUE`）を先に見る（DB の `CHECK` で落ちて 500 にしない） | `player-data-key.put`（前の宣言 → 後の宣言） |
 | `PUT /v1/admin/achievements/{achievementId}?gameId=…` | `{"key":"slimes-defeated","threshold":10,"reason":"…"}` | 宣言の無いキーは 404 `Unknown key`。解いた人がいる実績の `key` は変えられない（400）。`threshold` は変えられる（解いた人の行は消さない） | `achievement.put`（前 → 後） |
 | `PUT /v1/admin/players/{playerId}/player-data/{key}?gameId=…` | `{"value":0,"reason":"不正な連打の分を戻す"}` | 値を置く（`mode` に関わらず 0〜`max_value`）。`game_players` に無いプレイヤーは 404 `Unknown player`、無いキーは 404 `Unknown key`。実績は判定しない（解かない・取り消さない） | `player-data.set`（`{"key","value"}` か `null` → `{"key","value"}`） |
 | `DELETE /v1/admin/players/{playerId}/achievements/{achievementId}?gameId=…` | `{"reason":"…"}` | 解いた行を消す。無ければ 404 `Unknown achievement`（監査も残さない。`ranking.delete` と同じ） | `achievement.revoke`（`{"achievementId","unlockedAt"}` → `null`） |
@@ -465,7 +467,7 @@ INSERT INTO player_achievements (game_id, player_id, achievement_id, unlocked_at
 | `利用制限の回数と窓は定数のモジュールにある`（`test/rate-limits.test.ts`） | U1 | `RATE_LIMITS` を `toEqual` で比べているので、`playerData` を足すと落ちる | 名前は変えず、期待に `playerData` の行を足す（いまの 6 行は変えない）。§10 の `プレイヤーデータの利用制限の回数と窓は定数のモジュールにある` が足した行を別に見る |
 | `エラーの応答はスキーマに書いた状態とエラーコードの組で返る`（`test/schema-conformance.test.ts`） | U1 | 全部のコードを 1 回ずつ出す試験で、2 つの新しいコードが出ないと落ちる | 名前は変えず、`writePlayerData` で 409 と 422 を起こす行を足す。いまの行と期待は変えない |
 | `PLAYER_BANNEDの応答はスキーマに合う`（`test/bans.test.ts`） | U1 | スキーマの 401 を持つ操作の一覧と試験の要求の表を `toEqual` で比べるので、2 つの操作を足すと落ちる | 名前は変えず、要求の表に `getPlayerData`・`writePlayerData` の 2 行を足す（確かめる中身を弱めない） |
-| `CLIモックの通しの流れを続けて2回回しても利用制限に掛からない`（`test/failure-server.test.ts`） | U2 | CLI モックの流れにプレイヤーデータの手順が足される | 流れにプレイヤーデータの 4 回を足す（期待「全部 200」は変えない。見る範囲が増える） |
+| `CLIモックの通しの流れを続けて2回回しても利用制限に掛からない`（`test/failure-server.test.ts`） | U2 | CLI モックの流れにプレイヤーデータの手順が足される | 流れにプレイヤーデータの 4 回を足し、期待の件数を 24 から 32 にする（「全部 200」は変えない。見る範囲が増える） |
 | `今のCLIモックと同じ形の要求を受け付ける`（`test/failure-server.test.ts`） | 全部 | **変わらない**（いまの要求の形を変えない。プレイヤーデータの手順は流れの後ろに足すだけ） | 変えない。API を変えたら CLI モックも直す合図のまま。U1〜U3 の `requireTests` に入れて見張る |
 | `管理の読み取りはプレイヤーの所持品と履歴とセーブの一覧とスコアを返しセーブの中身は返さない`（`test/admin.test.ts`） | U3 | **変わらない**（欄ごとに見ていて、`playerData` の欄を足しても落ちない） | 直さない。U3 の `requireTests` に入れて見張る |
 | `管理のスキーマの操作は管理のルートと1対1で対応する` | U3 | **変わらない**（名前に数が無い。ルートとスキーマに同じ 4 つを足す） | 直さない。U3 の `requireTests` に入れる |
@@ -478,7 +480,7 @@ INSERT INTO player_achievements (game_id, player_id, achievement_id, unlocked_at
 
 API を変えたら CLI モックも合わせる（`CLAUDE.md` のプロジェクトの決まり）。いまの流れ（健康 → 設定 → お知らせ → ゲスト → スコア → セーブ → イベントと所持品）は**変えず、最後に足す**ので、いまの `npm run cli:smoke` は壊れない（`player-data` を使わない設定・`0013` を当てていない DB で 404 になったときは飛ばさず `HTTP 404` で止まる。CLI モックは demo-rpg だけを使い、demo-rpg は `0013` で `player-data` を使う設定になるので、404 はマイグレーションの当て忘れを知らせる失敗として扱う。イベントと同じ扱い）。
 
-足す手順（同じゲストのトークン）:
+足す手順（同じゲストのトークン。§13 の決めること 15）:
 
 1. `GET /v1/player-data?gameId=demo-rpg` → 200・`values: []`・`achievements: []`。
 2. `POST /v1/player-data?gameId=demo-rpg`、新しい `Idempotency-Key`、本文 `{"changes":[{"key":"slimes-defeated","value":1}]}` → 200・`values` に 1・`unlocked` に `first-slime`。
@@ -507,6 +509,10 @@ API を変えたら CLI モックも合わせる（`CLAUDE.md` のプロジェ�
 | 9 | Cron Triggers・Durable Objects を使うか | A: **使わない（D1 の `batch` と一意の鍵だけ）**。B: プレイヤーごとの Durable Object で書き込みを順に処理する。C: 実績の判定を Cron Triggers でまとめて流す | **A**。`wrangler.jsonc` もパッケージも変えずに済む。B は D1 の一意の鍵で足りる二重の止めに、クラスと設定を足す。C は解けるまでに間ができ、応答で「解けた」を返せない |
 | 10 | 機能の名前（`game_modules`） | A: **`player-data` の 1 つ（実績も含む）**。B: `player-data` と `achievements` の 2 つ | **A**。実績は値の書き込みの中で判定するので、値を使わず実績だけ使うことはできない。B は分けても選べる組み合わせが増えない。機能の設定は認可の代わりにしない（決定のまま） |
 | 11 | パッケージ | A: **足さない（D1・Web Crypto だけ）**。B: JSON の形の確かめのライブラリを足す | **A**。本文の形は小さく、`parseChanges` の手書きで足りる。`package.json` を変えない |
+| 12 | クライアントの自己申告をどこまで信じるか | A: **スコアと同じ扱い（`abuse-protection-design.md` §6）。サーバーはゲームを問わない守り〔宣言・範囲・1 回の上限・書き方の固定・利用制限・サーバーの時刻〕だけをやり、値は申告として扱う（§5）**。B: ゲームごとに署名やリプレイの照合を足して確かめる。C: 信じない（プレイヤーデータを書く口を作らず、サーバーの出来事〔報酬の受け取りなど〕からだけ数える） | **A**。値がゲームの中で取れたかはゲーム固有のルールで、共通のサーバーは確かめられない（ADR 0002）。B は作者ごとのルールと鍵をサーバーに入れることになり、クライアントの長期の鍵は安全とみなさない（`architecture.md` の 5）。C はゲームの中の出来事（倒した数・進んだ章）をサーバーが知る道が無く、クエストと分析の元が無くなる。限界は §5 にそのまま書き、不正は管理（§8）と BAN で対処する |
+| 13 | 1 回の増加の上限 | A: **キーごとの `max_delta`（宣言に持つ。`add` のキーだけ）**。B: 全部のキーで一律の定数。C: 上限を持たない（`max_value` と利用制限だけ） | **A**。1 回で増えうる数はキーの意味で違い（倒した数は 10、得た経験値は 10,000）、作者が意味を知っている。B は小さくすると正しい送信を断り、大きくすると守りにならない。C は 1 回で `max_value` まで増やせ、利用制限が効かない |
+| 14 | 上限の数（キーの数・値の範囲・利用制限） | A: **1 ゲーム 200 キー（`MAX_PLAYER_DATA_KEYS`。1 プレイヤーの行の数の上限にもなる）・値は 0〜1,000,000,000（スコア・所持品と同じ）・1 回の書き込みは 20 キー・利用制限はプレイヤーごと 60 秒に 60 回（`rewards`・`saves` と同じ）**。B: キーの数を持たない（行の数を利用制限だけで抑える）。C: 値に負の数も許す | **A**。宣言だけを受け付けるので、1 プレイヤーの行の数は宣言の数で決まり、表が太らない。値の上限を既存と揃えると、クライアントの整数の型（32 ビットを越えない範囲の扱い）が口ごとに変わらない。B は管理の口の打ち間違いで宣言が増え続ける。C は「数え上げ」と「最大値」の意味に負が要らず、`CHECK` が 1 つ緩むだけ。上げるのは互換を壊さない（通っていた要求は通る） |
+| 15 | CLI モックに足す手順 | A: **成功の道の 4 手順（読む → 増やす → 同じ鍵で送り直す → 読み直す）。断られる例は §10 の試験で見る**。B: A に断られる例（宣言の無いキー・1 回の上限を超える増加）を足す。C: 足さない（試験だけ） | **A**。CLI モックは 3 つのクライアントの代わりで、クライアントが実際に通る道（送り直しで二重にならない・実績が解ける）を見せる。B は断られる応答で止まらない作りを CLI モックに入れることになり、いまの「どれかが失敗したら止まる」作りと合わない（断られる例は §10 の L2 で見る）。C は `npm run cli:smoke` で人が通しを見られない |
 
 ## 14. 実装の束
 
@@ -547,6 +553,7 @@ const all = readdirSync('test').filter((f) => f.endsWith('.ts')).map((f) => read
 check(!all.includes('スキーマのErrorCodeの列挙は15個のエラーコードと一致する'), '置き換えた試験が残っていない（15個のコード）');
 check(!all.includes('スキーマのファイルはOpenAPI 3.1で15個の操作を持つ'), '置き換えた試験が残っていない（15個の操作）');
 check(!all.includes("'モジュールの一覧はannouncementsとrankingsとsavesとconfigとinventoryとeventsでルートが重ならない'"), '置き換えた試験が残っていない（モジュールの一覧）');
+check(!all.includes("'demo-rpgはannouncementsとrankingsとsavesとconfigとinventoryとeventsを使う設定で登録される'"), '置き換えた試験が残っていない（demo-rpg の設定）');
 runTests();
 requireTests([
   'プレイヤーデータの変更の本文はキーが重ならず行の数と整数を確かめる',
@@ -718,13 +725,13 @@ done();
 | Issue #38 の指示 | どこで答えるか |
 | --- | --- |
 | 何を持つか（実績・進行状態・統計値の分け方）とセーブとの境目 | §2・§13 の決めること 1・2 |
-| データの形（D1 の表・新しいマイグレーションの番号）とキーの決め方（1 プレイヤーのキーの数・値の範囲の上限） | §3・§13 の決めること 3 |
-| 書き方（増やす・最大値で置く・値で置く・真偽を立てる）・クライアントの自己申告をどこまで信じるか・1 回の増加の上限 | §5・§13 の決めること 5 |
+| データの形（D1 の表・新しいマイグレーションの番号）とキーの決め方（1 プレイヤーのキーの数・値の範囲の上限） | §3・§13 の決めること 3・14 |
+| 書き方（増やす・最大値で置く・値で置く・真偽を立てる）・クライアントの自己申告をどこまで信じるか・1 回の増加の上限 | §5・§13 の決めること 5・12・13 |
 | 二重の止め方（`Idempotency-Key`・表・送信 ID）と利用制限 | §6・§9・§13 の決めること 4 |
 | 実績の解除をサーバーが判定するか、クライアントが申告するか | §7・§13 の決めること 6 |
 | API とその確かめの順・認証・`APP_ENV`・BAN | §4・§9 |
 | 管理との関係（読む・直す・監査） | §8・§13 の決めること 8 |
-| `scripts/cli-mock.mjs` の通しのシナリオ（`npm run cli:smoke` を壊さない） | §12 |
+| `scripts/cli-mock.mjs` の通しのシナリオ（`npm run cli:smoke` を壊さない） | §12・§13 の決めること 15 |
 | 試験の名前（束は `U1`・`U2`…）・名前の中の数の試験・互換の試験 | §10・§11 |
 | 実装の束と、束ごとの確認コマンドの案（`requireTests`・`gitClean` に `base`） | §14 |
 | Phase 2 の残りの項目（クエスト・分析） | §15 |
