@@ -691,7 +691,7 @@ done();
 | 項目（`roadmap.md` Phase 2） | この設計との関係 |
 | --- | --- |
 | プレイヤーデータ（実績・進行状態・統計値） | `player-data-design.md` §8 のとおり（U3）。プレイヤーを読む口（§5）に欄 `playerData`（値と解いた実績）を足し、キーと実績の宣言・値を置く・実績の取り消しの 4 つの口は §6 と同じく監査に前と後を残す（`player-data-key.put`・`achievement.put`・`player-data.set`・`achievement.revoke`）。管理コマンド（§7）に操作 `put-data-key`・`put-achievement`・`set-data`・`revoke-achievement` |
-| クエスト（達成条件・報酬・進捗） | 報酬の付与は受け取りと同じ形（報酬の表から SQL で読む・一意の鍵・1 つの `batch`）で、種類の名前は `LEDGER_SOURCES.questClaim`（`quest-claim`）。受け取りの 3 文はクエストのモジュールに置き、`src/core/ledger.ts` へ移さない。正は `quest-design.md` §6。クエストの定義は §7 のイベントの定義と同じく管理の口で入れる（`quest-design.md` §8。Q3） |
+| クエスト（達成条件・報酬・進捗） | 報酬の付与は受け取りと同じ形（報酬の表から SQL で読む・一意の鍵・1 つの `batch`）で、種類の名前は `LEDGER_SOURCES.questClaim`（`quest-claim`）。受け取りの 3 文はクエストのモジュールに置き、`src/core/ledger.ts` へ移さない。正は `quest-design.md` §6。クエストの定義は §7 のイベントの定義と同じく管理の口 `PUT /v1/admin/quests/{questId}`（監査の `quest.put`）で入れ、プレイヤーを読む口に `questClaims`、値を置く口に区切りの値の頭打ちを足した（`quest-design.md` §8） |
 | 分析（DAU・継続率）・バックアップ・費用アラート | 監査のログの保持（365 日）を過ぎた行の掃除を Cron Triggers で作る（§5・§11 の決めること 13）。受領の履歴の `source_type = 'admin'` の行は、管理の付与と取り消しの集計の元になる。バックアップと費用アラートは管理の口と関係しない |
 
 ## 14. 範囲の外と、後から足せる形

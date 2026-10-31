@@ -284,7 +284,7 @@
 - `key`は進捗に使うプレイヤーデータのキー、`threshold`は達成に要る数。`progress`は進捗の数で、一度きりのクエストはトークンのプレイヤーのキーのいまの値（`GET /v1/player-data`の`values`と同じ値。書いたことが無ければ 0）、デイリー・週間のクエストは**いまの区切りの中でキーに足した分**（区切りが変わると 0 から数え直す。前の区切りの分は数えない）。区切りの中の分は、区切りで数える宣言のある`add`のキーへの書き込み（`POST /v1/player-data`）が同じまとまりで数え、宣言の後の書き込みだけを数える（さかのぼらない）。送り直し（同じ`Idempotency-Key`）・409 の書き込みは数えない。`GET /v1/player-data`の`values`は合計のままで、区切りの中の分はここの`progress`でだけ見える。閾値で丸めない（「3 / 3」のような表示はクライアントが丸める）。
 - `completed`は`progress`が`threshold`以上か（サーバーがその時の値で決める）。値が下がれば（`set`のキーを下げる・管理の直し）、受け取る前のクエストは`false`に戻る。`claimed`はトークンのプレイヤーがいまの区切りで受け取ったか（ほかのプレイヤーの受け取りは数えない）。
 - `serverTime`はサーバーの時刻（`GET /v1/events`と同じ。端末の時刻で期間を決めない）。`rewards`は受け取ると付与される品目と数（品目の ID の昇順）。
-- クエストの名前・説明・物語はサーバーが持たない（マスターデータに置き、クライアントが`questId`で引く）。サーバーが持つのは区切り・期間・見るキーと閾値・報酬だけ。`demo-rpg`の手本はマイグレーションで入っている（`migrations/0015_quests.sql`の一度きりの`first-hunt`〔`slimes-defeated`が 1 以上〕・金貨`gold` 50 と、`migrations/0016_player_data_periods.sql`のデイリーの`daily-slimes`〔その日に`slimes-defeated`を 3 足す〕・薬`potion` 1）。ゲームのクライアントの口にクエストを書き換える口は無い。
+- クエストの名前・説明・物語はサーバーが持たない（マスターデータに置き、クライアントが`questId`で引く）。サーバーが持つのは区切り・期間・見るキーと閾値・報酬だけ。`demo-rpg`の手本はマイグレーションで入っている（`migrations/0015_quests.sql`の一度きりの`first-hunt`〔`slimes-defeated`が 1 以上〕・金貨`gold` 50 と、`migrations/0016_player_data_periods.sql`のデイリーの`daily-slimes`〔その日に`slimes-defeated`を 3 足す〕・薬`potion` 1）。クエストの定義は管理の口（`PUT /v1/admin/quests/{questId}`。下の「管理の API」）で入れる・置き換える。ゲームのクライアントの口にクエストを書き換える口は無い。
 - 読むのも`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順: `APP_ENV`の守り → トークン（401。数えない）→ プレイヤーの利用制限（429 `RATE_LIMITED`。受け取りと合わせて数える）→ 止めた印（403 `PLAYER_BANNED`）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録と機能の設定（404 `NOT_FOUND`。機能`quests`を使わない設定のゲームは`Feature not enabled for this game`）→ 読む。`player-data`・`inventory`を使わない設定のゲームでも通る（進捗が書かれないので達成しない・受け取った品目を`GET /v1/inventory`で読めない、というだけ）。
 
 ## POST /v1/quests/{questId}/claim?gameId=demo-rpg
@@ -348,32 +348,33 @@
 
 ## 管理の API（ゲームのクライアントは使わない）
 
-運営する人が 1 人のプレイヤーの状態と監査のログを読み、プレイヤーを止め（BAN し）、所持品と通貨を付与・取り消し、スコアを消し、品目とイベントの定義を入れ、プレイヤーデータのキーと実績を宣言し、プレイヤーデータの値を直し、解いた実績を取り消す口。**ゲームのクライアント（CLI モック・UE・Unity・ブラウザ）は使わず、管理の鍵を持たせない**。形の正は`openapi/rpg-online-admin.v1.json`（ゲームのクライアントのスキーマ`openapi/rpg-online.v1.json`には入れない）、設計の正は`docs/guides/working/admin-design.md`。
+運営する人が 1 人のプレイヤーの状態と監査のログを読み、プレイヤーを止め（BAN し）、所持品と通貨を付与・取り消し、スコアを消し、品目とイベントとクエストの定義を入れ、プレイヤーデータのキーと実績を宣言し、プレイヤーデータの値を直し、解いた実績を取り消す口。**ゲームのクライアント（CLI モック・UE・Unity・ブラウザ）は使わず、管理の鍵を持たせない**。形の正は`openapi/rpg-online-admin.v1.json`（ゲームのクライアントのスキーマ`openapi/rpg-online.v1.json`には入れない）、設計の正は`docs/guides/working/admin-design.md`。
 
 - 見出しは`Authorization: Bearer <管理の鍵>`。管理の鍵は Worker ごとに 1 つの`ADMIN_API_KEY`（32 文字以上）。ローカルは人が`.dev.vars`（git に入らない）に`ADMIN_API_KEY=<32 文字以上>`を書き、staging・production は`wrangler secret put ADMIN_API_KEY`で渡す。鍵の値をファイル（`wrangler.jsonc`・ソース・試験・文書）に書かない。
 - **`local`でも既定の鍵を持たない**。`ADMIN_API_KEY`が無いか 32 文字未満の環境では、管理の口はどれも**500 `INTERNAL_ERROR`**（鍵の名前・値は返さない）。
 - 鍵が無い・`Bearer`でない・違う（プレイヤーのトークンも含む）は、どれも**401 `UNAUTHENTICATED`**（`message`は`Invalid admin credentials`。外れた理由は返さない）。鍵は SHA-256 にしてから時間の一定な比べで確かめる。鍵を取り替えると、前の鍵はその時から 401（前の鍵を並べて受ける期間は無い）。
 - 読むのも`APP_ENV=local`の時だけ（ほかは正しい鍵があっても**403 `NOT_READY_FOR_PRODUCTION`**）。
 - 確かめの順（どの口も同じ）: `APP_ENV`の守り（403）→ 管理の鍵の有無（500）→ 管理の利用制限（IP ごと。**429 `RATE_LIMITED`**と`Retry-After`。正しい鍵でも数え、鍵を確かめる前に断る）→ 管理の鍵（401）→ `gameId`の形（**400 `INVALID_ARGUMENT`**）→ ゲームの登録（**404 `NOT_FOUND`**・`Unknown game`。機能の設定は見ない）→ 口ごとの確かめ。
-- 書き込みの口（BAN・BAN を解く・所持品と通貨の増減・スコアを消す・品目とイベントの定義・プレイヤーデータのキーと実績の宣言・値を置く・実績の取り消し）は、口ごとの確かめの前に見出し`X-Admin-Actor`（操作した人のラベル。`^[a-zA-Z0-9_.@-]{1,64}$`。自己申告で、そのまま監査のログに残る）と、本文（JSON でなければ**400 `INVALID_JSON`**）の`reason`（1〜200 文字。空白だけは外れ）を確かめる。外れは**400 `INVALID_ARGUMENT`**。
+- 書き込みの口（BAN・BAN を解く・所持品と通貨の増減・スコアを消す・品目とイベントとクエストの定義・プレイヤーデータのキーと実績の宣言・値を置く・実績の取り消し）は、口ごとの確かめの前に見出し`X-Admin-Actor`（操作した人のラベル。`^[a-zA-Z0-9_.@-]{1,64}$`。自己申告で、そのまま監査のログに残る）と、本文（JSON でなければ**400 `INVALID_JSON`**）の`reason`（1〜200 文字。空白だけは外れ）を確かめる。外れは**400 `INVALID_ARGUMENT`**。
 - 書き込みの口は、操作 1 回で監査のログに 1 行（誰が・いつ・何を・前と後）を残し、書き込みと監査の行を 1 つの`batch`に入れる（片方だけ残らない）。読み取りの口は監査のログに残さない。
 - データ修正は行を直に書き換えず、履歴に残る形にする（所持品と通貨は受領の履歴に`sourceType: "admin"`の行。スコアは消して前のスコアを監査に残す。プレイヤーデータは台帳を持たないので、値を置く・実績を取り消すときの前と後を監査に残し、監査のログが直しの履歴になる）。セーブは直さない（読むだけ）。
-- ローカルの管理コマンド`node scripts/admin-cli.mjs <操作>`（`player`・`audit`・`grant`・`revoke`・`ban`・`unban`・`delete-score`・`put-item`・`put-event`・`put-data-key`・`put-achievement`・`set-data`・`revoke-achievement`・`smoke`）がこれらの口を呼ぶ。鍵は環境変数`ADMIN_API_KEY`から読み、無ければ行き先が`127.0.0.1`・`localhost`のときだけ`.dev.vars`の`ADMIN_API_KEY`の行を読む（読むだけ）。`X-Admin-Actor`は`--actor`（既定は`local-admin`）。CLI モック（`scripts/cli-mock.mjs`）は管理の口を呼ばない。
+- ローカルの管理コマンド`node scripts/admin-cli.mjs <操作>`（`player`・`audit`・`grant`・`revoke`・`ban`・`unban`・`delete-score`・`put-item`・`put-event`・`put-quest`・`put-data-key`・`put-achievement`・`set-data`・`revoke-achievement`・`smoke`）がこれらの口を呼ぶ。鍵は環境変数`ADMIN_API_KEY`から読み、無ければ行き先が`127.0.0.1`・`localhost`のときだけ`.dev.vars`の`ADMIN_API_KEY`の行を読む（読むだけ）。`X-Admin-Actor`は`--actor`（既定は`local-admin`）。CLI モック（`scripts/cli-mock.mjs`）は管理の口を呼ばない。
 
 ### GET /v1/admin/players/{playerId}?gameId=demo-rpg
 
-1 人のプレイヤーの所持品・受領の履歴・セーブの一覧・スコア・プレイヤーデータを読む。
+1 人のプレイヤーの所持品・受領の履歴・セーブの一覧・スコア・プレイヤーデータ・クエストの受け取りを読む。
 
 レスポンス例（200）:
 
 ```json
-{"gameId":"demo-rpg","playerId":"<playerId>","createdAt":"2026-10-31T01:02:03Z","ban":{"reason":"チートの疑い","bannedAt":"2026-10-31T02:00:00Z","expiresAt":null},"balances":[{"itemId":"gold","kind":"currency","amount":100}],"history":[{"entryId":7,"itemId":"gold","delta":100,"sourceType":"event-claim","sourceId":"<claimId>","createdAt":"2026-10-31T01:05:00Z"}],"saves":[{"slotId":"auto","revision":3,"size":120,"deleted":false,"updatedAt":"2026-10-31T01:06:00.123Z"}],"rankings":[{"boardId":"boss-score","score":1200,"displayName":"Hero"}],"playerData":{"values":[{"key":"slimes-defeated","mode":"add","value":3,"updatedAt":"2026-10-31T01:07:00Z"}],"achievements":[{"achievementId":"first-slime","unlockedAt":"2026-10-31T01:07:00Z","writeId":"<writeId>"}]}}
+{"gameId":"demo-rpg","playerId":"<playerId>","createdAt":"2026-10-31T01:02:03Z","ban":{"reason":"チートの疑い","bannedAt":"2026-10-31T02:00:00Z","expiresAt":null},"balances":[{"itemId":"gold","kind":"currency","amount":100}],"history":[{"entryId":7,"itemId":"gold","delta":100,"sourceType":"event-claim","sourceId":"<claimId>","createdAt":"2026-10-31T01:05:00Z"}],"saves":[{"slotId":"auto","revision":3,"size":120,"deleted":false,"updatedAt":"2026-10-31T01:06:00.123Z"}],"rankings":[{"boardId":"boss-score","score":1200,"displayName":"Hero"}],"playerData":{"values":[{"key":"slimes-defeated","mode":"add","value":3,"updatedAt":"2026-10-31T01:07:00Z"}],"achievements":[{"achievementId":"first-slime","unlockedAt":"2026-10-31T01:07:00Z","writeId":"<writeId>"}]},"questClaims":[{"questId":"daily-slimes","periodKey":"2026-10-31","claimId":"<claimId>","claimedAt":"2026-10-31T01:08:00Z"}]}
 ```
 
 - `createdAt`はプレイヤーを作った時刻（ISO 8601・UTC・秒まで）。
 - `ban`は止めた印（`reason`・`bannedAt`・`expiresAt`。時刻は ISO 8601・UTC・秒まで、`expiresAt`は期限が無ければ`null`）。**止めていなければ（印が無い・期限が過ぎた）欄ごと載らない**。
 - `balances`は残高のある品目（品目の ID の昇順。`kind`は`currency`か`item`）。`history`は受領の履歴の新しい順に 20 行まで（`GET /v1/inventory/history`の行と同じ欄）。`saves`はスロットの ID の昇順で、消した印のある行も`deleted: true`で載る（`updatedAt`はセーブの API と同じ値）。`rankings`はボードの ID の昇順。
 - `playerData`はいつも載る。`values`はプレイヤーが書いたことのあるキーの値（キーの昇順。`mode`はキーの宣言の書き方、`updatedAt`は最後に変わった時刻）、`achievements`は解いた実績（実績の ID の昇順。`writeId`は解いた書き込みの`writeId`〔`POST /v1/player-data`の応答と同じ値〕）。無ければどちらも空の配列。プレイヤーデータの機能の設定は見ない。
+- `questClaims`はいつも載る。クエストの受け取り（`questId`・区切りの鍵`periodKey`〔一度きりは`once`、デイリーは時差の日付、週間は時差の月曜の日付〕・`claimId`〔受領の履歴の`sourceId`と同じ値〕・`claimedAt`）の新しい順に 20 行まで。無ければ空の配列。クエストの機能の設定は見ない。受け取りを直す口・消す口は無い（間違った付与は増減の口で取り消し、進捗は値を置く口で戻す）。
 - **セーブの本文（`data`）とチェックサムは返さない**。
 - そのゲームに無いプレイヤー（`game_players`に行が無い）は**404 `NOT_FOUND`**（`message`は`Unknown player`）。`playerId`の形（`^[a-zA-Z0-9_-]{1,64}$`）が外れていればどのルートにも当たらず**404 `NOT_FOUND`**（`Endpoint not found`）。
 
@@ -389,7 +390,7 @@
 
 - 並びは`auditId`の降順（新しい順）。`limit`は 1〜100 の整数（無ければ 20）。`before`は 1 以上の整数で、付けるとその`auditId`より古い行だけを返す。外れは**400 `INVALID_ARGUMENT`**。続きがあれば`nextBefore`（最後の行の`auditId`）が載り、無ければ欄ごと載らない（受領の履歴と同じ）。
 - `actor`は書き込みの口の`X-Admin-Actor`（自己申告のラベル）。`before`・`after`は操作の前と後の状態（保存した JSON を読み直した値。無ければ`null`）。`createdAt`はサーバーの時刻（ISO 8601・UTC・秒まで）。トークン・管理の鍵・セーブの本文・IP は記録しない。
-- 監査のログは API から書き換えも消しもしない。保持の期間は 365 日（消す仕組みは後で足す。それまでは残る）。いま行を書く口は BAN と BAN を解く口（`action`は`player.ban`・`player.unban`、`target`は`player:<playerId>`）・所持品と通貨の増減（`inventory.adjust`・`player:<playerId>`）・スコアを消す口（`ranking.delete`・`ranking:<boardId>:<playerId>`）・品目の定義（`item.put`・`item:<itemId>`）・イベントの定義（`event.put`・`event:<eventId>`）・プレイヤーデータのキーの宣言（`player-data-key.put`・`player-data-key:<key>`）・実績の宣言（`achievement.put`・`achievement:<achievementId>`）・プレイヤーデータの値を置く口（`player-data.set`・`player:<playerId>`）・実績の取り消し（`achievement.revoke`・`player:<playerId>`）。
+- 監査のログは API から書き換えも消しもしない。保持の期間は 365 日（消す仕組みは後で足す。それまでは残る）。いま行を書く口は BAN と BAN を解く口（`action`は`player.ban`・`player.unban`、`target`は`player:<playerId>`）・所持品と通貨の増減（`inventory.adjust`・`player:<playerId>`）・スコアを消す口（`ranking.delete`・`ranking:<boardId>:<playerId>`）・品目の定義（`item.put`・`item:<itemId>`）・イベントの定義（`event.put`・`event:<eventId>`）・クエストの定義（`quest.put`・`quest:<questId>`）・プレイヤーデータのキーの宣言（`player-data-key.put`・`player-data-key:<key>`）・実績の宣言（`achievement.put`・`achievement:<achievementId>`）・プレイヤーデータの値を置く口（`player-data.set`・`player:<playerId>`）・実績の取り消し（`achievement.revoke`・`player:<playerId>`）。
 
 ### PUT /v1/admin/players/{playerId}/ban?gameId=demo-rpg
 
@@ -534,6 +535,33 @@
 - 監査のログに`event.put`の 1 行（`before`は前の定義`{"kind","startsAt","endsAt","resetOffsetMinutes","rewards"}`か`null`、`after`は入れた定義）。監査の行・イベント・報酬の行は 1 つの`batch`で書く。
 - 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・定義の本文（400）→ 報酬の品目（404）→ 受け取りのあるイベントの守り（400）→ 書く。
 
+### PUT /v1/admin/quests/{questId}?gameId=demo-rpg
+
+クエストの定義（区切り・期間・時差・見るキーと閾値・報酬）を入れる・置き換える。形と決まりはイベントの定義の口と同じで、見るキー（`key`）と閾値（`threshold`）が足される。クエストを消す口は無い（終えるときは`endsAt`をいまにする）。設計の正は`docs/guides/working/quest-design.md` §8。
+
+見出し: `Authorization: Bearer <管理の鍵>`・`X-Admin-Actor: <ラベル>`。
+
+入力例:
+
+```json
+{"kind":"daily","startsAt":"2026-11-01T00:00:00Z","endsAt":"2026-12-01T00:00:00Z","resetOffsetMinutes":0,"key":"slimes-defeated","threshold":3,"rewards":[{"itemId":"potion","amount":1}],"reason":"11 月のデイリー"}
+```
+
+レスポンス例（200）:
+
+```json
+{"gameId":"demo-rpg","questId":"daily-slimes-11","kind":"daily","startsAt":"2026-11-01T00:00:00Z","endsAt":"2026-12-01T00:00:00Z","resetOffsetMinutes":0,"key":"slimes-defeated","threshold":3,"rewards":[{"itemId":"potion","amount":1}]}
+```
+
+- `kind`・`startsAt`・`endsAt`・`resetOffsetMinutes`・`rewards`の決まりはイベントの定義と同じ。`key`は ID の形、`threshold`は 1〜1,000,000,000 の整数。外れは**400 `INVALID_ARGUMENT`**。
+- 見るキーの宣言がそのゲームに無ければ**404 `NOT_FOUND`**（`Unknown key`）、報酬の品目が無ければ**404 `NOT_FOUND`**（`Unknown item`）。どちらも何も書かない。
+- `daily`・`weekly`のクエストは`add`のキーだけ（ほかは**400 `INVALID_ARGUMENT`**）。キーに同じ区切りの数え方の宣言（`player_data_key_periods`）が無ければ同じ`batch`で入れ（その後の書き込みから区切りの値を数える。前の書き込みはさかのぼらない）、あって時差が違えば**400 `INVALID_ARGUMENT`**（区切りの値はキーと区切りの種類ごとに 1 つ）。`once`のクエストはどの書き方のキーも見られ、区切りの宣言を入れない。
+- 無ければ作り、あれば置き換える（報酬の行は送った中身だけになる）。**受け取りが 1 つでもあるクエストは`kind`・`startsAt`・`resetOffsetMinutes`・`key`を変えられない**（**400 `INVALID_ARGUMENT`**。区切りの鍵と進捗の意味が変わるため）。`endsAt`・`threshold`・`rewards`は変えられ、変えた後の受け取りから効く。
+- 1 ゲームの宣言は 200 個まで（`MAX_QUESTS`）。超える新しいクエストは**400 `INVALID_ARGUMENT`**（あるクエストの置き換えは通る）。
+- 応答の`startsAt`・`endsAt`は秒まで、`rewards`は品目の ID の昇順。`Idempotency-Key`は要らない（何度送っても同じ定義）。
+- 監査のログに`quest.put`の 1 行（`before`は前の定義`{"kind","startsAt","endsAt","resetOffsetMinutes","key","threshold","rewards"}`か`null`、`after`は入れた定義）。監査の行・区切りの宣言・クエスト・報酬の行は 1 つの`batch`で書く。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・定義の本文（400）→ キーの宣言（404）→ 報酬の品目（404）→ 区切りのあるクエストのキーの書き方と区切りの時差（400）→ 受け取りのあるクエストの守り（400）→ クエストの数（400）→ 書く。
+
 ### PUT /v1/admin/player-data/keys/{key}?gameId=demo-rpg
 
 プレイヤーデータのキーを 1 つ宣言する（書き方と上限）。無ければ作り、あれば置き換える。キーを消す口は無い（使わなくなったキーはそのまま残る）。設計の正は`docs/guides/working/player-data-design.md` §8。
@@ -602,7 +630,8 @@
 
 - `value`は 0 以上の整数で、キーの書き方に関わらず 0〜キーの`maxValue`（`add`でも減らせ、`flag`も 0 に戻せる）。外れは**400 `INVALID_ARGUMENT`**。
 - そのゲームに無いプレイヤーは**404 `NOT_FOUND`**（`Unknown player`）、宣言の無いキーは**404 `NOT_FOUND`**（`Unknown key`）。
-- **実績は判定しない**（閾値を超える値に置いても解かず、解いた人の値を下げても取り消さない。取り消すのは下の口）。値の`updatedAt`はサーバーの時刻になる。`Idempotency-Key`は要らない（何度送っても同じ値）。
+- **実績は判定しない**（閾値を超える値に置いても解かず、解いた人の値を下げても取り消さない。取り消すのは下の口）。
+- 区切りの値（デイリー・週間のクエストの進捗。プレイヤーとキーの区切りごとの値）は、同じ`batch`で新しい値を上限に**頭打ちにする**（どの区切りの行も`MIN(いまの値, value)`。下げるだけで、上げる直しでは区切りの値を上げない）。合計を下げても区切りの値が前のまま残り、クエストの進捗が直らないのを止める。値の`updatedAt`はサーバーの時刻になる。`Idempotency-Key`は要らない（何度送っても同じ値）。
 - 監査のログに`player-data.set`の 1 行（`before`は前の`{"key","value"}`か、値の行が無ければ`null`、`after`は`{"key","value"}`）。`auditId`はその行の番号。
 - 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・`value`（400）→ プレイヤー（404）→ キー（404）→ キーの`maxValue`（400）→ 書く。
 
