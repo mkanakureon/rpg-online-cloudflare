@@ -1,0 +1,40 @@
+// audit.ts — 監査のログ（表 admin_audit_log）の保持の期間・読む文・応答の 1 行の形。入出力を持たない。
+//
+// 監査の行は管理の書き込みの操作 1 回で 1 行（書く口は BAN・データ修正・イベントの定義の束で足す）。読み取りの口は監査に残さない。
+// before_json・after_json は保存した JSON を読み直して返す。トークン・管理の鍵・セーブの本文・IP は入れない。
+// 表は migrations/0011_admin.sql、形と決まりの正は docs/guides/working/admin-design.md §5。
+//
+// 概要記述: Claude Opus 5.5 — 2026-10-31
+
+/** 監査の行を残す日数（operations-security.md の 6。消す仕組みは分析の束で足し、それまでは残る）。 */
+export const AUDIT_RETENTION_DAYS = 365;
+
+/** before が無ければ（NULL）全部から。続きがあるかを知るために limit + 1 行を引く。 */
+export const listAuditSql = `SELECT audit_id AS auditId, actor, action, target, before_json AS beforeJson, after_json AS afterJson,
+    reason, created_at AS createdAt FROM admin_audit_log
+  WHERE game_id = ? AND (? IS NULL OR audit_id < ?)
+  ORDER BY audit_id DESC LIMIT ?`;
+
+export type AuditRow = {
+  auditId: number; actor: string; action: string; target: string;
+  beforeJson: string | null; afterJson: string | null; reason: string; createdAt: number;
+};
+export type AuditEntry = {
+  auditId: number; actor: string; action: string; target: string;
+  before: unknown; after: unknown; reason: string; createdAt: string;
+};
+
+/** UNIX 秒を ISO 8601 の UTC（秒まで。`2026-10-31T01:02:03Z`）に直す。 */
+export function isoSeconds(seconds: number): string {
+  return new Date(seconds * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/** 表の 1 行を応答の 1 行にする（前と後は JSON を読み直す。NULL は null）。 */
+export function shapeAuditRow(row: AuditRow): AuditEntry {
+  return {
+    auditId: row.auditId, actor: row.actor, action: row.action, target: row.target,
+    before: row.beforeJson === null ? null : JSON.parse(row.beforeJson),
+    after: row.afterJson === null ? null : JSON.parse(row.afterJson),
+    reason: row.reason, createdAt: isoSeconds(row.createdAt),
+  };
+}

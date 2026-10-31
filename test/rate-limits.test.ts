@@ -80,6 +80,7 @@ describe('R1: 数え方（L1）', () => {
       score: { scope: 'score', limit: 30, period: 60 },
       saves: { scope: 'saves', limit: 60, period: 60 },
       rewards: { scope: 'rewards', limit: 60, period: 60 },
+      admin: { scope: 'admin-ip', limit: 60, period: 60 },
     });
   });
 });
