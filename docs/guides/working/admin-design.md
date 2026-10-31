@@ -89,7 +89,7 @@ Cloudflare の機能（2026-10-31。リポジトリに入っている wrangler 4
 | ファイル | 中身 | 束 |
 | --- | --- | --- |
 | `src/core/admin/key.ts` | `adminSecret(env)`・`requireAdmin(req, secret)`（§3。入出力の無い関数と Web Crypto だけ） | O1 |
-| `src/core/admin/audit.ts` | 監査の行の文（§5）・`parseActor`・`parseReason`・`requestHash`（入出力の無い関数） | O1 |
+| `src/core/admin/audit.ts` | 監査の行の文（§5。O1）・`parseActor`・`parseReason`（O2。書き込みの口で初めて使う）・`requestHash`（O3。増減の `Idempotency-Key` で使う）。入出力の無い関数 | O1〜O3 |
 | `src/core/admin/routes.ts` | `adminRoutes`（ルートの一覧。O1〜O4 で行を足す）と共通の確かめ `checkAdmin` | O1 |
 | `src/core/admin/parse.ts` | 本文の確かめ（増減・BAN・品目・イベントの定義）。入出力の無い関数 | O2〜O4 |
 | `src/core/bans.ts` | `isBanActive(row, now)`・`requireNotBanned(env, claims)`（§4） | O2 |
@@ -158,11 +158,11 @@ CREATE TABLE IF NOT EXISTS player_bans (
 
 | 口 | 本文 | 応答 |
 | --- | --- | --- |
-| `PUT /v1/admin/players/{playerId}/ban?gameId=…` | `{"reason":"<1〜200 文字>","expiresAt":"<ISO 8601 の UTC。任意>"}` | 200 `{"gameId","playerId","bannedAt","expiresAt"}`（`expiresAt` は無ければ `null`）。印があれば理由と期限を置き換える（PUT なので 2 回送っても印は 1 つ） |
-| `DELETE /v1/admin/players/{playerId}/ban?gameId=…` | `{"reason":"<1〜200 文字>"}` | 200 `{"gameId","playerId","banned":false}`。印が無くても 200（同じ結果） |
+| `PUT /v1/admin/players/{playerId}/ban?gameId=…` | `{"reason":"<1〜200 文字>","expiresAt":"<ISO 8601 の UTC。任意>"}` | 200 `{"gameId","playerId","bannedAt","expiresAt"}`（`expiresAt` は無ければ `null`）。印があれば理由と期限と `bannedAt` を置き換える（PUT なので 2 回送っても印は 1 つ。前の印は監査の `before` に残る） |
+| `DELETE /v1/admin/players/{playerId}/ban?gameId=…` | `{"reason":"<1〜200 文字>"}` | 200 `{"gameId","playerId","banned":false}`。印が無くても 200（同じ結果）。印が無くても監査に `player.unban` の 1 行（前も後も `null`）を残す（書き込みの操作 1 回で 1 行） |
 
 - `game_players` に無いプレイヤーは 404 `NOT_FOUND` `Unknown player`（打ち間違いの ID を黙って止めない）。
-- `expiresAt` が過去・形の誤りは 400 `INVALID_ARGUMENT`。
+- `expiresAt` が過去・形の誤りは 400 `INVALID_ARGUMENT`。本文が JSON でなければ 400 `INVALID_JSON`（ゲームの口と同じ。管理のスキーマの `ErrorCode` にもある）。
 - 印の書き込みと監査の行は 1 つの `batch`（§5）。
 
 ## 5. 監査のログ
@@ -216,7 +216,7 @@ CREATE INDEX IF NOT EXISTS admin_audit_log_game ON admin_audit_log (game_id, aud
 ```
 
 - `game_players` に無いプレイヤーは 404 `NOT_FOUND` `Unknown player`。`history` は新しい順に 20 行。
-- `ban` の欄は O2 で足す（上の例は O2 の後の形。O1 の応答は `ban` を持たない。止めていなければ `null`、止めていれば `{"reason","bannedAt","expiresAt"}`）。
+- `ban` の欄は O2 で足した（上の例は O2 の後の形）。止めていれば `{"reason","bannedAt","expiresAt"}`、**止めていなければ（印が無い・期限が過ぎた）欄ごと載せない**（O1 の試験 `管理の読み取りはプレイヤーの所持品と履歴とセーブの一覧とスコアを返しセーブの中身は返さない` が `ban` の欄の無いことを見るため。§9）。
 - **セーブの本文（`data`）とチェックサムは返さない**（中身はサーバーが解釈しない・管理の人も要らない。`save-design.md`）。
 
 ## 6. データ修正
@@ -411,6 +411,7 @@ CLI モックに管理の鍵と管理の口が入らないことは試験にし�
 | `利用制限の回数と窓は定数のモジュールにある`（`test/rate-limits.test.ts`） | O1 | `RATE_LIMITS` に `admin: { scope: 'admin-ip', limit: 60, period: 60 }` が足される | 名前は変えず、`toEqual` の期待に 1 行足す（確かめる中身は弱めない）。`abuse-protection-design.md` §2 の表と `docs/api-contract.md` の「利用制限」に行を足す |
 | `スキーマのErrorCodeの列挙は14個のエラーコードと一致する`（`test/schema-conformance.test.ts`） | O2 | 名前の中の数が 15 になる（`PLAYER_BANNED`） | §8 の `スキーマのErrorCodeの列挙は15個のエラーコードと一致する` に置き換える。`errorCodes` に足す |
 | `エラーの応答はスキーマに書いた状態とエラーコードの組で返る`（同） | O2 | 全部のコードを 1 回ずつ出す試験で、`PLAYER_BANNED` が出ないと落ちる | 名前は変えず、BAN したプレイヤーで所持品を読む行を 1 つ足す |
+| `管理の読み取りはプレイヤーの所持品と履歴とセーブの一覧とスコアを返しセーブの中身は返さない`（`test/admin.test.ts`） | O2 | **変わらない**（止めていない人の応答に `ban` の欄を載せない。§5） | 直さない。止めた人の `ban` の欄は O2 の試験で見る |
 | `今のCLIモックと同じ形の要求を受け付ける`（`test/failure-server.test.ts`） | 全部 | **変わらない**（CLI モックを変えない。§7） | 直さない。O1〜O4 の確認コマンドの `requireTests` に入れて見張る |
 | `形の正しくないgameIdはゲームの登録を引く前にINVALID_ARGUMENTの400を返す`（`test/games.test.ts`） | O2 | **変わらない**（止めた印は `consume` の後に引く。§4） | 直さない。O2 の `requireTests` に入れて見張る |
 | `スキーマのファイルはOpenAPI 3.1で15個の操作を持つ`（`test/schema-conformance.test.ts`） | 全部 | **変わらない**（管理の口はゲームのクライアントのスキーマに入れず、`openapi/` の下の別のファイルにする。§11 の決めること 10） | 直さない。O1 の `requireTests` に入れて見張る |
