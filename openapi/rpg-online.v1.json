@@ -4529,7 +4529,7 @@
               "daily",
               "weekly"
             ],
-            "description": "区切り（一度きり・デイリー・週間）。いまは once だけが載る。"
+            "description": "区切り（一度きり・デイリー・週間）。"
           },
           "startsAt": {
             "type": "string",
@@ -4544,7 +4544,12 @@
           "periodKey": {
             "type": "string",
             "pattern": "^(once|\\d{4}-\\d{2}-\\d{2})$",
-            "description": "いまの区切り（一度きりは 'once'）。"
+            "description": "いまの区切り（一度きりは 'once'・デイリーはクエストの時差の日付・週間はその日を含む週の月曜の日付）。サーバーの時刻で決める。"
+          },
+          "nextResetAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+            "description": "次の区切りの時刻（クエストの終わりを越えない）。一度きりのクエストでは載せない。"
           },
           "key": {
             "$ref": "#/components/schemas/Id",
@@ -4560,7 +4565,7 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 1000000000,
-            "description": "進捗の数（一度きりはキーのいまの値。書いたことが無ければ 0）。閾値で丸めない。"
+            "description": "進捗の数（一度きりはキーのいまの値、デイリー・週間はいまの区切りの中でキーに足した分。書いたことが無ければ 0）。閾値で丸めない。"
           },
           "completed": {
             "type": "boolean",

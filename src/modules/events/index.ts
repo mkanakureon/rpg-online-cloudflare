@@ -2,7 +2,7 @@
 //
 // どちらも APP_ENV=local の門 → トークン → プレイヤーの利用制限（所持品・受領の履歴と合わせて RATE_LIMITS.rewards。429）→
 // 止めた印（403 PLAYER_BANNED）→ gameId の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定 → 口ごとの確かめ の順（所持品の checkAccess と同じ形）。
-// 期間と区切りはサーバーの時刻だけで決める（period.ts。本文・問い合わせ・Date の見出しの時刻は読まない）。受け取りは、受け取りの行・
+// 期間と区切りはサーバーの時刻だけで決める（src/core/period.ts。本文・問い合わせ・Date の見出しの時刻は読まない）。受け取りは、受け取りの行・
 // 受領の履歴・残高の 3 文を 1 つの batch で書き、一意の鍵（プレイヤー・イベント・区切り）で二重を止める。2 回目は 200 で 1 回目と同じ本文。
 // 所持品の表にも書くが、inventory のモジュールは読み込まない（モジュールどうしは読み込まない）。受領の履歴の種類の名前は
 // src/core/ledger.ts の LEDGER_SOURCES から読む（定数を文に埋める。3 文の中身は変えない。admin-design.md §6）。順と SQL の正は
@@ -19,10 +19,10 @@ import { validId } from '../../core/ids';
 import { MAX_ITEM_AMOUNT, MAX_REWARD_LINES } from '../../core/inventory';
 import { LEDGER_SOURCES } from '../../core/ledger';
 import type { GameModule } from '../../core/module';
+import { isOpen, isoSeconds, nextResetAt, periodKey, type EventKind } from '../../core/period';
 import { consume } from '../../core/rate-limit';
 import { RATE_LIMITS } from '../../core/rate-limit-policy';
 import type { TokenClaims } from '../../core/token';
-import { isOpen, isoSeconds, nextResetAt, periodKey, type EventKind } from './period';
 
 type EventRow = { eventId: string; kind: EventKind; startsAt: number; endsAt: number; offsetMinutes: number };
 type RewardRow = { eventId: string; itemId: string; amount: number };

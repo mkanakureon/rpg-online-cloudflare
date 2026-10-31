@@ -1,14 +1,18 @@
-// period.ts — イベントの期間と区切り（一度きり・デイリー・週間）の計算。入出力を持たない。
+// period.ts — 期間と区切り（一度きり・デイリー・週間）の計算。入出力を持たない。
 //
-// src/modules/events/index.ts が、サーバーの時刻（Math.floor(Date.now() / 1000)）だけを now に渡して呼ぶ。クライアントの時刻
-// （本文・問い合わせ・Date の見出し）は受け取らない。時刻はどれも UNIX 秒（UTC）、区切りの時差は固定の分（夏時間を持たない）。
-// 決まりと例の正は docs/guides/working/event-reward-design.md §4。
+// イベント・クエスト・プレイヤーデータのモジュールと管理の口（src/core/admin/parse.ts）が読む（モジュールどうしを読み込まないため core に置く）。
+// 呼ぶ側はサーバーの時刻（Math.floor(Date.now() / 1000)）だけを now に渡す。クライアントの時刻（本文・問い合わせ・Date の見出し）は
+// 受け取らない。時刻はどれも UNIX 秒（UTC）、区切りの時差は固定の分（夏時間を持たない）。
+// 決まりと例の正は docs/guides/working/event-reward-design.md §4（置き場は docs/guides/working/quest-design.md §3）。
 //
-// 概要記述: Claude Opus 5.5 — 2026-10-30
+// 概要記述: Claude Opus 5.5 — 2026-10-31
 
 /** イベントの区切り（表 events の kind）。 */
 export const EVENT_KINDS = ['once', 'daily', 'weekly'] as const;
 export type EventKind = (typeof EVENT_KINDS)[number];
+/** クエストの区切り（表 quests の kind）。イベントの区切りと同じ名前。 */
+export const QUEST_KINDS = EVENT_KINDS;
+export type QuestKind = EventKind;
 
 const DAY = 86_400;
 

@@ -1,17 +1,20 @@
 /**
- * クエスト Q1: 一度きりのクエストの一覧（GET /v1/quests）と報酬の受け取り（POST /v1/quests/{questId}/claim）と、達成を決める関数の試験。
- * 名前と期待する結果の正は docs/guides/working/quest-design.md §10 の Q1 の行（エラーコードの数・スキーマの操作の数・
+ * クエスト Q1・Q2: クエストの一覧（GET /v1/quests）と報酬の受け取り（POST /v1/quests/{questId}/claim）と、達成を決める関数の試験。
+ * Q2 はデイリー・週間のクエストと、プレイヤーデータの書き込みが足す区切りごとの値（player_data_period_values）。
+ * 名前と期待する結果の正は docs/guides/working/quest-design.md §10 の Q1・Q2 の行（エラーコードの数・スキーマの操作の数・
  * モジュールの一覧・demo-rpg の設定の 4 本は test/schema-conformance.test.ts・test/modules.test.ts・test/game-modules.test.ts）。
  * L1 は shape.ts の関数と定数を直に見る。L2 は src/worker.ts の default.fetch を直に呼び、APP_ENV=local を渡す。
  * 試験のゲームは専用の quest-game（beforeEach で登録と品目・キーの宣言の行を入れ、クエストは試験ごとにいまの時刻の前後に置く）。
  * 進捗は player_data に行を直に入れるか、プレイヤーデータの口で書く。demo-rpg の手本のクエスト（first-hunt）は CLI の流れの試験だけが使う。
+ * 区切りは時計を動かさず、前の区切りの鍵（src/core/period.ts の periodKey に前の日の時刻を渡す）の行を直に入れて確かめる。
  *
  * 概要記述: Claude Opus 5.5 — 2026-10-31
  */
 import { env } from 'cloudflare:workers';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
 import { MAX_ITEM_AMOUNT } from '../src/core/inventory';
+import { isoSeconds, nextResetAt, periodKey } from '../src/core/period';
 import { MAX_PLAYER_DATA_VALUE } from '../src/core/player-data';
 import { RATE_LIMITS } from '../src/core/rate-limit-policy';
 import { questStatus } from '../src/modules/quests/shape';
@@ -34,8 +37,8 @@ const listRoute = '/v1/quests';
 const claimRoute = '/v1/quests/{questId}/claim';
 
 type Grant = { itemId: string; amount: number };
-type QuestItem = { questId: string; kind: string; startsAt: string; endsAt: string; periodKey: string; key: string; threshold: number;
-  progress: number; completed: boolean; claimed: boolean; rewards: Grant[] };
+type QuestItem = { questId: string; kind: string; startsAt: string; endsAt: string; periodKey: string; nextResetAt?: string; key: string;
+  threshold: number; progress: number; completed: boolean; claimed: boolean; rewards: Grant[] };
 type ListBody = { gameId: string; serverTime: string; items: QuestItem[] };
 type ClaimBody = { gameId: string; questId: string; periodKey: string; claimId: string; claimedAt: string; grants: Grant[] };
 type InventoryBody = { gameId: string; currencies: Grant[]; items: Grant[] };
@@ -81,14 +84,38 @@ async function setValue(playerId: string, key: string, value: number): Promise<v
   await baseEnv.DB.prepare('INSERT OR REPLACE INTO player_data (game_id, player_id, key, value, updated_at) VALUES (?, ?, ?, ?, ?)')
     .bind(game, playerId, key, value, nowSeconds()).run();
 }
-/** プレイヤーデータの口で書く（新しい Idempotency-Key）。 */
-async function writeValue(key: string, value: number, playerId = 'p1'): Promise<Response> {
+/** プレイヤーデータの口で書く（既定は新しい Idempotency-Key）。 */
+async function writeValue(key: string, value: number, playerId = 'p1', idempotencyKey = newIdempotencyKey()): Promise<Response> {
   return worker.fetch(new Request(`${base}/v1/player-data?gameId=${game}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: await bearer(game, playerId), 'Idempotency-Key': newIdempotencyKey() },
+    headers: { 'content-type': 'application/json', authorization: await bearer(game, playerId), 'Idempotency-Key': idempotencyKey },
     body: JSON.stringify({ changes: [{ key, value }] }),
   }), localEnv as never);
 }
+/** キーを区切りで数える宣言の行を入れる（クエストの定義の口〔Q3〕が入れる行）。 */
+async function declarePeriod(key: string, kind: 'daily' | 'weekly', offsetMinutes = 0): Promise<void> {
+  await baseEnv.DB.prepare(`INSERT INTO player_data_key_periods (game_id, key, kind, reset_offset_minutes, created_at)
+    VALUES (?, ?, ?, ?, ?)`).bind(game, key, kind, offsetMinutes, nowSeconds()).run();
+}
+/** 区切りの値の行を直に入れる（前の区切りの行を作るのに使う）。 */
+async function setPeriodValue(playerId: string, key: string, kind: 'daily' | 'weekly', pk: string, value: number): Promise<void> {
+  await baseEnv.DB.prepare(`INSERT OR REPLACE INTO player_data_period_values (game_id, player_id, key, kind, period_key, value, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(game, playerId, key, kind, pk, value, nowSeconds()).run();
+}
+/** 区切りの値の行（鍵の順）。 */
+async function periodRows(key = 'steps'): Promise<Array<{ playerId: string; kind: string; periodKey: string; value: number }>> {
+  return (await baseEnv.DB.prepare(`SELECT player_id AS playerId, kind, period_key AS periodKey, value FROM player_data_period_values
+    WHERE game_id = ? AND key = ? ORDER BY player_id, kind, period_key`).bind(game, key).all<{ playerId: string; kind: string;
+    periodKey: string; value: number }>()).results;
+}
+async function totalOf(playerId: string, key: string): Promise<number | null> {
+  const row = await baseEnv.DB.prepare('SELECT value FROM player_data WHERE game_id = ? AND player_id = ? AND key = ?')
+    .bind(game, playerId, key).first<{ value: number }>();
+  return row?.value ?? null;
+}
+/** いまのデイリー（時差 0）の区切りの鍵と、前の日の区切りの鍵。 */
+const today = () => periodKey('daily', nowSeconds(), 0);
+const yesterday = () => periodKey('daily', nowSeconds() - 86400, 0);
 async function count(table: 'quest_claims' | 'inventory_ledger' | 'inventory_balances'): Promise<number> {
   const row = await baseEnv.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE game_id = ?`).bind(game).first<{ n: number }>();
   return row?.n ?? 0;
@@ -125,8 +152,14 @@ async function expectConforms(res: Response, path: string, method: 'get' | 'post
 
 // 試験の間で前のデータに頼らない。demo-rpg（マイグレーションの初期データ）の宣言・品目・クエストだけ残す。
 // 受け取りはクエストを、クエストはキーの宣言と品目を外部キーで指すので、受け取り → クエスト（報酬は CASCADE）→ 宣言・品目の順に消す
+// 区切りの宣言と値はキーの宣言を外部キーで指すので、宣言より先に消す
+const cleanPeriods = () => [
+  baseEnv.DB.prepare('DELETE FROM player_data_period_values'),
+  baseEnv.DB.prepare("DELETE FROM player_data_key_periods WHERE game_id <> 'demo-rpg'"),
+];
 beforeEach(async () => {
   await baseEnv.DB.batch([
+    ...cleanPeriods(),
     baseEnv.DB.prepare('DELETE FROM quest_claims'),
     baseEnv.DB.prepare('DELETE FROM inventory_ledger'),
     baseEnv.DB.prepare('DELETE FROM inventory_balances'),
@@ -144,8 +177,12 @@ beforeEach(async () => {
   const key = baseEnv.DB.prepare('INSERT INTO player_data_keys (game_id, key, mode, max_value, max_delta) VALUES (?, ?, ?, ?, ?)');
   await baseEnv.DB.batch([
     item.bind(game, 'gold', 'currency'), item.bind(game, 'potion', 'item'),
-    key.bind(game, 'kills', 'add', 1000, 100), key.bind(game, 'level', 'set', 100, null),
+    key.bind(game, 'kills', 'add', 1000, 100), key.bind(game, 'level', 'set', 100, null), key.bind(game, 'steps', 'add', 1000, 100),
   ]);
+});
+// ほかの試験のファイルがキーの宣言を消すときに、ここで入れた区切りの宣言が外部キーで邪魔をしない
+afterAll(async () => {
+  await baseEnv.DB.batch(cleanPeriods());
 });
 
 describe('Q1 達成の決め方と定数', () => {
@@ -436,5 +473,140 @@ describe('Q1 スキーマと CLI モック', () => {
     expect(await second.json<ClaimBody>()).toEqual(firstBody);
     expect(await gold()).toBe(before + 50);
     expect(await quest()).toMatchObject({ completed: true, claimed: true });
+  });
+});
+
+describe('Q2 デイリー・週間のクエスト', () => {
+  it('デイリーのクエストの進捗はその日の区切りに増やした分だけを数える', async () => {
+    await declarePeriod('steps', 'daily');
+    await addQuest('daily-steps', { kind: 'daily', key: 'steps', threshold: 5 });
+    // 合計 10 は前の日の区切りに書いた分（宣言の後の書き込み）
+    await setValue('p1', 'steps', 10);
+    await setPeriodValue('p1', 'steps', 'daily', yesterday(), 10);
+    expect((await writeValue('steps', 2)).status).toBe(200);
+    const res = await list();
+    expect(res.status).toBe(200);
+    const now = nowSeconds();
+    const item = (await res.json<ListBody>()).items.find((i) => i.questId === 'daily-steps');
+    expect(item).toMatchObject({ kind: 'daily', periodKey: today(), progress: 2, completed: false, claimed: false });
+    expect(item?.nextResetAt).toBe(isoSeconds(nextResetAt('daily', now, 0, now + 86400 * 2)!));
+    expect(await totalOf('p1', 'steps')).toBe(12);
+  });
+
+  it('区切りが変わるとデイリーのクエストの進捗は0から数え直し前の区切りの値は残る', async () => {
+    await declarePeriod('steps', 'daily');
+    await addQuest('daily-steps', { kind: 'daily', key: 'steps', threshold: 3 });
+    await setValue('p1', 'steps', 5);
+    await setPeriodValue('p1', 'steps', 'daily', yesterday(), 5);
+    const item = (await (await list()).json<ListBody>()).items.find((i) => i.questId === 'daily-steps');
+    expect(item).toMatchObject({ periodKey: today(), progress: 0, completed: false });
+    await expectError(await claim('daily-steps'), 409, 'QUEST_NOT_COMPLETED');
+    expect(await periodRows()).toEqual([{ playerId: 'p1', kind: 'daily', periodKey: yesterday(), value: 5 }]);
+  });
+
+  it('デイリーのクエストは区切りごとに1回受け取れ同じ区切りでは二重にならない', async () => {
+    await declarePeriod('steps', 'daily');
+    await addQuest('daily-steps', { kind: 'daily', key: 'steps', threshold: 3, rewards: [['potion', 1]] });
+    // 前の日に受け取った行
+    await baseEnv.DB.prepare(`INSERT INTO quest_claims (game_id, player_id, quest_id, period_key, claim_id, claimed_at)
+      VALUES (?, 'p1', 'daily-steps', ?, 'c-yesterday', ?)`).bind(game, yesterday(), nowSeconds() - 86400).run();
+    expect((await writeValue('steps', 3)).status).toBe(200);
+    const first = await claim('daily-steps');
+    expect(first.status).toBe(200);
+    const firstBody = await first.json<ClaimBody>();
+    expect(firstBody).toMatchObject({ questId: 'daily-steps', periodKey: today(), grants: [{ itemId: 'potion', amount: 1 }] });
+    expect(firstBody.claimId).not.toBe('c-yesterday');
+    const second = await claim('daily-steps');
+    expect(second.status).toBe(200);
+    expect(await second.json<ClaimBody>()).toEqual(firstBody);
+    expect(await balance('p1', 'potion')).toBe(1);
+    expect(await count('inventory_ledger')).toBe(1);
+    expect(await count('quest_claims')).toBe(2);
+    const item = (await (await list()).json<ListBody>()).items.find((i) => i.questId === 'daily-steps');
+    expect(item).toMatchObject({ progress: 3, completed: true, claimed: true });
+  });
+
+  it('週間のクエストの進捗は時差の月曜0時からの増加を数える', async () => {
+    // L1: 区切りの値の鍵は periodKey（プレイヤーデータの書き込みとクエストの一覧・受け取りが同じ関数を使う）。
+    // 時差の日曜 23:59 と月曜 0:00 は別の週（event-reward-design.md §4 の例と同じ値）
+    const utc = (iso: string) => Date.parse(iso) / 1000;
+    expect(periodKey('weekly', utc('2026-11-01T23:59:00Z'), 0)).toBe('2026-10-26');
+    expect(periodKey('weekly', utc('2026-11-02T00:00:00Z'), 0)).toBe('2026-11-02');
+    expect(periodKey('weekly', utc('2026-11-01T14:59:00Z'), 540)).toBe('2026-10-26');
+    expect(periodKey('weekly', utc('2026-11-01T15:00:00Z'), 540)).toBe('2026-11-02');
+    // 書き込みは時差の週の鍵に入り、一覧はその鍵の値だけを数える（前の週の行は数えない）
+    await declarePeriod('steps', 'weekly', 540);
+    await addQuest('weekly-steps', { kind: 'weekly', key: 'steps', threshold: 10 });
+    await baseEnv.DB.prepare('UPDATE quests SET reset_offset_minutes = 540 WHERE game_id = ? AND quest_id = ?').bind(game, 'weekly-steps').run();
+    const lastWeek = periodKey('weekly', nowSeconds() - 7 * 86400, 540);
+    await setPeriodValue('p1', 'steps', 'weekly', lastWeek, 50);
+    expect((await writeValue('steps', 4)).status).toBe(200);
+    const thisWeek = periodKey('weekly', nowSeconds(), 540);
+    expect(await periodRows()).toEqual([
+      { playerId: 'p1', kind: 'weekly', periodKey: lastWeek, value: 50 }, { playerId: 'p1', kind: 'weekly', periodKey: thisWeek, value: 4 },
+    ]);
+    const item = (await (await list()).json<ListBody>()).items.find((i) => i.questId === 'weekly-steps');
+    expect(item).toMatchObject({ kind: 'weekly', periodKey: thisWeek, progress: 4, completed: false });
+  });
+
+  it('区切りを宣言したキーの書き込みは区切りの値も同じbatchで増え送り直しで二重に数えない', async () => {
+    await declarePeriod('steps', 'daily');
+    const idem = newIdempotencyKey();
+    const first = await writeValue('steps', 3, 'p1', idem);
+    expect(first.status).toBe(200);
+    const firstBody = await first.json();
+    const second = await writeValue('steps', 3, 'p1', idem);
+    expect(second.status).toBe(200);
+    // 書き込みの応答の形は変わらない（区切りの値は載らない）
+    expect(await second.json()).toEqual(firstBody);
+    expect(Object.keys(firstBody as object).sort()).toEqual(['gameId', 'unlocked', 'values', 'writeId']);
+    expect(await totalOf('p1', 'steps')).toBe(3);
+    expect(await periodRows()).toEqual([{ playerId: 'p1', kind: 'daily', periodKey: today(), value: 3 }]);
+  });
+
+  it('上限を超える書き込みは区切りの値も書かない', async () => {
+    await declarePeriod('steps', 'daily');
+    await setValue('p1', 'steps', 999);
+    await expectError(await writeValue('steps', 2), 409, 'PLAYER_DATA_LIMIT_EXCEEDED');
+    expect(await totalOf('p1', 'steps')).toBe(999);
+    expect(await periodRows()).toEqual([]);
+  });
+
+  it('区切りを宣言していないキーの書き込みは区切りの値を作らない', async () => {
+    await declarePeriod('steps', 'daily');
+    expect((await writeValue('kills', 2)).status).toBe(200);
+    expect(await totalOf('p1', 'kills')).toBe(2);
+    const n = await baseEnv.DB.prepare('SELECT COUNT(*) AS n FROM player_data_period_values WHERE game_id = ?').bind(game).first<{ n: number }>();
+    expect(n?.n).toBe(0);
+  });
+
+  it('一度きりのクエストの進捗は区切りの値でなくいまの値を見る', async () => {
+    await declarePeriod('steps', 'daily');
+    await addQuest('once-steps', { kind: 'once', key: 'steps', threshold: 10 });
+    await addQuest('daily-steps', { kind: 'daily', key: 'steps', threshold: 10 });
+    // 前の日の書き込み（合計と前の日の区切りの値）と、今日の書き込み
+    await setValue('p1', 'steps', 4);
+    await setPeriodValue('p1', 'steps', 'daily', yesterday(), 4);
+    expect((await writeValue('steps', 2)).status).toBe(200);
+    const items = (await (await list()).json<ListBody>()).items;
+    expect(items.find((i) => i.questId === 'once-steps')).toMatchObject({ periodKey: 'once', progress: 6 });
+    expect('nextResetAt' in items.find((i) => i.questId === 'once-steps')!).toBe(false);
+    expect(items.find((i) => i.questId === 'daily-steps')).toMatchObject({ periodKey: today(), progress: 2 });
+  });
+
+  it('区切りのあるクエストの応答はスキーマに合う', async () => {
+    await declarePeriod('steps', 'daily');
+    await declarePeriod('steps', 'weekly');
+    await addQuest('daily-steps', { kind: 'daily', key: 'steps', threshold: 2, rewards: [['potion', 1]] });
+    await addQuest('weekly-steps', { kind: 'weekly', key: 'steps', threshold: 2, rewards: [['gold', 10], ['potion', 1]] });
+    expect((await writeValue('steps', 2)).status).toBe(200);
+    const listed = await expectConforms(await list(), listRoute, 'get') as ListBody;
+    expect(listed.items.map((i) => [i.questId, i.kind, i.progress, typeof i.nextResetAt])).toEqual([
+      ['daily-steps', 'daily', 2, 'string'], ['weekly-steps', 'weekly', 2, 'string'],
+    ]);
+    for (const questId of ['daily-steps', 'weekly-steps']) {
+      const body = await expectConforms(await claim(questId), claimRoute, 'post') as ClaimBody;
+      expect(body.periodKey).toBe(listed.items.find((i) => i.questId === questId)!.periodKey);
+    }
   });
 });

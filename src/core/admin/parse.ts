@@ -2,7 +2,7 @@
 //
 // いまは監査を読む口の limit・before（受領の履歴の parseHistoryQuery と同じ形）と、プレイヤーを読む口の履歴の行の数と、
 // BAN の本文の期限（expiresAt）と、所持品と通貨の増減の本文（itemId・delta）と、品目の種類（parseItemKind）とイベントの定義の本文
-// （parseEventDefinition。区切り・期間・時差・報酬の行）と、プレイヤーデータのキーの宣言（parsePlayerDataKey。表 player_data_keys の
+// （parseEventDefinition。区切り〔名前は src/core/period.ts の EVENT_KINDS〕・期間・時差・報酬の行）と、プレイヤーデータのキーの宣言（parsePlayerDataKey。表 player_data_keys の
 // CHECK と同じ決まりを先に見て、DB の CHECK で落ちて 500 にしない）・実績の宣言（parseAchievement）・値を置く本文（parsePlayerDataValue）。
 // 書き込みの口に共通の X-Admin-Actor・reason は audit.ts。
 // 正は docs/guides/working/admin-design.md §2・§4〜§7 と docs/guides/working/player-data-design.md §8。
@@ -10,6 +10,7 @@
 // 概要記述: Claude Opus 5.5 — 2026-10-31
 import { validId } from '../ids';
 import { ITEM_KINDS, MAX_ITEM_AMOUNT, MAX_REWARD_LINES, type ItemKind } from '../inventory';
+import { EVENT_KINDS, type EventKind } from '../period';
 import { MAX_PLAYER_DATA_VALUE, PLAYER_DATA_MODES, type PlayerDataKey, type PlayerDataMode } from '../player-data';
 
 /** 監査を読む口の limit の既定と上限。 */
@@ -81,15 +82,13 @@ export function parseItemKind(value: unknown): ItemKind | null {
   return (ITEM_KINDS as readonly unknown[]).includes(value) ? value as ItemKind : null;
 }
 
-/** イベントの区切り（表 events の kind）。src/modules/events/period.ts の EVENT_KINDS と同じ（core は modules を読み込まない）。 */
-export const EVENT_DEFINITION_KINDS = ['once', 'daily', 'weekly'] as const;
 /** 区切りの時差（分）の範囲（migrations/0010_events.sql の CHECK と同じ）。 */
 export const MIN_RESET_OFFSET_MINUTES = -720;
 export const MAX_RESET_OFFSET_MINUTES = 840;
 
 export type EventReward = { itemId: string; amount: number };
 export type EventDefinition = {
-  kind: (typeof EVENT_DEFINITION_KINDS)[number]; startsAt: number; endsAt: number; resetOffsetMinutes: number; rewards: EventReward[];
+  kind: EventKind; startsAt: number; endsAt: number; resetOffsetMinutes: number; rewards: EventReward[];
 };
 export type EventDefinitionResult = { ok: true; value: EventDefinition } | { ok: false; message: string };
 
@@ -100,7 +99,7 @@ export type EventDefinitionResult = { ok: true; value: EventDefinition } | { ok:
  */
 export function parseEventDefinition(body: Record<string, unknown>): EventDefinitionResult {
   const kind = body.kind;
-  if (!(EVENT_DEFINITION_KINDS as readonly unknown[]).includes(kind)) return { ok: false, message: 'kind must be once, daily or weekly' };
+  if (!(EVENT_KINDS as readonly unknown[]).includes(kind)) return { ok: false, message: 'kind must be once, daily or weekly' };
   const startsAt = isoToSeconds(body.startsAt);
   const endsAt = isoToSeconds(body.endsAt);
   if (startsAt === null || endsAt === null) return { ok: false, message: 'startsAt and endsAt must be ISO 8601 UTC times' };

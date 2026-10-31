@@ -12,7 +12,7 @@ import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
 import { MAX_ITEM_AMOUNT } from '../src/core/inventory';
-import { isOpen, nextResetAt, periodKey } from '../src/modules/events/period';
+import { isOpen, nextResetAt, periodKey } from '../src/core/period';
 import specJson from '../openapi/rpg-online.v1.json';
 import { bearer } from './support/auth';
 import { registerGame } from './support/games';
