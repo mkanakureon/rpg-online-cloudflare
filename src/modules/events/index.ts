@@ -16,13 +16,12 @@ import { requireGame } from '../../core/games';
 import { requireLocalWrite } from '../../core/guards';
 import { error, json } from '../../core/http';
 import { validId } from '../../core/ids';
-import { MAX_ITEM_AMOUNT } from '../../core/inventory';
+import { MAX_ITEM_AMOUNT, MAX_REWARD_LINES } from '../../core/inventory';
 import { LEDGER_SOURCES } from '../../core/ledger';
 import type { GameModule } from '../../core/module';
 import { consume } from '../../core/rate-limit';
 import { RATE_LIMITS } from '../../core/rate-limit-policy';
 import type { TokenClaims } from '../../core/token';
-import { MAX_REWARD_LINES } from './limits';
 import { isOpen, isoSeconds, nextResetAt, periodKey, type EventKind } from './period';
 
 type EventRow = { eventId: string; kind: EventKind; startsAt: number; endsAt: number; offsetMinutes: number };

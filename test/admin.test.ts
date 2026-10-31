@@ -3,7 +3,9 @@
  * （GET /v1/admin/audit）と、管理のスキーマ（openapi/rpg-online-admin.v1.json）の試験。
  * 管理 O3: データ修正（所持品と通貨の増減 POST /v1/admin/players/{playerId}/inventory・Idempotency-Key・スコアを消す
  * DELETE /v1/admin/rankings/{boardId}/entries/{playerId}・src/core/ledger.ts の LEDGER_SOURCES）の試験。
- * 名前と期待する結果の正は docs/guides/working/admin-design.md §8 の O1・O3 の行。L1 は関数を直に呼ぶ。L2 は src/worker.ts の
+ * 管理 O4: 品目とイベントの定義（PUT /v1/admin/items/{itemId}・PUT /v1/admin/events/{eventId}・parseEventDefinition）と、管理コマンドの
+ * 要求の形（scripts/admin-requests.mjs。smoke の流れ runSmoke に src/worker.ts の fetch を渡す）の試験。
+ * 名前と期待する結果の正は docs/guides/working/admin-design.md §8 の O1・O3・O4 の行。L1 は関数を直に呼ぶ。L2 は src/worker.ts の
  * default.fetch を直に呼ぶ。管理の鍵は試験の中で作る秘密でない値（'a'.repeat(32)）で、鍵の無い場合は ADMIN_API_KEY: undefined を
  * env に明示する（試験のランタイムが .dev.vars を読み込んでも、人の鍵に頼らない）。試験のゲームは専用の adm-game。
  * O1 の監査を読む試験の行は表に直に入れる（O1 の時点で監査の行を書く口が無かったため）。
@@ -14,13 +16,17 @@ import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
 import { adminSecret, requireAdmin } from '../src/core/admin/key';
-import { parseAdjustment } from '../src/core/admin/parse';
+import { parseAdjustment, parseEventDefinition } from '../src/core/admin/parse';
 import { adminRoutes } from '../src/core/admin/routes';
-import { MAX_ITEM_AMOUNT } from '../src/core/inventory';
+import { MAX_ITEM_AMOUNT, MAX_REWARD_LINES } from '../src/core/inventory';
 import { LEDGER_SOURCES } from '../src/core/ledger';
 import { NO_IP_SUBJECT } from '../src/core/rate-limit';
 import { RATE_LIMITS } from '../src/core/rate-limit-policy';
 import adminSpecJson from '../openapi/rpg-online-admin.v1.json';
+import {
+  SMOKE_AUDIT_ACTIONS, adminRequest, putEventOp, putItemOp, runSmoke, type EventDefinitionBody,
+} from '../scripts/admin-requests.mjs';
+import { authHeaders, claimPath, eventsPath, inventoryPath } from '../scripts/cli-requests.mjs';
 import { registerGame } from './support/games';
 import { countRateLimitRows, fillRateLimit, resetRateLimits } from './support/rate-limits';
 import { validate, type Schema, type SchemaRoot } from './support/schema-check';
@@ -93,9 +99,14 @@ async function expectConforms(res: Response, specPath: string): Promise<unknown>
 }
 
 // 試験の間で前のデータに頼らない。demo-rpg（マイグレーションの初期データ）だけ残す。
-// 監査・残高・履歴・セーブ・スコア → プレイヤー → 品目 → 機能の設定 → ゲームの順に消す
+// 受け取り・イベント（demo-rpg の手本の daily-login は残す）・止めた印 → 監査・残高・履歴・セーブ・スコア → プレイヤー →
+// 品目（demo-rpg の手本の gold・potion は残す）→ 機能の設定 → ゲームの順に消す
 beforeEach(async () => {
   await baseEnv.DB.batch([
+    baseEnv.DB.prepare('DELETE FROM event_claims'),
+    baseEnv.DB.prepare("DELETE FROM event_rewards WHERE NOT (game_id = 'demo-rpg' AND event_id = 'daily-login')"),
+    baseEnv.DB.prepare("DELETE FROM events WHERE NOT (game_id = 'demo-rpg' AND event_id = 'daily-login')"),
+    baseEnv.DB.prepare('DELETE FROM player_bans'),
     baseEnv.DB.prepare('DELETE FROM admin_audit_log'),
     baseEnv.DB.prepare('DELETE FROM inventory_ledger'),
     baseEnv.DB.prepare('DELETE FROM inventory_balances'),
@@ -103,7 +114,7 @@ beforeEach(async () => {
     baseEnv.DB.prepare('DELETE FROM ranking_entries'),
     baseEnv.DB.prepare('DELETE FROM game_players'),
     baseEnv.DB.prepare('DELETE FROM accounts'),
-    baseEnv.DB.prepare("DELETE FROM inventory_items WHERE game_id <> 'demo-rpg'"),
+    baseEnv.DB.prepare("DELETE FROM inventory_items WHERE game_id <> 'demo-rpg' OR item_id NOT IN ('gold', 'potion')"),
     baseEnv.DB.prepare("DELETE FROM game_modules WHERE game_id <> 'demo-rpg'"),
     baseEnv.DB.prepare("DELETE FROM games WHERE game_id <> 'demo-rpg'"),
   ]);
@@ -423,7 +434,7 @@ async function ledgerRows(playerId: string): Promise<Array<{ delta: number; sour
     + 'WHERE game_id = ? AND player_id = ? ORDER BY entry_id').bind(game, playerId).all<{ delta: number; sourceType: string; sourceId: string }>()).results;
 }
 /** 管理のスキーマの、そのメソッドとパスの操作の応答の形に当てる。 */
-async function expectAdminConforms(res: Response, specPath: string, method: 'post' | 'delete'): Promise<unknown> {
+async function expectAdminConforms(res: Response, specPath: string, method: 'post' | 'delete' | 'put'): Promise<unknown> {
   const r = adminSpec.paths[specPath][method].responses[String(res.status)];
   expect(r, `${method} ${specPath} の応答に状態 ${res.status} がある`).toBeDefined();
   const body = await res.json();
@@ -670,5 +681,246 @@ describe('O3 スコアを消す', () => {
     await expectError(await deleteScore('boss-score', 'p1'), 404, 'NOT_FOUND');
     expect(await countRows('admin_audit_log')).toBe(1);
     expect(await countRows('ranking_entries')).toBe(0);
+  });
+});
+
+// ---- O4 イベントの定義と管理コマンド ----
+
+type EventResult = { gameId: string; eventId: string; kind: string; startsAt: string; endsAt: string; resetOffsetMinutes: number;
+  rewards: Array<{ itemId: string; amount: number }> };
+type ListedEvent = { eventId: string; kind: string; endsAt: string; rewards: Array<{ itemId: string; amount: number }>; claimed: boolean };
+const itemSpec = '/v1/admin/items/{itemId}';
+const eventSpec = '/v1/admin/events/{eventId}';
+const isoAt = (seconds: number) => new Date(seconds * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+/** いま開いているデイリーのイベントの定義（1 時間前から 1 日後まで。報酬は gold 100）。 */
+function openDefinition(overrides: Partial<EventDefinitionBody> = {}): EventDefinitionBody {
+  const now = Math.floor(Date.now() / 1000);
+  return { kind: 'daily', startsAt: isoAt(now - 3600), endsAt: isoAt(now + 86_400), resetOffsetMinutes: 0,
+    rewards: [{ itemId: 'gold', amount: 100 }], reason: '試験のイベント', ...overrides };
+}
+/** 管理コマンドと同じ要求の形（scripts/admin-requests.mjs）で品目とイベントを入れる。 */
+const putItem = (itemId: string, kind: string, gameId = game) =>
+  worker.fetch(adminRequest(base, adminKey, putItemOp(itemId, kind, '試験の品目', gameId)), adminEnv as never);
+const putEvent = (eventId: string, definition: EventDefinitionBody, gameId = game) =>
+  worker.fetch(adminRequest(base, adminKey, putEventOp(eventId, definition, gameId)), adminEnv as never);
+/** イベントと所持品を使う設定にして、ゲストを発行する（トークンを返す）。 */
+async function eventGuest(): Promise<string> {
+  await registerGame(baseEnv.DB, game, ['inventory', 'events']);
+  const res = await worker.fetch(new Request(`${base}/v1/accounts/guest`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ gameId: game }),
+  }), adminEnv as never);
+  expect(res.status).toBe(200);
+  return (await res.json<{ token: string }>()).token;
+}
+async function listEvents(token: string): Promise<ListedEvent[]> {
+  const res = await worker.fetch(new Request(`${base}${eventsPath(game)}`, { headers: authHeaders(token) }), adminEnv as never);
+  expect(res.status).toBe(200);
+  return (await res.json<{ items: ListedEvent[] }>()).items;
+}
+const claimEvent = (token: string, eventId: string) =>
+  worker.fetch(new Request(`${base}${claimPath(eventId, game)}`, { method: 'POST', headers: authHeaders(token) }), adminEnv as never);
+/** 何も書いていないことを見るための行（イベント・報酬・監査）。 */
+async function eventSnapshot(): Promise<unknown[]> {
+  return [
+    (await baseEnv.DB.prepare('SELECT event_id, kind, starts_at, ends_at, reset_offset_minutes FROM events WHERE game_id = ? ORDER BY event_id')
+      .bind(game).all()).results,
+    (await baseEnv.DB.prepare('SELECT event_id, item_id, amount FROM event_rewards WHERE game_id = ? ORDER BY event_id, item_id')
+      .bind(game).all()).results,
+    await countRows('admin_audit_log'),
+  ];
+}
+
+describe('O4 イベントの定義の関数', () => {
+  it('イベントの定義の本文は期間と区切りと時差と報酬の行の数を確かめる', () => {
+    expect(MAX_REWARD_LINES).toBe(10);
+    const valid = { kind: 'daily', startsAt: '2026-11-01T00:00:00Z', endsAt: '2026-12-01T00:00:00Z', resetOffsetMinutes: 540,
+      rewards: [{ itemId: 'gold', amount: 100 }] };
+    expect(parseEventDefinition(valid)).toEqual({ ok: true, value: { kind: 'daily', startsAt: Date.parse(valid.startsAt) / 1000,
+      endsAt: Date.parse(valid.endsAt) / 1000, resetOffsetMinutes: 540, rewards: [{ itemId: 'gold', amount: 100 }] } });
+    const lines = (n: number) => Array.from({ length: n }, (_, i) => ({ itemId: `item-${String(i).padStart(2, '0')}`, amount: 1 }));
+    // 通る: 区切りの全部・時差の端・時差の無い本文（0）・ミリ秒（秒に丸める）・報酬の行の上限・amount の上限・報酬は品目の ID の昇順になる
+    const passing: Array<[Record<string, unknown>, Record<string, unknown>]> = [
+      [{ kind: 'once' }, { kind: 'once' }], [{ kind: 'weekly' }, { kind: 'weekly' }],
+      [{ resetOffsetMinutes: -720 }, { resetOffsetMinutes: -720 }], [{ resetOffsetMinutes: 840 }, { resetOffsetMinutes: 840 }],
+      [{ resetOffsetMinutes: undefined }, { resetOffsetMinutes: 0 }],
+      [{ startsAt: '2026-11-01T00:00:00.999Z' }, { startsAt: Date.parse(valid.startsAt) / 1000 }],
+      [{ rewards: lines(MAX_REWARD_LINES) }, { rewards: lines(MAX_REWARD_LINES) }],
+      [{ rewards: [{ itemId: 'gold', amount: MAX_ITEM_AMOUNT }] }, { rewards: [{ itemId: 'gold', amount: MAX_ITEM_AMOUNT }] }],
+      [{ rewards: [{ itemId: 'potion', amount: 2 }, { itemId: 'gold', amount: 1 }] },
+        { rewards: [{ itemId: 'gold', amount: 1 }, { itemId: 'potion', amount: 2 }] }],
+    ];
+    for (const [change, expected] of passing) {
+      const result = parseEventDefinition({ ...valid, ...change });
+      expect(result.ok, JSON.stringify(change).slice(0, 80)).toBe(true);
+      if (result.ok) expect(result.value).toMatchObject(expected);
+    }
+    // 外れ: 始まり ≥ 終わり（秒に丸めて同じも）・知らない区切り・時差の外・報酬 0 行と上限より 1 行多い・品目の重なり・amount の外・形の誤り
+    const failing: Array<Record<string, unknown>> = [
+      { endsAt: valid.startsAt }, { startsAt: valid.endsAt, endsAt: valid.startsAt },
+      { startsAt: '2026-11-01T00:00:00.100Z', endsAt: '2026-11-01T00:00:00.900Z' },
+      { kind: 'monthly' }, { kind: undefined }, { kind: 'Daily' },
+      { resetOffsetMinutes: -721 }, { resetOffsetMinutes: 841 }, { resetOffsetMinutes: 1.5 }, { resetOffsetMinutes: '540' },
+      { rewards: [] }, { rewards: lines(MAX_REWARD_LINES + 1) }, { rewards: undefined }, { rewards: { itemId: 'gold', amount: 1 } },
+      { rewards: [{ itemId: 'gold', amount: 1 }, { itemId: 'gold', amount: 2 }] },
+      { rewards: [{ itemId: 'gold', amount: 0 }] }, { rewards: [{ itemId: 'gold', amount: MAX_ITEM_AMOUNT + 1 }] },
+      { rewards: [{ itemId: 'gold', amount: 1.5 }] }, { rewards: [{ itemId: 'bad id', amount: 1 }] }, { rewards: [null] },
+      { startsAt: '2026-02-30T00:00:00Z' }, { startsAt: '2026-11-01 00:00:00' }, { startsAt: 1_793_491_200 }, { endsAt: undefined },
+    ];
+    for (const change of failing) {
+      expect(parseEventDefinition({ ...valid, ...change }).ok, JSON.stringify(change).slice(0, 80)).toBe(false);
+    }
+  });
+});
+
+describe('O4 品目とイベントの定義', () => {
+  it('管理の口で入れた品目とイベントがプレイヤーのイベントの一覧に出る', async () => {
+    const token = await eventGuest();
+    const item = await putItem('gem', 'currency');
+    expect(item.status).toBe(200);
+    expect(await expectAdminConforms(item, itemSpec, 'put')).toEqual({ gameId: game, itemId: 'gem', kind: 'currency' });
+    const definition = openDefinition({ rewards: [{ itemId: 'gold', amount: 100 }, { itemId: 'gem', amount: 5 }] });
+    const res = await putEvent('login', definition);
+    expect(res.status).toBe(200);
+    expect(await expectAdminConforms(res, eventSpec, 'put')).toEqual({ gameId: game, eventId: 'login', kind: 'daily',
+      startsAt: definition.startsAt, endsAt: definition.endsAt, resetOffsetMinutes: 0,
+      rewards: [{ itemId: 'gem', amount: 5 }, { itemId: 'gold', amount: 100 }] });
+    const listed = (await listEvents(token)).find((e) => e.eventId === 'login');
+    expect(listed).toMatchObject({ kind: 'daily', endsAt: definition.endsAt, claimed: false,
+      rewards: [{ itemId: 'gem', amount: 5 }, { itemId: 'gold', amount: 100 }] });
+    // 受け取ると品目が増える
+    expect((await claimEvent(token, 'login')).status).toBe(200);
+    const owned = await (await worker.fetch(new Request(`${base}${inventoryPath(game)}`, { headers: authHeaders(token) }), adminEnv as never))
+      .json<{ currencies: Array<{ itemId: string; amount: number }> }>();
+    expect(owned.currencies).toEqual([{ itemId: 'gem', amount: 5 }, { itemId: 'gold', amount: 100 }]);
+    expect((await listEvents(token)).find((e) => e.eventId === 'login')?.claimed).toBe(true);
+  });
+
+  it('イベントの定義を入れ直すと報酬の中身が置き換わる', async () => {
+    const token = await eventGuest();
+    const definition = openDefinition({ rewards: [{ itemId: 'gold', amount: 100 }, { itemId: 'potion', amount: 1 }] });
+    expect((await putEvent('login', definition)).status).toBe(200);
+    const again = await putEvent('login', { ...definition, rewards: [{ itemId: 'potion', amount: 3 }] });
+    expect(again.status).toBe(200);
+    expect((await again.json<EventResult>()).rewards).toEqual([{ itemId: 'potion', amount: 3 }]);
+    expect((await listEvents(token)).find((e) => e.eventId === 'login')?.rewards).toEqual([{ itemId: 'potion', amount: 3 }]);
+    const rows = await baseEnv.DB.prepare('SELECT item_id AS itemId, amount FROM event_rewards WHERE game_id = ? AND event_id = ?')
+      .bind(game, 'login').all();
+    expect(rows.results).toEqual([{ itemId: 'potion', amount: 3 }]);
+    // 受け取ると新しい中身だけが増える
+    expect((await claimEvent(token, 'login')).status).toBe(200);
+    expect(await (await worker.fetch(new Request(`${base}${inventoryPath(game)}`, { headers: authHeaders(token) }), adminEnv as never))
+      .json()).toMatchObject({ currencies: [], items: [{ itemId: 'potion', amount: 3 }] });
+  });
+
+  it('受け取りのあるイベントの区切りと始まりと時差は変えられない', async () => {
+    const token = await eventGuest();
+    const definition = openDefinition();
+    expect((await putEvent('login', definition)).status).toBe(200);
+    // 受け取りの無いうちは区切りも変えられる
+    expect((await putEvent('login', { ...definition, kind: 'weekly' })).status).toBe(200);
+    expect((await putEvent('login', definition)).status).toBe(200);
+    expect((await claimEvent(token, 'login')).status).toBe(200);
+    const before = await eventSnapshot();
+    const startsAt = isoAt(Date.parse(definition.startsAt) / 1000 - 60);
+    for (const change of [{ kind: 'weekly' }, { kind: 'once' }, { startsAt }, { resetOffsetMinutes: 540 }]) {
+      const res = await putEvent('login', { ...definition, ...change });
+      await expectAdminConforms(res.clone(), eventSpec, 'put');
+      await expectError(res, 400, 'INVALID_ARGUMENT');
+    }
+    expect(await eventSnapshot()).toEqual(before);
+    // 終わりと報酬だけの変更は通り、一覧に出る
+    const endsAt = isoAt(Date.parse(definition.endsAt) / 1000 + 86_400);
+    const res = await putEvent('login', { ...definition, endsAt, rewards: [{ itemId: 'potion', amount: 2 }] });
+    expect(res.status).toBe(200);
+    expect((await listEvents(token)).find((e) => e.eventId === 'login')).toMatchObject({ endsAt, claimed: true,
+      rewards: [{ itemId: 'potion', amount: 2 }] });
+  });
+
+  it('知らない品目を報酬にしたイベントの定義はNOT_FOUNDの404を返し何も書かない', async () => {
+    await registerGame(baseEnv.DB, game, ['inventory', 'events']);
+    const definition = openDefinition();
+    expect((await putEvent('login', definition)).status).toBe(200);
+    const before = await eventSnapshot();
+    // 新しいイベントも、あるイベントの入れ直しも。demo-rpg にある品目でもこのゲームに無ければ知らない品目
+    for (const [eventId, rewards] of [['login', [{ itemId: 'gold', amount: 1 }, { itemId: 'no-item', amount: 1 }]],
+      ['fresh', [{ itemId: 'no-item', amount: 1 }]]] as const) {
+      const res = await putEvent(eventId, { ...definition, rewards: [...rewards] });
+      await expectAdminConforms(res.clone(), eventSpec, 'put');
+      const body = await expectError(res, 404, 'NOT_FOUND');
+      expect(body.error.message).toBe('Unknown item');
+    }
+    await baseEnv.DB.prepare("INSERT INTO inventory_items (game_id, item_id, kind) VALUES ('demo-rpg', 'demo-only', 'item')").run();
+    await expectError(await putEvent('fresh', { ...definition, rewards: [{ itemId: 'demo-only', amount: 1 }] }), 404, 'NOT_FOUND');
+    expect(await eventSnapshot()).toEqual(before);
+  });
+
+  it('品目の種類は後から変えられない', async () => {
+    const res = await putItem('gold', 'item');
+    await expectAdminConforms(res.clone(), itemSpec, 'put');
+    await expectError(res, 400, 'INVALID_ARGUMENT');
+    await expectError(await putItem('gem', 'weapon'), 400, 'INVALID_ARGUMENT');
+    expect(await countRows('admin_audit_log')).toBe(0);
+    const kind = () => baseEnv.DB.prepare('SELECT kind FROM inventory_items WHERE game_id = ? AND item_id = ?').bind(game, 'gold')
+      .first<{ kind: string }>();
+    expect((await kind())?.kind).toBe('currency');
+    // 同じ種類なら何も変えずに 200（監査の行は残す）。無い品目は作る
+    expect(await (await putItem('gold', 'currency')).json()).toEqual({ gameId: game, itemId: 'gold', kind: 'currency' });
+    expect((await kind())?.kind).toBe('currency');
+    expect((await putItem('sword', 'item')).status).toBe(200);
+    const audit = await (await adminGet(auditPath())).json<AuditBody>();
+    expect(audit.items.map((a) => [a.action, a.target, a.before, a.after])).toEqual([
+      ['item.put', 'item:sword', null, { kind: 'item' }],
+      ['item.put', 'item:gold', { kind: 'currency' }, { kind: 'currency' }],
+    ]);
+  });
+
+  it('イベントの定義を入れると監査のログに前と後の定義が残る', async () => {
+    await registerGame(baseEnv.DB, game, ['inventory', 'events']);
+    const definition = openDefinition({ resetOffsetMinutes: 540, rewards: [{ itemId: 'potion', amount: 1 }, { itemId: 'gold', amount: 100 }] });
+    expect((await putEvent('login', definition)).status).toBe(200);
+    const changed = { ...definition, rewards: [{ itemId: 'gold', amount: 50 }], reason: '報酬を減らす' };
+    expect((await putEvent('login', changed)).status).toBe(200);
+    const audit = await (await adminGet(auditPath())).json<AuditBody>();
+    const first = { kind: 'daily', startsAt: definition.startsAt, endsAt: definition.endsAt, resetOffsetMinutes: 540,
+      rewards: [{ itemId: 'gold', amount: 100 }, { itemId: 'potion', amount: 1 }] };
+    expect(audit.items).toHaveLength(2);
+    expect(audit.items[1]).toMatchObject({ actor: 'local-admin', action: 'event.put', target: 'event:login', before: null, after: first,
+      reason: '試験のイベント' });
+    expect(audit.items[0]).toMatchObject({ actor: 'local-admin', action: 'event.put', target: 'event:login', before: first,
+      after: { ...first, rewards: [{ itemId: 'gold', amount: 50 }] }, reason: '報酬を減らす' });
+  });
+});
+
+describe('O4 管理コマンド', () => {
+  it('管理コマンドと同じ流れで付与と取り消しとBANとイベントの定義が監査のログに残る', async () => {
+    // scripts/admin-cli.mjs の smoke と同じ関数（runSmoke）に、HTTP の代わりに worker の fetch を渡す。期待と違えば runSmoke が投げる
+    const steps: Array<[string, number]> = [];
+    const result = await runSmoke({
+      send: (request) => worker.fetch(request, adminEnv as never), baseUrl: base, adminKey,
+      log: (step, status) => steps.push([step, status]),
+    });
+    expect(steps).toEqual([['guest', 200], ['player', 200], ['grant', 200], ['grant (same key)', 200], ['revoke', 200],
+      ['revoke (too much)', 409], ['ban', 200], ['inventory (banned)', 403], ['unban', 200], ['inventory', 200], ['put-item', 200],
+      ['put-event', 200], ['events', 200], ['audit', 200]]);
+    expect(result.gameId).toBe('demo-rpg');
+    const p = `player:${result.playerId}`;
+    expect(result.audit.map((a) => [a.action, a.target, a.before, a.after])).toEqual([
+      ['event.put', `event:${result.eventId}`, null, expect.objectContaining({ kind: 'daily', rewards: [{ itemId: result.itemId, amount: 5 }] })],
+      ['item.put', `item:${result.itemId}`, null, { kind: 'currency' }],
+      ['player.unban', p, expect.objectContaining({ reason: 'smoke: 止める', expiresAt: null }), null],
+      ['player.ban', p, null, { reason: 'smoke: 止める', expiresAt: null }],
+      ['inventory.adjust', p, { itemId: 'gold', amount: 50 }, { itemId: 'gold', amount: 30 }],
+      ['inventory.adjust', p, { itemId: 'gold', amount: 0 }, { itemId: 'gold', amount: 50 }],
+    ]);
+    expect(result.audit.map((a) => a.action)).toEqual(SMOKE_AUDIT_ACTIONS);
+    expect(result.audit.every((a) => a.actor === 'local-admin')).toBe(true);
+    // 二重の付与と足りない取り消しは何も書かない（履歴は 2 行・残高 30）
+    const ledger = await baseEnv.DB.prepare('SELECT delta FROM inventory_ledger WHERE game_id = ? AND player_id = ? ORDER BY entry_id')
+      .bind('demo-rpg', result.playerId).all<{ delta: number }>();
+    expect(ledger.results.map((r) => r.delta)).toEqual([50, -20]);
+    const balance = await baseEnv.DB.prepare('SELECT amount FROM inventory_balances WHERE game_id = ? AND player_id = ? AND item_id = ?')
+      .bind('demo-rpg', result.playerId, 'gold').first<{ amount: number }>();
+    expect(balance?.amount).toBe(30);
+    expect(await baseEnv.DB.prepare('SELECT COUNT(*) AS n FROM player_bans').first<{ n: number }>()).toEqual({ n: 0 });
   });
 });

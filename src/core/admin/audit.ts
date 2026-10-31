@@ -1,6 +1,6 @@
 // audit.ts — 監査のログ（表 admin_audit_log）の保持の期間・読む文・応答の 1 行の形。入出力を持たない。
 //
-// 監査の行は管理の書き込みの操作 1 回で 1 行（いま書く口は BAN・BAN を解く・所持品と通貨の増減・スコアを消す口。イベントの定義の束で足す）。
+// 監査の行は管理の書き込みの操作 1 回で 1 行（書く口は BAN・BAN を解く・所持品と通貨の増減・スコアを消す・品目とイベントの定義）。
 // 読み取りの口は監査に残さない。書き込みの口の共通の確かめ（X-Admin-Actor の parseActor・本文の reason の parseReason）と、
 // 増減の二重の止め（Idempotency-Key の parseIdempotencyKey・中身のハッシュ requestHash。鍵とハッシュは監査の行の列に入る）もここに置く。
 // before_json・after_json は保存した JSON を読み直して返す。トークン・管理の鍵・セーブの本文・IP は入れない。

@@ -4,15 +4,16 @@
 // （RATE_LIMITS.admin・IP ごと。正しい鍵でも数え、鍵を確かめる前に 429）→ 管理の鍵（401）→ gameId の形（400）→
 // ゲームの登録（404 Unknown game。機能の設定は見ない）→ 書き込みの口は X-Admin-Actor・本文の JSON・reason（400）→ 口ごとの確かめ。管理はゲームごとの機能にせず、機能のモジュールを
 // 読み込まない（表を SQL で読み書きするだけ）。どのプレイヤーのトークンも読まない。読み取りの口は監査に残さない。
-// 書き込みの口（BAN・BAN を解く・所持品と通貨の増減・スコアを消す）は、監査の行を 1 文目にし、続く文は「この要求の監査の行が
+// 書き込みの口（BAN・BAN を解く・所持品と通貨の増減・スコアを消す・品目とイベントの定義）は、監査の行を 1 文目にし、続く文は「この要求の監査の行が
 // 入ったとき」だけ書く 1 つの batch で書く（片方だけ残らない）。増減の続く文と受領の履歴の種類の名前は src/core/ledger.ts。
+// 品目の種類の違い・報酬の品目の有無・受け取りのあるイベントの守りは、先に読んで断り、監査の行の文の条件にも入れる（読んでから書くまでの間に変わっても書かない）。
 // 増減は Idempotency-Key が必須で、鍵と中身のハッシュを監査の行の列に入れて二重を止める（同じ中身は 200 で 1 回目と同じ本文・違う中身は 422）。
 // ルートの一覧はルーター（src/core/router.ts）がゲストの発行の後・機能のルートの前に当てる。形の正は openapi/rpg-online-admin.v1.json、
-// 挙動の説明の正は docs/api-contract.md の「管理の API」、設計の正は docs/guides/working/admin-design.md §2・§4〜§6。
+// 挙動の説明の正は docs/api-contract.md の「管理の API」、設計の正は docs/guides/working/admin-design.md §2・§4〜§7。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
 import { isBanActive } from '../bans';
-import type { Env } from '../env';
+import type { Database, Env } from '../env';
 import { loadGame } from '../games';
 import { requireLocalWrite } from '../guards';
 import { error, json } from '../http';
@@ -24,7 +25,7 @@ import { consume, ipSubject } from '../rate-limit';
 import { RATE_LIMITS } from '../rate-limit-policy';
 import { isoSeconds, listAuditSql, parseActor, parseIdempotencyKey, parseReason, requestHash, shapeAuditRow, type AuditRow } from './audit';
 import { adminSecret, requireAdmin } from './key';
-import { parseAdjustment, parseAuditQuery, parseExpiresAt, PLAYER_HISTORY_ROWS } from './parse';
+import { parseAdjustment, parseAuditQuery, parseEventDefinition, parseExpiresAt, parseItemKind, PLAYER_HISTORY_ROWS, type EventDefinition } from './parse';
 
 type Checked = { ok: true; gameId: string } | { ok: false; response: Response };
 
@@ -131,6 +132,71 @@ const deleteRanking = `DELETE FROM ranking_entries WHERE game_id = ? AND board_i
 const auditByRef = 'SELECT audit_id AS auditId FROM admin_audit_log WHERE audit_ref = ?';
 
 type KeyRow = { ref: string; hash: string; afterJson: string; auditId: number };
+
+// 品目の定義（item.put）。1 文目は監査の行で、前は同じ文の中で読んだ種類（無ければ NULL）。種類の違う品目があれば入らない
+const itemKind = 'SELECT kind FROM inventory_items WHERE game_id = ? AND item_id = ?';
+const insertItemAudit = `INSERT INTO admin_audit_log (audit_ref, game_id, actor, action, target, before_json, after_json, reason, created_at)
+  SELECT ?, ?, ?, 'item.put', ?, (SELECT json_object('kind', kind) FROM inventory_items WHERE game_id = ? AND item_id = ?), ?, ?, ?
+  WHERE NOT EXISTS (SELECT 1 FROM inventory_items WHERE game_id = ? AND item_id = ? AND kind <> ?)`;
+// 同じ種類の品目があれば何もしない
+const insertItem = `INSERT INTO inventory_items (game_id, item_id, kind)
+  SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM admin_audit_log WHERE audit_ref = ?)
+  ON CONFLICT (game_id, item_id) DO NOTHING`;
+
+// イベントの定義（event.put）
+const isoColumn = (column: string) => `strftime('%Y-%m-%dT%H:%M:%SZ', ${column}, 'unixepoch')`;
+const eventState = `SELECT kind, starts_at AS startsAt, reset_offset_minutes AS offsetMinutes,
+    EXISTS (SELECT 1 FROM event_claims c WHERE c.game_id = e.game_id AND c.event_id = e.event_id) AS claimed
+  FROM events e WHERE e.game_id = ? AND e.event_id = ?`;
+/** 報酬の品目のうち、そのゲームにあるものの数を数える文（品目の数だけ ? を並べる）。 */
+const knownItems = (n: number) =>
+  `SELECT COUNT(*) AS n FROM inventory_items WHERE game_id = ? AND item_id IN (${Array(n).fill('?').join(', ')})`;
+/** 1 文目（監査の行）。前の定義は同じ文の中で読む（無ければ NULL）。報酬の品目が全部あり、受け取りのあるイベントの区切り・始まり・時差を変えないときだけ入る。 */
+const insertEventAudit = (n: number) => `INSERT INTO admin_audit_log (audit_ref, game_id, actor, action, target, before_json, after_json, reason, created_at)
+  SELECT ?, ?, ?, 'event.put', ?,
+    (SELECT json_object('kind', kind, 'startsAt', ${isoColumn('starts_at')}, 'endsAt', ${isoColumn('ends_at')},
+        'resetOffsetMinutes', reset_offset_minutes,
+        'rewards', json((SELECT json_group_array(json_object('itemId', item_id, 'amount', amount))
+          FROM (SELECT item_id, amount FROM event_rewards WHERE game_id = ? AND event_id = ? ORDER BY item_id))))
+      FROM events WHERE game_id = ? AND event_id = ?),
+    ?, ?, ?
+  WHERE (${knownItems(n)}) = ?
+    AND NOT EXISTS (SELECT 1 FROM events e WHERE e.game_id = ? AND e.event_id = ?
+      AND (e.kind <> ? OR e.starts_at <> ? OR e.reset_offset_minutes <> ?)
+      AND EXISTS (SELECT 1 FROM event_claims c WHERE c.game_id = e.game_id AND c.event_id = e.event_id))`;
+// 続く文は、この要求の監査の行が入ったときだけ書く
+const upsertEvent = `INSERT INTO events (game_id, event_id, kind, starts_at, ends_at, reset_offset_minutes)
+  SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM admin_audit_log WHERE audit_ref = ?)
+  ON CONFLICT (game_id, event_id) DO UPDATE SET
+    kind = excluded.kind, starts_at = excluded.starts_at, ends_at = excluded.ends_at, reset_offset_minutes = excluded.reset_offset_minutes`;
+const deleteRewards = `DELETE FROM event_rewards WHERE game_id = ? AND event_id = ?
+  AND EXISTS (SELECT 1 FROM admin_audit_log WHERE audit_ref = ?)`;
+const insertReward = `INSERT INTO event_rewards (game_id, event_id, item_id, amount)
+  SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM admin_audit_log WHERE audit_ref = ?)`;
+
+type EventState = { kind: string; startsAt: number; offsetMinutes: number; claimed: number };
+
+/** 受け取りのあるイベントで、区切り・始まり・時差のどれかを変えようとしているか。 */
+function changesClaimedPeriod(state: EventState | undefined, def: EventDefinition): boolean {
+  return !!state && state.claimed === 1
+    && (state.kind !== def.kind || state.startsAt !== def.startsAt || state.offsetMinutes !== def.resetOffsetMinutes);
+}
+
+/** 報酬の品目が全部そのゲームにあるか。 */
+async function rewardItemsExist(db: Database, gameId: string, def: EventDefinition): Promise<boolean> {
+  const ids = def.rewards.map((r) => r.itemId);
+  const row = (await db.prepare(knownItems(ids.length)).bind(gameId, ...ids).all<{ n: number }>()).results[0];
+  return row?.n === ids.length;
+}
+
+/** 応答と監査の後の状態に使う定義（時刻は ISO 8601 の UTC の秒まで）。 */
+function shownDefinition(def: EventDefinition) {
+  return { kind: def.kind, startsAt: isoSeconds(def.startsAt), endsAt: isoSeconds(def.endsAt),
+    resetOffsetMinutes: def.resetOffsetMinutes, rewards: def.rewards };
+}
+
+const lockedEvent = () => error('INVALID_ARGUMENT', 'A claimed event cannot change kind, startsAt or resetOffsetMinutes', 400);
+const changedKind = () => error('INVALID_ARGUMENT', 'Item kind cannot be changed', 400);
 
 export const adminRoutes: Route[] = [
   {
@@ -267,6 +333,62 @@ export const adminRoutes: Route[] = [
       const written = (await env.DB.prepare(auditByRef).bind(ref).all<{ auditId: number }>()).results[0];
       if (!written) return error('NOT_FOUND', 'Unknown ranking entry', 404);
       return json({ gameId, boardId, playerId, deleted: true, auditId: written.auditId });
+    },
+  },
+  {
+    method: 'PUT',
+    pattern: /^\/v1\/admin\/items\/([a-zA-Z0-9_-]{1,64})$/,
+    async handle(req, env, match, url, known) {
+      const access = await checkAdminWrite(req, env, url, known);
+      if (!access.ok) return access.response;
+      const { gameId, actor, reason, body } = access;
+      const itemId = match[1];
+      const kind = parseItemKind(body.kind);
+      if (kind === null) return error('INVALID_ARGUMENT', 'kind must be currency or item', 400);
+      // 種類は後から変えない（残高と報酬が種類を前提にしている）。同じ種類なら何も変えず、監査の行は残す
+      const current = (await env.DB.prepare(itemKind).bind(gameId, itemId).all<{ kind: string }>()).results[0];
+      if (current && current.kind !== kind) return changedKind();
+      const ref = crypto.randomUUID();
+      await env.DB.batch([
+        env.DB.prepare(insertItemAudit).bind(ref, gameId, actor, `item:${itemId}`, gameId, itemId, JSON.stringify({ kind }), reason,
+          serverNow(), gameId, itemId, kind),
+        env.DB.prepare(insertItem).bind(gameId, itemId, kind, ref),
+      ]);
+      // 読んでから書くまでの間に別の種類で入った
+      if (!(await env.DB.prepare(auditByRef).bind(ref).all()).results[0]) return changedKind();
+      return json({ gameId, itemId, kind });
+    },
+  },
+  {
+    method: 'PUT',
+    pattern: /^\/v1\/admin\/events\/([a-zA-Z0-9_-]{1,64})$/,
+    async handle(req, env, match, url, known) {
+      const access = await checkAdminWrite(req, env, url, known);
+      if (!access.ok) return access.response;
+      const { gameId, actor, reason, body } = access;
+      const eventId = match[1];
+      const parsed = parseEventDefinition(body);
+      if (!parsed.ok) return error('INVALID_ARGUMENT', parsed.message, 400);
+      const def = parsed.value;
+      if (!await rewardItemsExist(env.DB, gameId, def)) return error('NOT_FOUND', 'Unknown item', 404);
+      const state = (await env.DB.prepare(eventState).bind(gameId, eventId).all<EventState>()).results[0];
+      if (changesClaimedPeriod(state, def)) return lockedEvent();
+      const ids = def.rewards.map((r) => r.itemId);
+      const shown = shownDefinition(def);
+      const ref = crypto.randomUUID();
+      await env.DB.batch([
+        env.DB.prepare(insertEventAudit(ids.length)).bind(ref, gameId, actor, `event:${eventId}`, gameId, eventId, gameId, eventId,
+          JSON.stringify(shown), reason, serverNow(), gameId, ...ids, ids.length, gameId, eventId, def.kind, def.startsAt,
+          def.resetOffsetMinutes),
+        env.DB.prepare(upsertEvent).bind(gameId, eventId, def.kind, def.startsAt, def.endsAt, def.resetOffsetMinutes, ref),
+        env.DB.prepare(deleteRewards).bind(gameId, eventId, ref),
+        ...def.rewards.map((r) => env.DB.prepare(insertReward).bind(gameId, eventId, r.itemId, r.amount, ref)),
+      ]);
+      if (!(await env.DB.prepare(auditByRef).bind(ref).all()).results[0]) {
+        // 読んでから書くまでの間に品目か受け取りが変わった。何も書いていないので、もう一度見分ける
+        return await rewardItemsExist(env.DB, gameId, def) ? lockedEvent() : error('NOT_FOUND', 'Unknown item', 404);
+      }
+      return json({ gameId, eventId, ...shown });
     },
   },
   {
