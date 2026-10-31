@@ -45,7 +45,7 @@ Phase 1 の残り「エラーコード、タイムアウト、ページングを
 | `api-schema-design.md`（`docs/guides/working/api-schema-design.md`） | 形の正は `openapi/rpg-online.v1.json`（OpenAPI 3.1 の JSON・パッケージを足さない自前の検証関数 `test/support/schema-check.ts`）。各応答に返りうるコードの `x-error-codes` がある（103 か所）。操作は 19 個・`ErrorCode` の列挙は 19 個 |
 | `docs/api-contract.md` のエラー | 形は `{"error":{"code","message"}}`。ゲームのクライアントの口のコードは 19 個（`INVALID_ARGUMENT`・`NOT_FOUND`・`NOT_READY_FOR_PRODUCTION`・`INVALID_JSON`・`INTERNAL_ERROR`・`UNAUTHENTICATED`・`TOKEN_EXPIRED`・`PERMISSION_DENIED`・`SAVE_CONFLICT`・`PAYLOAD_TOO_LARGE`・`SLOT_LIMIT_EXCEEDED`・`RATE_LIMITED`・`EVENT_NOT_ACTIVE`・`INVENTORY_LIMIT_EXCEEDED`・`PLAYER_BANNED`・`PLAYER_DATA_LIMIT_EXCEEDED`・`IDEMPOTENCY_KEY_REUSED`・`QUEST_NOT_COMPLETED`・`QUEST_NOT_ACTIVE`）。DB の失敗は中身を返さず 500 `INTERNAL_ERROR`。`message` の文は決めない（クライアントは `code` で分ける） |
 | `abuse-protection-design.md`（`docs/guides/working/abuse-protection-design.md`） | 429 `RATE_LIMITED` と `Retry-After`（窓の終わりまでの秒。1〜60 の整数。`src/core/rate-limit.ts` の `retryAfterSeconds`）。断った要求も数える。CLI モックは 429 で再試行せず止まる（§11）。`Idempotency-Key` の後から足す形の期限は「**要確認**: クライアントの再試行の長さ。Phase 3」と残っている |
-| `account-design.md`（`docs/guides/working/account-design.md`） | トークンは `v1.<本文>.<HMAC-SHA256>`、期限 30 日（`src/core/token.ts` の `TOKEN_TTL_SECONDS`）、更新の口は作らない（§8 の決めること 3。B の更新の口は引き継ぎと一緒に設計する）。期限切れは 401 `TOKEN_EXPIRED`、壊れた・無いトークンは 401 `UNAUTHENTICATED`。外部の認証（Steam など）は `account_identities(provider, subject, account_id)` を足す形（§11） |
+| `account-design.md`（`docs/guides/working/account-design.md`） | トークンは `v1.<本文>.<HMAC-SHA256>`、期限 30 日（`src/core/token.ts` の `TOKEN_TTL_SECONDS`）、更新の口は作らない（§8 の決めること 3 の A。そこでの B は「1 時間の短いトークン＋D1 に持つ長い更新用の秘密」で、引き継ぎと一緒に設計するとした。C の「期限無し」は漏れたトークンが永久に使えるので退けた）。期限切れは 401 `TOKEN_EXPIRED`、壊れた・無いトークンは 401 `UNAUTHENTICATED`。外部の認証（Steam など）は `account_identities(provider, subject, account_id)` を足す形（§11） |
 | `event-reward-design.md`（`docs/guides/working/event-reward-design.md`）・`quest-design.md` | 報酬の受け取りは一意の鍵（プレイヤー・イベントかクエスト・区切り）で、同じ区切りの 2 回目は 200 で 1 回目と同じ本文。区切りをまたいだ送り直しは 409 になりうるので、受領の履歴で確かめる |
 | `player-data-design.md`（`docs/guides/working/player-data-design.md`） | `POST /v1/player-data` は `Idempotency-Key` が必須（`^[a-zA-Z0-9_-]{8,64}$`）。同じ鍵と同じ中身は 200 で同じ本文、違う中身は 422 `IDEMPOTENCY_KEY_REUSED`。鍵の期限は 30 日（掃除が消す）。クライアントは書き込みごとに新しい鍵を作り、送り直しだけ同じ鍵 |
 | `save-design.md`（`docs/guides/working/save-design.md`） | セーブの `PUT`・`DELETE` は `baseRevision` で競合を止める。2 回目の `PUT` は 409 `SAVE_CONFLICT`、2 回目の `DELETE` は 404 `NOT_FOUND`。一覧は最大 10 件でページングしない |
@@ -68,7 +68,7 @@ Phase 1 の残り「エラーコード、タイムアウト、ページングを
 | --- | --- |
 | 1 回の要求のタイムアウト | **10 秒**（接続から本文を読み終えるまで） |
 | 試す回数 | **最大 3 回**（初回 + 再試行 2 回） |
-| 再試行の間隔 | 指数の待ち: 1 回目の再試行の前に 1 秒、2 回目の前に 2 秒（基本 1 秒 × 2 の n 乗・上限 8 秒）。**揺らぎ（全幅の jitter）**を入れ、実際の待ちは 0〜その秒の一様乱数 |
+| 再試行の間隔 | 指数の待ち: 1 回目の再試行の前に 1 秒、2 回目の前に 2 秒（基本 1 秒 × 2 の n 乗。上限 8 秒は、回数を増やしたときの頭打ちで、3 回のいまは届かない）。**揺らぎ（全幅の jitter）**を入れ、実際の待ちは 0〜その秒の一様乱数 |
 | 1 つの操作の全体の上限 | 試す回数と間隔から決まる（10 + 1 + 10 + 2 + 10 = 約 33 秒）。これを超えて待たない |
 
 - 再試行**する**状態: 回線断（接続できない・途中で切れた）・タイムアウト・500 `INTERNAL_ERROR`・502・503・504（Cloudflare の手前が返す JSON でない応答を含む）・429 `RATE_LIMITED`（§2.3 の別の決まり）。
@@ -169,6 +169,7 @@ Phase 1 の残り「エラーコード、タイムアウト、ページングを
 
 - クライアントはゲストの発行の応答の `token` と `expiresAt` を保存する（ブラウザは `localStorage`、Unity・Unreal はそれぞれの保存先〔**要確認**: 各エンジンの保存の API〕）。トークンを画面・ログに出さない（`scripts/cli-mock.mjs` が `[redacted]` にしているのと同じ）。クライアントに保存したトークンは長期の秘密として安全とはみなさない（`architecture.md` §5）。
 - **推し: B3 でトークンの更新の口 `POST /v1/accounts/token` を足す**（§11 の決めること 7 の B）。期限の前の正しいトークンを `Authorization: Bearer` で送ると、同じ `g`・`p` で期限を 30 日先にした新しいトークンを返す。SDK は期限まで 7 日を切ったら、次の要求の前に更新する。更新の口の利用制限はプレイヤーごと（トークンのゲームとプレイヤー）に 60 秒に 10 回（`src/core/rate-limit-policy.ts` に単位を 1 つ足す。B3）。確かめの順はほかのトークンの口と同じ（`APP_ENV` の守り → トークン → 利用制限 → 止めた印）で、止めたプレイヤーは 403 `PLAYER_BANNED`。
+- **トレードオフ（`account-design.md` の決めること 3 の決め直し）:** この更新の口は、そこで退けた C（期限無し）と同じく、漏れたトークンを持つ人が 30 日ごとに更新し続けられる。違いは、30 日更新しなければ切れることと、止める手段があること（管理の口の BAN〔`player_bans`。`admin-design.md` §4〕でそのプレイヤーの更新も 403 `PLAYER_BANNED` になる。全員を止めるなら鍵の取り替え）。そこでの B（短いトークン＋D1 の更新用の秘密）は、取り消しを 1 人ずつできるが、表と秘密の保存が増え、引き継ぎと一緒に設計する前提だった。B3 は `account-design.md` の決めること 3 を「A に、期限の前だけ使える更新の口を足す」に直し、この理由を写す。
 - 期限が切れた（401 `TOKEN_EXPIRED`）・壊れた（401 `UNAUTHENTICATED`）トークンは更新できない。SDK は自動でゲストを発行し直さず、呼び出し側に `session` を返す。ゲームが「新しく始める」をプレイヤーに見せてから発行し直す（前のプレイヤーは引き継がない。`docs/api-contract.md`）。
 - 更新の口が無いままだと、30 日を越えて遊ぶ人は全員別のプレイヤーになり、継続率の D30 が実際より低く出る（`analytics-design.md` の偏り）。更新の口はこれを 30 日の間に一度でも遊んだ人について消す。端末をまたぐ引き継ぎは更新の口では解けず、Phase 4 以降（§13）。
 
@@ -183,11 +184,11 @@ Phase 1 の残り「エラーコード、タイムアウト、ページングを
 
 **推し: 形の正のスキーマ `openapi/rpg-online.v1.json` に、OpenAPI の拡張（`x-` で始まる欄）として持つ。**
 
-- 最上位に `x-client-policy`（§2.1 の値・§2.3 の上限・§2.5 の表）を 1 つ。
+- 最上位に `x-client-policy`（§2.1 の値と再試行する状態・§2.3 の上限・§2.5 の表。B3 で §2.7 の更新の時期 `tokenRefreshBeforeSeconds` を足す）を 1 つ。
 - 各操作（操作のオブジェクト）に `x-retry`（§2.2 の種類）。いまの応答ごとの `x-error-codes` と同じく、拡張の欄で持つ。
-- `components.schemas` の中には置かない（自前の検証関数 `test/support/schema-check.ts` は知らない語で例外を投げる決まりで、スキーマの木の外なら影響しない）。
+- `components.schemas` の中には置かない（自前の検証関数 `test/support/schema-check.ts` は `x-` で始まる語を読み飛ばすので置いても壊れないが、形の定義と混ぜないため）。
 
-形（B1 で入れる。値は §2）:
+形（B1 で入れる。`tokenRefreshBeforeSeconds` だけは B3 で足す。値は §2）:
 
 ```json
 {
@@ -273,14 +274,15 @@ Phase 3 の完了条件の「同一の API シナリオ」は、**いまの CLI 
 ### 5.5 サンプルの形（§11 の決めること 13）
 
 - **推し: ブラウザで開く 1 枚のページ** `clients/browser/sample/index.html`（ビルド無し。`<script type="module">` で SDK を読む）。ボタン 1 つで §4 のシナリオを流し、手順ごとの状態コード・画面の文の種類を表に出す。トークンとセーブの本体は出さない。
-- ページは任意の静的なサーバー（**要確認**: Node.js 22 にパッケージ無しで使える静的サーバーは無い。`npx` で取ってくるのはインターネットからの実行になるので無人の回ではしない）か、Worker と同じオリジンで出す。どちらを推すかは §5.6 と一緒に §11 の決めること 14。
+- ページの出し方（§11 の決めること 14 の A と組）: **Mac にある `python3 -m http.server 5173 --bind 127.0.0.1` を `clients/browser/` で起動し、`http://127.0.0.1:5173/sample/` を開く**（パッケージを足さない。**要確認**: その Mac の `python3` の有無。Node.js 22 にはパッケージ無しの静的なサーバーが無く、`npx` で取ってくるのはインターネットからの実行になるので使わない）。人の確かめ H1 の手順で起動し、終わったら止める（無人の回では起動しない）。
+- `file://` で開いたページはオリジンが `null` になり、CORS で許さない（§5.6）。サンプルの画面に「127.0.0.1:5173 から開く」と書く。
 - 機械の確かめ: B4 の試験がページの HTML を文字列として読み、SDK を読み込んでいること・シナリオの関数を呼んでいることを見る。実際に開いて押すのは人（§9 の H1）。
 
 ### 5.6 ブラウザから呼ぶための CORS（§11 の決めること 14）
 
 いまの Worker は CORS の見出しを返さない（§1）。ブラウザのサンプルが動くには次のどれかが要る。
 
-- **推し: A. `APP_ENV=local` のときだけ、決めたオリジン（`http://127.0.0.1:<port>`・`http://localhost:<port>`）に CORS を返す**（B4・`src/core/` に 1 か所）。`OPTIONS` の事前確認に 204、`Access-Control-Allow-Headers` に `Authorization`・`Content-Type`・`Idempotency-Key`・`If-None-Match`、`Access-Control-Expose-Headers` に `Retry-After`・`ETag`。`local` でない環境では何も足さない（`APP_ENV` の守りと同じ向き）。
+- **推し: A. `APP_ENV=local` のときだけ、決めたオリジン（`http://127.0.0.1:5173`・`http://localhost:5173` の 2 つ。§5.5 のページの置き場。`null` のオリジンは許さない）に CORS を返す**（B4・`src/core/` に 1 か所）。`OPTIONS` の事前確認に 204、`Access-Control-Allow-Headers` に `Authorization`・`Content-Type`・`Idempotency-Key`・`If-None-Match`、`Access-Control-Expose-Headers` に `Retry-After`・`ETag`。`local` でない環境では何も足さない（`APP_ENV` の守りと同じ向き）。
 - B. Worker がサンプルのページも出す（同じオリジンなので CORS が要らない。ただし Worker に静的なファイルの口が増え、`wrangler.jsonc` を変える）。
 - C. CORS を足さず、サンプルは Node.js からだけ動かす（ブラウザで確かめたことにならない）。
 
@@ -331,7 +333,7 @@ Phase 3 の完了条件の「同一の API シナリオ」は、**いまの CLI 
 | K4 の名前 | 層 | 作る束 | 確かめ方 |
 | --- | --- | --- | --- |
 | `CLIはタイムアウトしたら決めた回数だけ再試行して失敗を表示する` | L2 | B2 | 応答しない偽の `fetch` と差し替えた時計で、SDK 経由の CLI モックの送り方を呼ぶ。3 回送って、画面の文の種類 `network` と理由を出し、終了コード 1 にする関数の結果を見る。「決めた回数」は §2.1 の 3 回・「時間」は 10 秒 |
-| `旧CLIはスキーマ変更後のAPIでもランキングを送って読める` | L2 | B2 | B1 で `openapi/rpg-online.v1.json` に欄を足した後に、B1 より前の CLI モックの要求の形（試験の中に写した固定の本文）でゲストの発行・スコアの投稿・読み取りを Worker に当てて 200 を見る |
+| `旧CLIはスキーマ変更後のAPIでもランキングを送って読める` | L2 | B3 | B3 でサーバーにトークンの更新の口を足した後に、B3 より前の CLI モックの要求の形（試験の中に写した固定の本文。`scripts/cli-requests.mjs` を読まない）で、全部のマイグレーションを当てた Worker にゲストの発行・スコアの投稿・読み取りを当てて 200 を見る。B3 はマイグレーションを足さないので、この回は欄を足しても旧い要求が通ることを固め、以後のマイグレーションの束で落ちたら互換が壊れた合図になる（`failure-case-test-plan.md` の「次のマイグレーションを当てたあと」は、その束から当てはまる） |
 | `UEクライアントは500を受けたら再試行して利用者に通信エラーを出す` | L3 | B6 | 人（§9 の H5）。Mac の機械の確かめは B6 の `Unrealのクライアント層の決まりの値はスキーマと一致する` まで |
 | `UEクライアントは端末の時刻がずれていても期間の判定にサーバーの時刻を使う` | L3 | B6 | 人（§9 の H6）。サーバーの側は `test/events.test.ts` の既存の試験が先に固めている |
 
@@ -353,7 +355,7 @@ Phase 3 の完了条件の「同一の API シナリオ」は、**いまの CLI 
 
 | 束 | テストの名前 | 層 | 入力 | 期待する結果 |
 | --- | --- | --- | --- | --- |
-| B1 | `スキーマのクライアントの決まりはタイムアウトと再試行の回数と間隔を持つ` | L1 | `openapi/rpg-online.v1.json` の `x-client-policy` | §2.1・§2.3 の値（10 秒・3 回・1 秒×2・上限 8 秒・全幅の揺らぎ・待つ上限 60 秒・1 回） |
+| B1 | `スキーマのクライアントの決まりはタイムアウトと再試行の回数と間隔を持つ` | L1 | `openapi/rpg-online.v1.json` の `x-client-policy` | §2.1・§2.3 の値（10 秒・3 回・1 秒×2・上限 8 秒・全幅の揺らぎ・再試行する状態 429・500・502・503・504・待つ上限 60 秒・1 回） |
 | B1 | `スキーマの全部の操作が再試行の種類を持つ` | L1 | 19 の操作 | どれも `x-retry` が 5 つの種類のどれか。§2.2 の表と同じ |
 | B1 | `スキーマのエラーコードの表はErrorCodeの列挙と同じコードを持つ` | L1 | `errorCatalog` と `ErrorCode` の列挙 | 同じ集合。種類は §2.5 の 11 のどれか |
 | B1 | `Idempotency-Keyが必須の操作だけが再試行の種類idempotency-keyを持つ` | L1 | 見出しの `Idempotency-Key` が `required` の操作 | `writePlayerData` だけで、`x-retry` が `idempotency-key` |
@@ -386,6 +388,8 @@ Phase 3 の完了条件の「同一の API シナリオ」は、**いまの CLI 
 | B6 | `Unrealのクライアント層の決まりの値はスキーマと一致する` | L1 | C++ の定数のヘッダーを文字列で | `x-client-policy` と同じ値 |
 | B6 | `Unrealのクライアント層はエラーコードの表の全部のコードを持つ` | L1 | 同上 | `errorCatalog` の全部のコードと種類 |
 | B6 | `Unrealのイベントコマンドの一覧はシナリオの全部の操作を持つ` | L1 | イベントコマンドの一覧 | §4 の操作がどれもコマンドに当たる |
+
+表に無いが束の `requireTests` に入る名前: K4 の 2 本（§7。名前の正は `failure-case-test-plan.md`）と、§10 で名前を変える `スキーマのファイルはOpenAPI 3.1で20個の操作を持つ`（B3）。
 
 人が専用 PC・ブラウザで見るもの（L3。機械の合否と分ける。`requireTests` に入れない）:
 
@@ -423,7 +427,7 @@ ADR 0001・ADR 0002 と、これまでの 12 の設計書の決定は前提で�
 | 4 | 500・回線断の扱い | A: **`network` にまとめ、種類が許す操作だけ再試行。`revision` は読み直しの関数を用意する**。B: 500 は再試行しない（サーバーの不具合とみなす） | **A**。D1 の一時の失敗も 500 になり、読み取りと冪等な書き込みは送り直して害が無い。B は一時の失敗をそのままプレイヤーに見せる |
 | 5 | エラーコードの表の持ち方と見張り | A: **§2.5 の表を §3 の置き場（スキーマの拡張）に持ち、`ErrorCode` の列挙と同じ集合を B1 の試験が見張る**。B: 文書の表だけ。C: SDK のコードの中だけ | **A**。コードを足した束で表を忘れると試験が落ちる。B は数のずれを機械で見つけられない。C は Unity・Unreal と食い違う |
 | 6 | ページング | A: **いまの形を確定（続きのある一覧は `limit`・`before`・`nextBefore`、ほかは上限で切る）。新しい一覧はカーソルの形だけ**。B: 全部の一覧にカーソルを足して揃える。C: `offset` に揃える | **A**。いまの 2 つの口は同じ形で、ほかの一覧は件数が上限で決まる。B は `/v1/` の応答に欄を足す仕事が増えるだけで使い手がいない。C は行が増えるとずれる |
-| 7 | トークンの期限が切れたとき | A: いまのまま（ゲストを発行し直す・前のプレイヤーを引き継がない）。B: **B3 で更新の口 `POST /v1/accounts/token` を足す（期限の前のトークンだけ。期限を 30 日先にする）**。C: Phase 4 以降に回す | **B**。クライアントを作る Phase 3 で SDK の形に入れておけば、3 つのクライアントを後で直さずに済む。30 日の間に一度遊べば同じプレイヤーのまま続き、D30 の偏りが消える。サーバーの変更は `src/core/` の口 1 つとスキーマの操作 1 つで、エラーコードは足さない。A・C は 30 日を越えて遊ぶ人を全員別人にする。端末をまたぐ引き継ぎは B でも解けない（§13） |
+| 7 | トークンの期限が切れたとき | A: いまのまま（ゲストを発行し直す・前のプレイヤーを引き継がない）。B: **B3 で更新の口 `POST /v1/accounts/token` を足す（期限の前のトークンだけ。期限を 30 日先にする）**。C: Phase 4 以降に回す | **B**。クライアントを作る Phase 3 で SDK の形に入れておけば、3 つのクライアントを後で直さずに済む。30 日の間に一度遊べば同じプレイヤーのまま続き、D30 の偏りが消える。サーバーの変更は `src/core/` の口 1 つとスキーマの操作 1 つで、エラーコードは足さない。A・C は 30 日を越えて遊ぶ人を全員別人にする。トレードオフは §2.7（漏れたトークンを更新し続けられる。止めるのは BAN か鍵の取り替え）で、`account-design.md` の決めること 3 を B3 で決め直す。端末をまたぐ引き継ぎは B でも解けない（§13） |
 | 8 | `serverTime` | A: **いまの 2 つの一覧の `serverTime` で差を取り、表示だけに使う。判定はサーバー**。B: 全部の応答に `serverTime` を足す | **A**。期間の要る画面はイベントとクエストだけ。B は `/v1/` の全部の応答とスキーマを変える |
 | 9 | 共通の決まりをどこにどう持つか | A: **スキーマ `openapi/rpg-online.v1.json` の拡張（最上位の `x-client-policy`・操作ごとの `x-retry`）**。B: 別の JSON の表（`clients/` の下）。C: 文書だけ | **A**。形の正のファイルに並べるので、`x-error-codes` と `x-retry` を同じ場所で読める（`CLAUDE.md` 原則 5 の一か所）。拡張の欄は OpenAPI の決まりの中で、ほかの道具が読んでも害が無い。B は正が 2 つになる。C は 3 つの値の食い違いを機械で見つけられない |
 | 10 | ブラウザの SDK の置き場と公開 | A: **このリポジトリの `clients/browser/`・npm の包みとして公開しない**。B: `packages/` に npm の包みの形で置き、公開は Phase 4 で決める。C: 別のリポジトリ | **A**。`CLAUDE.md` の「公開をしない」。`package.json` を足さず、Phase 4（配布）で包みにするかを決め直す。ADR 0002 の「モノレポは二つ目の使い手ができた時」にも合う |
@@ -432,19 +436,19 @@ ADR 0001・ADR 0002 と、これまでの 12 の設計書の決定は前提で�
 | 13 | サンプルの形 | A: **ビルドの要らない 1 枚のページ（`clients/browser/sample/index.html`）**。B: 小さなゲーム（Phase 4 の同梱のサンプルゲームに近いもの） | **A**。シナリオを押して結果の表を見るのが Phase 3 の確かめに足りる。B は Phase 4 の「サンプルゲームを同梱」で作る |
 | 14 | ブラウザから呼ぶための CORS | A: **`APP_ENV=local` のときだけ決めたオリジンに CORS を返す（`src/core/` に 1 か所。`Retry-After`・`ETag` を公開の見出しに）**。B: Worker がサンプルのページも出す。C: 足さない | **A**。サーバーの変更は小さく、`local` でない環境には何も足さない。B は `wrangler.jsonc` と Worker の口が増える。C ではブラウザで確かめたことにならない。本番のオリジンの決め方は Phase 4 |
 | 15 | Unreal・Unity のクライアント層の置き場 | A: **このリポジトリの `clients/unity/`・`clients/unreal/`（ソースだけ）**。B: 別のリポジトリ。C: 専用 PC のゲームのプロジェクトの中 | **A**。決まりの値を同じコミットで直せ、Mac の無人の回で食い違いを見つけられる。B・C は Mac から値を比べられない |
-| 16 | 失敗ケースの束 K4 | A: **名前を変えず、L2 の 2 本は B2、L3 の 2 本は B6 の人の確かめにする。Unity の同じ観点は人の確かめ H3・H4 を足す**。B: UE の 2 本を「クライアント」の名前に変えて 3 つで共通にする | **A**。`failure-case-test-plan.md` の行を置き換えずに済む。3 つで共通の観点は §9 の表で別の行として持つ |
+| 16 | 失敗ケースの束 K4 | A: **名前を変えず、L2 の 2 本は B2（タイムアウト）と B3（旧 CLI。サーバーの API が初めて変わる束）、L3 の 2 本は B6 の人の確かめにする。Unity の同じ観点は人の確かめ H3・H4 を足す**。B: UE の 2 本を「クライアント」の名前に変えて 3 つで共通にする | **A**。`failure-case-test-plan.md` の行を置き換えずに済む。3 つで共通の観点は §9 の表で別の行として持つ |
 | 17 | Steam などのプラットフォームの認証 | A: **Phase 3 では作らず、境目と置き場（§8）だけ決める**。B: Phase 3 で Steam のアダプターを作る | **A**。Steam で出すゲームが決まっていない。境目（`account_identities`・サーバー側の検証・クライアントの差し替え口）を決めておけば、後で足してもトークンの形と API の残りは変わらない |
 | 18 | パッケージの追加 | A: **足さない**。B: 型を作る道具・静的なサーバーを足す | **A**。どの束も足さずに作れる（§5.2・§5.5）。足すなら、その束の Issue で何を・なぜかを書いて決める |
 
 ## 12. 実装の束
 
-束は 1 つの実装の Issue に当たる。上から順に作る（B1 が決まりの置き場を作る）。B5 と B6 は B2 の後ならどちらからでもよい。
+束は 1 つの実装の Issue に当たる。上から順に作る（B1 が決まりの置き場を作る）。B4・B5・B6 は B3 の後ならどの順でもよい（シナリオに B3 のトークンの更新の手順が入るため）。
 
 | 束 | 中身 | 前の束 | 変えるもの | 人の確かめ |
 | --- | --- | --- | --- | --- |
 | B1 | スキーマの `x-client-policy`・`x-retry`（§3）と試験。`docs/api-contract.md` に「クライアントの決まり」の節（値の正はスキーマと書く）とページングの 1 行。ロードマップの Phase 1 の「エラーコード、タイムアウト、ページングを確定」に印 | — | `openapi/`・`test/`・`docs/` | — |
-| B2 | ブラウザの SDK（`clients/browser/`）・CLI モックの送り方を SDK に・K4 の L2 の 2 本 | B1 | `clients/`・`scripts/cli-mock.mjs`・`test/`・`tsconfig.json` | — |
-| B3 | トークンの更新の口（`src/core/`・スキーマ・契約・`account-design.md` の決めること 3 の決め直し）と SDK の更新・CLI モックの通しに 1 手順 | B2 | `src/`・`openapi/`・`scripts/`・`clients/`・`test/`・`docs/` | — |
+| B2 | ブラウザの SDK（`clients/browser/`）・CLI モックの送り方を SDK に・K4 の `CLIはタイムアウトしたら決めた回数だけ再試行して失敗を表示する` | B1 | `clients/`・`scripts/cli-mock.mjs`・`test/`・`tsconfig.json` | — |
+| B3 | トークンの更新の口（`src/core/`・スキーマ・契約・`account-design.md` の決めること 3 の決め直し）と SDK の更新・CLI モックの通しに 1 手順・K4 の `旧CLIはスキーマ変更後のAPIでもランキングを送って読める` | B2 | `src/`・`openapi/`・`scripts/`・`clients/`・`test/`・`docs/` | — |
 | B4 | ローカルだけの CORS とブラウザのサンプル | B3 | `src/`・`clients/`・`test/` | H1 |
 | B5 | Unity のクライアント層（`clients/unity/`）と専用 PC の手順書 | B3 | `clients/`・`test/`・`docs/` | H2〜H4 |
 | B6 | Unreal のクライアント層とイベントコマンドの橋渡し（`clients/unreal/`）と専用 PC の手順書 | B3 | `clients/`・`test/`・`docs/` | H5・H6 |
@@ -498,7 +502,6 @@ requireTests([
   'SDKでCLIモックと同じシナリオを通せる',
   'SDKはトークンを結果とログに出さない',
   'CLIはタイムアウトしたら決めた回数だけ再試行して失敗を表示する',
-  '旧CLIはスキーマ変更後のAPIでもランキングを送って読める',
   '今のCLIモックと同じ形の要求を受け付ける',
   'CLIモックの通しの流れを続けて2回回しても利用制限に掛からない',
 ]);
@@ -518,6 +521,7 @@ requireTests([
   'トークンの更新はAPP_ENVがlocalでなければ403を返す',
   'SDKは期限まで7日を切ったトークンを更新してから送る',
   'SDKはTOKEN_EXPIREDを受けたらゲストを発行し直さずsessionを返す',
+  '旧CLIはスキーマ変更後のAPIでもランキングを送って読める',
   'スキーマのファイルはOpenAPI 3.1で20個の操作を持つ',
   'スキーマのErrorCodeの列挙は19個のエラーコードと一致する',
   'demo-rpgはannouncementsとrankingsとsavesとconfigとinventoryとeventsとplayer-dataとquestsを使う設定で登録される',
