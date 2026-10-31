@@ -321,7 +321,7 @@ DELETE FROM inventory_balances
 }
 ```
 
-- 本文の確かめ（`parseEventDefinition`。400）: `kind` は `once`・`daily`・`weekly`、`startsAt < endsAt`（秒に丸めた ISO 8601 の UTC）、`resetOffsetMinutes` は -720〜840 の整数（既定 0）、`rewards` は 1〜`MAX_REWARD_LINES` 行で品目が重ならず、`amount` は 1〜`MAX_ITEM_AMOUNT`（`migrations/0010_events.sql` の `CHECK` と同じ範囲）。`MAX_REWARD_LINES` は `src/modules/events/limits.ts` にあるので、core から読めるように `src/core/inventory.ts` へ移す（値は変えない。events は core から読む）。
+- 本文の確かめ（`parseEventDefinition`。400）: `kind` は `once`・`daily`・`weekly`、`startsAt < endsAt`（秒に丸めた ISO 8601 の UTC）、`resetOffsetMinutes` は -720〜840 の整数（既定 0）、`rewards` は 1〜`MAX_REWARD_LINES` 行で品目が重ならず、`amount` は 1〜`MAX_ITEM_AMOUNT`（`migrations/0010_events.sql` の `CHECK` と同じ範囲）。`MAX_REWARD_LINES` は O4 で `src/core/inventory.ts` へ移した（値は 10 のまま。events のモジュールと管理の口の両方が core から読む。中身がこの定数だけだった `src/modules/events/limits.ts` は消した）。
 - 報酬の品目が `inventory_items` に無ければ 404 `NOT_FOUND` `Unknown item`（何も書かない）。
 - **受け取りの行（`event_claims`）が 1 つでもあるイベントは、`kind`・`startsAt`・`resetOffsetMinutes` を変えられない**（400 `INVALID_ARGUMENT`。区切りの鍵 `period_key` の意味が変わり、二重の止めが崩れるため）。`endsAt`（早く終える・延ばす）と `rewards` は変えられる（変えた後の受け取りから新しい中身）。イベントを消す口は作らない（終えるときは `endsAt` をいまにする）。
 - `batch`: 監査の行（前の定義と後の定義）→ `events` を `INSERT … ON CONFLICT (game_id, event_id) DO UPDATE` → `DELETE FROM event_rewards WHERE game_id = ? AND event_id = ?` → 報酬の行を `INSERT`（行の数だけ）。どの文も「この要求の `audit_ref` の行が入ったとき」だけ。
