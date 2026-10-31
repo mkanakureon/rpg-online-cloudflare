@@ -324,7 +324,7 @@ UPDATE player_data_writes SET result_json = json_object(
 - 違う鍵の `add` を並べて送ると、どちらも足される（別の書き込み）。上限の条件は文 1 が書く前の値で見るので、2 つ合わせて `max_value` を超えれば後の方が 409。
 - `request_hash` は `{"gameId","changes"}`（`changes` はキーの昇順に並べ直す）を決まった順の JSON にして SHA-256（16 進）。並びだけ違う同じ本文は同じ書き込みとみなす。
 - 鍵の範囲はプレイヤーごと（`UNIQUE (game_id, player_id, request_key)`）。別のプレイヤーが同じ鍵を使っても当たらない。
-- 鍵の期限: 記録の行が残る間（掃除は §15 の分析で作る。それまでは消えない）。クライアントは書き込みごとに新しい鍵（`crypto.randomUUID()` など）を作り、送り直しのときだけ同じ鍵を使う。
+- 鍵の期限: **30 日**。書き込みの記録の行（`player_data_writes`）は 30 日を過ぎると 1 日 1 回の掃除で消え、その後に同じ鍵で送ると新しい書き込みになる（保持の日数と消し方の正は `docs/guides/working/analytics-design.md` §6）。クライアントは書き込みごとに新しい鍵（`crypto.randomUUID()` など）を作り、送り直しのときだけ同じ鍵を使う。
 - `abuse-protection-design.md` §5 の表 `idempotency_keys`（応答の本文を丸ごと保存する汎用の表）は作らない。書き込みの記録の行が鍵と応答の写しを持つ（表が 1 つで済み、書き込みと鍵の保存が同じ `batch` に入る）。`idempotency_keys` は、プレイヤーの消費の口（`event-reward-design.md` §6）を足すときに改めて決める。
 - DB の失敗は入口の `try/catch` で 500 `INTERNAL_ERROR`（中身を返さない。`CLAUDE.md` の守るもの）。
 
@@ -715,7 +715,7 @@ done();
 | 実績の宣言の時にさかのぼって全員を判定する | 管理の口に「判定し直す」口を足し、プレイヤーを区切って流す（D1 の 1 回の `batch` の大きさは**要確認**） |
 | 区切りごとの統計値（今日倒した数・今週の数） | `docs/guides/working/quest-design.md` §6・§7（区切りで数える宣言 `player_data_key_periods` と区切りごとの値 `player_data_period_values`。書き込みの `batch` が足す） |
 | ほかのプレイヤーの値を読む（フレンドの進み・統計値のランキング） | ソーシャル（P2 以降）。統計値のランキングは、`ranking_entries` に統計値から写す形をランキングの決まりと一緒に |
-| 書き込みの記録の掃除・鍵の期限 | §15 の分析（Cron Triggers・`wrangler.jsonc` の `triggers.crons`） |
+| 書き込みの記録の掃除・鍵の期限 | 30 日で消す（§6 の鍵の期限。`docs/guides/working/analytics-design.md` §6・§7） |
 | 値の改ざんの自動の検出 | ゲームごとに基準が違う（ADR 0002）。管理の読み取り（§8）で見て、直し・BAN で対処する |
 | 管理画面（ブラウザ）でのプレイヤーデータの表示 | Phase 4（`admin-design.md` §14） |
 | `APP_ENV` の守りを外すこと | ユーザーが決める（`admin-design.md` §10） |

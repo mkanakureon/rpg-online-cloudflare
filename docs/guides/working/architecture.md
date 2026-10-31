@@ -28,7 +28,7 @@ CLIモック（Node.js）                Unreal（C++）・Unity（C#）・ブ�
 | KV | マスターデータ、設定、お知らせのキャッシュ | 結果整合性。残高や在庫の原子的更新に使わない |
 | R2 | D1 に収まらない大きなセーブ（いまは使わない。`save-design.md` §9）、画像、ユーザー生成コンテンツ | 認可、サイズ制限、保存期間・削除ポリシー |
 | Durable Objects | WebSocket、ロビー、ワールドボス状態 | オブジェクト単位の競合制御。規模・料金を検証 |
-| Cron Triggers | 日次切替・集計・清掃 | 冪等性、タイムゾーンの明示 |
+| Cron Triggers | 清掃（`wrangler.jsonc` の`triggers.crons`〔`30 18 * * *`・UTC〕→ `src/worker.ts`の`scheduled`の入口 →`src/core/cleanup.ts`の`runScheduled`。`ctx.waitUntil`で待ち合わせ、`APP_ENV`が`local`でなければ何も消さない。日次切替・集計はしない〔要求の時に計算する〕） | 冪等性、タイムゾーンの明示（UTC で動く）。保持の日数と消し方の正は`docs/guides/working/analytics-design.md` §6・§7 |
 
 ## 3. APIの基本契約
 
@@ -69,7 +69,7 @@ CLIモック（Node.js）                Unreal（C++）・Unity（C#）・ブ�
 - `player_data_keys`・`player_data`・`player_data_writes`: ゲームごとのプレイヤーデータのキーの宣言（キー・書き方〔`add`・`max`・`set`・`flag`〕・値の上限・1 回の増加の上限だけ。名前・説明はマスターデータ）・プレイヤーとキーごとの値（0 以上の整数と最後に変わった時刻。宣言の無いキーは受け付けない）・書き込みの記録（書き込み 1 回で 1 行。二重の止めの`Idempotency-Key`〔プレイヤーごとに一意〕と本文のハッシュ・送り直しに返す応答の写し）。`migrations/0013_player_data.sql`。置き場は`src/core/player-data.ts`〔値の上限・書き方・範囲の確かめ〕と`src/modules/player-data/`〔読む`GET`と書く`POST`。書き込みの記録と値は 1 つの`batch`〕。設計の正は`docs/guides/working/player-data-design.md`）
 - `achievements`・`player_achievements`: ゲームごとの実績の宣言（実績の ID・見るキー・閾値だけ。名前・説明・絵はマスターデータ）・プレイヤーと実績ごとの解いた実績（解いた時刻と、解いた書き込みの`write_ref`。主キー〔ゲーム・プレイヤー・実績〕で二重に解かない。値が下がっても消さない）。`migrations/0014_achievements.sql`。解くのはサーバーだけで、`src/modules/player-data/`の書き込みの`batch`の中（書いた後の値が閾値以上の実績）。解いたと申告する口は無い。設計の正は`docs/guides/working/player-data-design.md` §7）
 - `quests`・`quest_rewards`・`quest_claims`: ゲームごとのクエストの宣言（区切り〔一度きり・デイリー・週間〕・期間・区切りの時差・見るプレイヤーデータのキーと閾値だけ。名前・説明・物語はマスターデータ）・クエストごとの報酬（品目と数）・プレイヤー・クエスト・区切りごとの受け取り（二重を止める一意の鍵）。`migrations/0015_quests.sql`。置き場は`src/modules/quests/`〔一覧の`GET`と受け取りの`POST`。達成と一覧の行の形は`shape.ts`〕。進捗は`player_data`の値（一度きり）と`player_data_period_values`の値（デイリー・週間）を読むだけで、クエストの表に持たない。達成は受け取りの時に`batch`の文の条件で判定し、受け取りの行・受領の履歴・残高を 1 つの`batch`で書く。設計の正は`docs/guides/working/quest-design.md`）
-- `player_data_key_periods`・`player_data_period_values`: ゲームごとの、区切り（デイリー・週間）で数える`add`のキーの宣言（区切りの種類と時差）・プレイヤー・キー・区切りの種類・区切りごとの、その区切りの中で足した合計。`migrations/0016_player_data_periods.sql`。書くのは`src/modules/player-data/`の書き込みの`batch`だけ（書き込みの記録が入ったときだけ・宣言の後の書き込みから数える）で、`src/modules/quests/`は読むだけ。区切りの鍵は`src/core/period.ts`の`periodKey`（イベント・クエスト・プレイヤーデータのモジュールと管理の口が読む）。古い区切りの行は残る。設計の正は`docs/guides/working/quest-design.md` §3・§6・§7）
+- `player_data_key_periods`・`player_data_period_values`: ゲームごとの、区切り（デイリー・週間）で数える`add`のキーの宣言（区切りの種類と時差）・プレイヤー・キー・区切りの種類・区切りごとの、その区切りの中で足した合計。`migrations/0016_player_data_periods.sql`。書くのは`src/modules/player-data/`の書き込みの`batch`だけ（書き込みの記録が入ったときだけ・宣言の後の書き込みから数える）で、`src/modules/quests/`は読むだけ。区切りの鍵は`src/core/period.ts`の`periodKey`（イベント・クエスト・プレイヤーデータのモジュールと管理の口が読む）。古い区切りの行は 35 日で掃除が消す（`analytics-design.md` §6）。設計の正は`docs/guides/working/quest-design.md` §3・§6・§7）
 - `player_activity_days`: 「遊んだ」の印（ゲーム・UTC の日付・プレイヤーで 1 人 1 日 1 行。ゲストの発行の日の行だけ`is_new = 1`）。`migrations/0017_player_activity.sql`。書くのはトークンの要る 6 つの口が`consume`の代わりに呼ぶ`src/core/activity.ts`の`consumeForPlayer`（利用制限の 2 文と同じ`batch`に 1 文。窓の 2 文は`src/core/rate-limit.ts`の 1 か所）と、ゲストの発行の`batch`。管理の集計の口（`GET /v1/admin/analytics/players`。関数と SQL は`src/core/analytics.ts`）が DAU・新しい人・D1／D7／D30 の継続の数を要求の時に数え、プレイヤー ID を返さない。設計の正は`docs/guides/working/analytics-design.md` §3〜§5
 - `adventurer_profiles`: 公開可能なゴースト用プロフィール
 

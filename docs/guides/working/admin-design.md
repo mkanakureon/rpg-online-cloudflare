@@ -194,7 +194,7 @@ CREATE INDEX IF NOT EXISTS admin_audit_log_game ON admin_audit_log (game_id, aud
 - 入れないもの: トークン・管理の鍵・セーブの本文・IP（`operations-security.md` のログ・監視の節と 6）。
 - 書き込みの操作と監査の行は**同じ `batch`** に入れる（片方だけ残らない）。監査の行の文を 1 文目にして、続く文は「この要求の `audit_ref` の行が入ったとき」だけ書く（`event-reward-design.md` §5 の `claim_id` と同じ形）。
 - 読み取りの口（O1 の 2 つ）は監査に残さない（操作の数を抑える。誰が誰のデータを読んだかを残すのは、人ごとの鍵と一緒に §14）。
-- 保持の期間（`operations-security.md` の 6）: **365 日**を決まりにする（定数 `AUDIT_RETENTION_DAYS`。`src/core/admin/audit.ts`）。消すのは Phase 2 の分析（§13 の Cron Triggers で古い行の掃除）と一緒に作り、この設計の束では消す口を作らない（`wrangler.jsonc` を変えない）。365 日を超えた行が残っても害は無く、消す仕組みが入るまでの間は増え続ける（量は管理の操作の数だけ）。
+- 保持の期間（`operations-security.md` の 6）: **365 日**を決まりにする（定数 `AUDIT_RETENTION_DAYS`。`src/core/admin/audit.ts`）。365 日を過ぎた行は、1 日 1 回の Cron Triggers の掃除（`src/core/cleanup.ts` の `runCleanup`。日数はこの定数を読む）が消す。消し方・`APP_ENV` が `local` でなければ消さないこと・1 回の文の数の上限の正は `docs/guides/working/analytics-design.md` §6・§7。
 
 ### 監査を読む口（O1）
 
@@ -449,7 +449,7 @@ CLI モックに管理の鍵と管理の口が入らないことは試験にし�
 | 4. 秘密を `wrangler secret put` で渡す手順・鍵が無い環境で 500・環境ごとに D1 と鍵を分ける | **一部を満たす**: 管理の鍵も同じ形で、鍵が無ければ 500 を試験で確かめる（O1 の `管理の鍵の無い環境では管理の口がINTERNAL_ERRORの500を返す`）。環境の分離（`operations-security.md` の 10）は運用の作業で満たさない | トークンの鍵は満たしている。環境の分離は無い |
 | 5. 守りを外した後の試験の置き換えを設計してある | 満たさない（O1 の `本番の設定では管理の鍵があっても管理の口にNOT_READY_FOR_PRODUCTIONの403を返す` も置き換えの対象に増える） | 無い |
 
-管理が加える条件（守りを外す前に要る）: 管理の鍵を `wrangler secret put` で入れる手順と取り替えの手順が手順書にある・監査のログの保持（365 日）と消す仕組み（§13 の分析）がある・人ごとの区別（`X-Admin-Actor` が自己申告であること）を受け入れるか、Cloudflare Access などで人を確かめるかを決める（§14。**要確認**）。
+管理が加える条件（守りを外す前に要る）: 管理の鍵を `wrangler secret put` で入れる手順と取り替えの手順が手順書にある・監査のログの保持（365 日）と消す仕組み（`analytics-design.md` §6 の掃除。いまは `APP_ENV` が `local` のときだけ消す）がある・人ごとの区別（`X-Admin-Actor` が自己申告であること）を受け入れるか、Cloudflare Access などで人を確かめるかを決める（§14。**要確認**）。
 
 ## 11. 決めること
 

@@ -267,7 +267,7 @@
 - `add`の結果がキーの値の上限を超えるときは**409 `PLAYER_DATA_LIMIT_EXCEEDED`**で、その書き込みを全部断る（上限で丸めない。ほかのキーも書かない）。
 - `values`は送ったキーの書いた後の値（キーの昇順）。`max`で前の値のほうが大きければ前の値のまま返る。1 回の書き込みは全部書くか、どれも書かないか（D1 の`batch`）。
 - 実績はサーバーが解く: 書き込みの中で、書いた後のキーの値が実績の閾値以上で、まだ解いていない実績を解く（同じ`batch`）。`unlocked`はこの書き込みで解いた実績だけ（実績の ID の昇順。無ければ空の配列。前に解いた実績は載せず、`GET`の`achievements`で読む）。一度解いた実績は二重に解けず、解いた時刻も変わらない。実績の宣言を足した・閾値を下げたときは、そのプレイヤーが次に書き込んだときに判定する（さかのぼって解かない）。実績を解いたと申告する口は無く、本文の`achievements`・`unlocked`などの欄は読まない。
-- **`Idempotency-Key`が無い・形の外れは 400 `INVALID_ARGUMENT`**（`add`以外のキーだけの書き込みも必須）。同じプレイヤーが同じ鍵と同じ中身（`gameId`と`changes`。`changes`の並びは比べない）をもう一度送ると、何も書かずに**200 で 1 回目と同じ本文**（同じ`writeId`・`values`・`unlocked`〔解いた実績と時刻〕）を返す（並べて送っても 1 回分）。同じ鍵で違う中身は**422 `IDEMPOTENCY_KEY_REUSED`**（何も書かない）。鍵の範囲はプレイヤーごとで、ほかのプレイヤーが同じ鍵を使っても別の書き込みになる。クライアントは書き込みごとに新しい鍵（`crypto.randomUUID()`など）を作り、届かなかった要求の送り直しだけ同じ鍵を使う。鍵は書き込みの記録と一緒に残る。
+- **`Idempotency-Key`が無い・形の外れは 400 `INVALID_ARGUMENT`**（`add`以外のキーだけの書き込みも必須）。同じプレイヤーが同じ鍵と同じ中身（`gameId`と`changes`。`changes`の並びは比べない）をもう一度送ると、何も書かずに**200 で 1 回目と同じ本文**（同じ`writeId`・`values`・`unlocked`〔解いた実績と時刻〕）を返す（並べて送っても 1 回分）。同じ鍵で違う中身は**422 `IDEMPOTENCY_KEY_REUSED`**（何も書かない）。鍵の範囲はプレイヤーごとで、ほかのプレイヤーが同じ鍵を使っても別の書き込みになる。クライアントは書き込みごとに新しい鍵（`crypto.randomUUID()`など）を作り、届かなかった要求の送り直しだけ同じ鍵を使う。`Idempotency-Key`の期限は 30 日（書き込みの記録と一緒に 30 日で消え、その後に同じ鍵で送ると新しい書き込みになる）。
 - 時刻はサーバーが付ける（本文・`Date`の見出しの時刻は読まない）。値は**自己申告**として扱う（サーバーはゲームの中で取れた値かを確かめられない。守るのは宣言・範囲・1 回の増加の上限・書き方・利用制限だけ）。
 - 書込み系 API なので`APP_ENV=local`の時だけ・トークンがある時だけ通る（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順: `GET /v1/player-data`と同じ（`APP_ENV`の守り → トークン → プレイヤーの利用制限 → 止めた印 →`gameId`の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定）→ `Idempotency-Key`の形（400）→ 本文の JSON（400 `INVALID_JSON`）→ `changes`の形（400）→ キーの宣言（404）→ 書き方ごとの範囲（400）→ 書く（409 `PLAYER_DATA_LIMIT_EXCEEDED`・422 `IDEMPOTENCY_KEY_REUSED`）。
 
@@ -391,7 +391,7 @@
 
 - 並びは`auditId`の降順（新しい順）。`limit`は 1〜100 の整数（無ければ 20）。`before`は 1 以上の整数で、付けるとその`auditId`より古い行だけを返す。外れは**400 `INVALID_ARGUMENT`**。続きがあれば`nextBefore`（最後の行の`auditId`）が載り、無ければ欄ごと載らない（受領の履歴と同じ）。
 - `actor`は書き込みの口の`X-Admin-Actor`（自己申告のラベル）。`before`・`after`は操作の前と後の状態（保存した JSON を読み直した値。無ければ`null`）。`createdAt`はサーバーの時刻（ISO 8601・UTC・秒まで）。トークン・管理の鍵・セーブの本文・IP は記録しない。
-- 監査のログは API から書き換えも消しもしない。保持の期間は 365 日（消す仕組みは後で足す。それまでは残る）。いま行を書く口は BAN と BAN を解く口（`action`は`player.ban`・`player.unban`、`target`は`player:<playerId>`）・所持品と通貨の増減（`inventory.adjust`・`player:<playerId>`）・スコアを消す口（`ranking.delete`・`ranking:<boardId>:<playerId>`）・品目の定義（`item.put`・`item:<itemId>`）・イベントの定義（`event.put`・`event:<eventId>`）・クエストの定義（`quest.put`・`quest:<questId>`）・プレイヤーデータのキーの宣言（`player-data-key.put`・`player-data-key:<key>`）・実績の宣言（`achievement.put`・`achievement:<achievementId>`）・プレイヤーデータの値を置く口（`player-data.set`・`player:<playerId>`）・実績の取り消し（`achievement.revoke`・`player:<playerId>`）。
+- 監査のログは API から書き換えも消しもしない。保持の期間は 365 日（過ぎた行は 1 日 1 回の掃除が消す。`APP_ENV=local`のときだけ）。いま行を書く口は BAN と BAN を解く口（`action`は`player.ban`・`player.unban`、`target`は`player:<playerId>`）・所持品と通貨の増減（`inventory.adjust`・`player:<playerId>`）・スコアを消す口（`ranking.delete`・`ranking:<boardId>:<playerId>`）・品目の定義（`item.put`・`item:<itemId>`）・イベントの定義（`event.put`・`event:<eventId>`）・クエストの定義（`quest.put`・`quest:<questId>`）・プレイヤーデータのキーの宣言（`player-data-key.put`・`player-data-key:<key>`）・実績の宣言（`achievement.put`・`achievement:<achievementId>`）・プレイヤーデータの値を置く口（`player-data.set`・`player:<playerId>`）・実績の取り消し（`achievement.revoke`・`player:<playerId>`）。
 
 ### GET /v1/admin/analytics/players?gameId=demo-rpg&from=2026-10-01&to=2026-10-31
 

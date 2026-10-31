@@ -3,6 +3,9 @@
   "name": "rpg-online-cloudflare",
   "main": "src/worker.ts",
   "compatibility_date": "2026-10-13",
+  "triggers": {
+    "crons": ["30 18 * * *"]
+  },
   "vars": {
     "APP_ENV": "disabled"
   },
