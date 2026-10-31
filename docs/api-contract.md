@@ -220,17 +220,18 @@
 
 ## GET /v1/player-data?gameId=demo-rpg
 
-トークンのプレイヤーのプレイヤーデータ（統計値と進行状態。ゲームが宣言したキーごとの 0 以上の整数）を読む。見出しは`Authorization: Bearer <token>`。設計の正は`docs/guides/working/player-data-design.md`。
+トークンのプレイヤーのプレイヤーデータ（統計値と進行状態。ゲームが宣言したキーごとの 0 以上の整数）と解いた実績を読む。見出しは`Authorization: Bearer <token>`。設計の正は`docs/guides/working/player-data-design.md`。
 
 レスポンス例（200）:
 
 ```json
-{"gameId":"demo-rpg","values":[{"key":"chapter","mode":"set","value":2,"updatedAt":"2026-10-31T15:30:00Z"},{"key":"slimes-defeated","mode":"add","value":3,"updatedAt":"2026-10-31T15:30:00Z"}]}
+{"gameId":"demo-rpg","values":[{"key":"chapter","mode":"set","value":2,"updatedAt":"2026-10-31T15:30:00Z"},{"key":"slimes-defeated","mode":"add","value":3,"updatedAt":"2026-10-31T15:30:00Z"}],"achievements":[{"achievementId":"first-slime","unlockedAt":"2026-10-31T15:30:00Z"}]}
 ```
 
 - `values`はトークンのプレイヤーが書いたことのあるキーだけ（キーの昇順）。何も書いていなければ空の配列。ほかのプレイヤーの値は載らない（本文・問い合わせの`playerId`は受け取らない）。
 - `mode`はキーの宣言の書き方（`add`・`max`は統計値、`set`・`flag`は進行状態）。`updatedAt`は最後に変わった時刻（サーバーの時刻。ISO 8601 の UTC・秒まで）。
-- キーの意味（名前・説明）はサーバーが持たない（マスターデータに置く）。サーバーが持つのはキーの宣言（書き方・値の上限・1 回の増加の上限）だけ。`demo-rpg`の手本の宣言はマイグレーションで入っている（`migrations/0013_player_data.sql`。`slimes-defeated`〔`add`〕・`highest-floor`〔`max`〕・`chapter`〔`set`〕・`boss-1-defeated`〔`flag`〕）。
+- `achievements`はトークンのプレイヤーが解いた実績の全部（実績の ID の昇順）。何も解いていなければ空の配列。`unlockedAt`は解いた時刻（サーバーの時刻）。一度解いた実績は、値が下がっても（`set`のキーを下げても）消えない。
+- キーと実績の意味（名前・説明・絵）はサーバーが持たない（マスターデータに置き、クライアントがキー・実績の ID で引く）。サーバーが持つのはキーの宣言（書き方・値の上限・1 回の増加の上限）と実績の宣言（見るキーと閾値）だけ。`demo-rpg`の手本の宣言はマイグレーションで入っている（`migrations/0013_player_data.sql`。`slimes-defeated`〔`add`〕・`highest-floor`〔`max`〕・`chapter`〔`set`〕・`boss-1-defeated`〔`flag`〕。`migrations/0014_achievements.sql`。実績`first-slime`〔`slimes-defeated`が 1 以上〕・`boss-1`〔`boss-1-defeated`が 1 以上〕）。
 - セーブと同じ値を持つときは、プレイヤーデータを正にする（起動の時にここで読み、セーブの中の同じ値と違えばこちらで上書きする）。
 - 読むのも`APP_ENV=local`の時だけ（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順は`APP_ENV`の守り → トークン（401。数えない）→ プレイヤーの利用制限（429 `RATE_LIMITED`。書き込みと合わせて数える）→ 止めた印（403 `PLAYER_BANNED`）→ `gameId`の形（400）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録と機能の設定（404 `NOT_FOUND`。機能`player-data`を使わない設定のゲームは`Feature not enabled for this game`）→ 読む。
 
@@ -247,7 +248,7 @@
 レスポンス例（200）:
 
 ```json
-{"gameId":"demo-rpg","writeId":"<writeId>","values":[{"key":"boss-1-defeated","value":1},{"key":"highest-floor","value":12},{"key":"slimes-defeated","value":3}]}
+{"gameId":"demo-rpg","writeId":"<writeId>","values":[{"key":"boss-1-defeated","value":1},{"key":"highest-floor","value":12},{"key":"slimes-defeated","value":3}],"unlocked":[{"achievementId":"boss-1","unlockedAt":"2026-10-31T15:30:00Z"},{"achievementId":"first-slime","unlockedAt":"2026-10-31T15:30:00Z"}]}
 ```
 
 - `changes`は 1〜20 行（`MAX_CHANGES_PER_WRITE`）。キーは ID の形（`^[a-zA-Z0-9_-]{1,64}$`）で重ならない。`value`は整数。外れは**400 `INVALID_ARGUMENT`**。本文が JSON でなければ**400 `INVALID_JSON`**。
@@ -264,7 +265,8 @@
 - 宣言の無いキーが 1 つでもあれば**404 `NOT_FOUND`**（`message`は`Unknown key`）で、ほかのキーも書かない。
 - `add`の結果がキーの値の上限を超えるときは**409 `PLAYER_DATA_LIMIT_EXCEEDED`**で、その書き込みを全部断る（上限で丸めない。ほかのキーも書かない）。
 - `values`は送ったキーの書いた後の値（キーの昇順）。`max`で前の値のほうが大きければ前の値のまま返る。1 回の書き込みは全部書くか、どれも書かないか（D1 の`batch`）。
-- **`Idempotency-Key`が無い・形の外れは 400 `INVALID_ARGUMENT`**（`add`以外のキーだけの書き込みも必須）。同じプレイヤーが同じ鍵と同じ中身（`gameId`と`changes`。`changes`の並びは比べない）をもう一度送ると、何も書かずに**200 で 1 回目と同じ本文**（同じ`writeId`・`values`）を返す（並べて送っても 1 回分）。同じ鍵で違う中身は**422 `IDEMPOTENCY_KEY_REUSED`**（何も書かない）。鍵の範囲はプレイヤーごとで、ほかのプレイヤーが同じ鍵を使っても別の書き込みになる。クライアントは書き込みごとに新しい鍵（`crypto.randomUUID()`など）を作り、届かなかった要求の送り直しだけ同じ鍵を使う。鍵は書き込みの記録と一緒に残る。
+- 実績はサーバーが解く: 書き込みの中で、書いた後のキーの値が実績の閾値以上で、まだ解いていない実績を解く（同じ`batch`）。`unlocked`はこの書き込みで解いた実績だけ（実績の ID の昇順。無ければ空の配列。前に解いた実績は載せず、`GET`の`achievements`で読む）。一度解いた実績は二重に解けず、解いた時刻も変わらない。実績の宣言を足した・閾値を下げたときは、そのプレイヤーが次に書き込んだときに判定する（さかのぼって解かない）。実績を解いたと申告する口は無く、本文の`achievements`・`unlocked`などの欄は読まない。
+- **`Idempotency-Key`が無い・形の外れは 400 `INVALID_ARGUMENT`**（`add`以外のキーだけの書き込みも必須）。同じプレイヤーが同じ鍵と同じ中身（`gameId`と`changes`。`changes`の並びは比べない）をもう一度送ると、何も書かずに**200 で 1 回目と同じ本文**（同じ`writeId`・`values`・`unlocked`〔解いた実績と時刻〕）を返す（並べて送っても 1 回分）。同じ鍵で違う中身は**422 `IDEMPOTENCY_KEY_REUSED`**（何も書かない）。鍵の範囲はプレイヤーごとで、ほかのプレイヤーが同じ鍵を使っても別の書き込みになる。クライアントは書き込みごとに新しい鍵（`crypto.randomUUID()`など）を作り、届かなかった要求の送り直しだけ同じ鍵を使う。鍵は書き込みの記録と一緒に残る。
 - 時刻はサーバーが付ける（本文・`Date`の見出しの時刻は読まない）。値は**自己申告**として扱う（サーバーはゲームの中で取れた値かを確かめられない。守るのは宣言・範囲・1 回の増加の上限・書き方・利用制限だけ）。
 - 書込み系 API なので`APP_ENV=local`の時だけ・トークンがある時だけ通る（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順: `GET /v1/player-data`と同じ（`APP_ENV`の守り → トークン → プレイヤーの利用制限 → 止めた印 →`gameId`の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定）→ `Idempotency-Key`の形（400）→ 本文の JSON（400 `INVALID_JSON`）→ `changes`の形（400）→ キーの宣言（404）→ 書き方ごとの範囲（400）→ 書く（409 `PLAYER_DATA_LIMIT_EXCEEDED`・422 `IDEMPOTENCY_KEY_REUSED`）。
 

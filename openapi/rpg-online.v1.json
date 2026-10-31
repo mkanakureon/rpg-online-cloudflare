@@ -2661,7 +2661,7 @@
     "/v1/player-data": {
       "get": {
         "operationId": "getPlayerData",
-        "summary": "トークンのプレイヤーのプレイヤーデータ（統計値と進行状態。宣言したキーごとの整数）を読む。APP_ENV=local のときだけ受け付ける",
+        "summary": "トークンのプレイヤーのプレイヤーデータ（統計値と進行状態。宣言したキーごとの整数）と解いた実績を読む。APP_ENV=local のときだけ受け付ける",
         "security": [
           {
             "bearerToken": []
@@ -2852,7 +2852,7 @@
       },
       "post": {
         "operationId": "writePlayerData",
-        "summary": "宣言したキーの書き方（add・max・set・flag）でプレイヤーデータを書く。Idempotency-Key が必須で、同じ鍵と同じ中身の 2 回目は 200 で 1 回目と同じ本文を返す。全部書くか、どれも書かない。APP_ENV=local のときだけ受け付ける",
+        "summary": "宣言したキーの書き方（add・max・set・flag）でプレイヤーデータを書き、書いた後の値が閾値以上の実績をサーバーが解く。Idempotency-Key が必須で、同じ鍵と同じ中身の 2 回目は 200 で 1 回目と同じ本文を返す。全部書くか、どれも書かない。APP_ENV=local のときだけ受け付ける",
         "security": [
           {
             "bearerToken": []
@@ -3947,12 +3947,32 @@
           }
         }
       },
+      "PlayerAchievement": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "achievementId",
+          "unlockedAt"
+        ],
+        "description": "解いた実績 1 つ。実績の意味（名前・説明・絵）はマスターデータ（サーバーは解釈しない）。解くのはサーバーだけ（キーの値が閾値以上になった書き込みの中）。",
+        "properties": {
+          "achievementId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "unlockedAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+            "description": "解いた時刻（サーバーの時刻。ISO 8601・UTC）。"
+          }
+        }
+      },
       "PlayerData": {
         "type": "object",
         "additionalProperties": false,
         "required": [
           "gameId",
-          "values"
+          "values",
+          "achievements"
         ],
         "properties": {
           "gameId": {
@@ -3964,6 +3984,13 @@
             "description": "トークンのプレイヤーが書いたことのあるキーの値（キーの昇順）。1 ゲームの宣言は 200 キーまで。",
             "items": {
               "$ref": "#/components/schemas/PlayerDataValue"
+            }
+          },
+          "achievements": {
+            "type": "array",
+            "description": "トークンのプレイヤーが解いた実績の全部（実績の ID の昇順）。何も解いていなければ空の配列。一度解いた実績は値が下がっても消えない。",
+            "items": {
+              "$ref": "#/components/schemas/PlayerAchievement"
             }
           }
         }
@@ -4008,7 +4035,8 @@
         "required": [
           "gameId",
           "writeId",
-          "values"
+          "values",
+          "unlocked"
         ],
         "properties": {
           "gameId": {
@@ -4042,6 +4070,13 @@
                   "description": "値（0〜1,000,000,000。MAX_PLAYER_DATA_VALUE）。"
                 }
               }
+            }
+          },
+          "unlocked": {
+            "type": "array",
+            "description": "この書き込みで解いた実績（実績の ID の昇順）。無ければ空の配列。前に解いた実績は載せない。同じ鍵の送り直しは 1 回目と同じ実績と時刻。",
+            "items": {
+              "$ref": "#/components/schemas/PlayerAchievement"
             }
           }
         }

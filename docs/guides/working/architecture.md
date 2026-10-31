@@ -67,10 +67,11 @@ CLIモック（Node.js）                Unreal（C++）・Unity（C#）・ブ�
 - `messages`: 酒場投稿、削除・通報状態
 - `events`・`event_rewards`・`event_claims`: ゲームごとのイベント（区切り〔一度きり・デイリー・週間〕・期間・区切りの時差）・イベントごとの報酬（品目と数）・プレイヤー・イベント・区切りごとの受け取り（二重を止める一意の鍵。`migrations/0010_events.sql`。置き場は`src/modules/events/`〔一覧の`GET`と受け取りの`POST`。期間と区切りの関数は`period.ts`〕。期間はサーバーの時刻だけで決め、Cron Triggers は使わない。設計の正は`docs/guides/working/event-reward-design.md`）
 - `player_data_keys`・`player_data`・`player_data_writes`: ゲームごとのプレイヤーデータのキーの宣言（キー・書き方〔`add`・`max`・`set`・`flag`〕・値の上限・1 回の増加の上限だけ。名前・説明はマスターデータ）・プレイヤーとキーごとの値（0 以上の整数と最後に変わった時刻。宣言の無いキーは受け付けない）・書き込みの記録（書き込み 1 回で 1 行。二重の止めの`Idempotency-Key`〔プレイヤーごとに一意〕と本文のハッシュ・送り直しに返す応答の写し）。`migrations/0013_player_data.sql`。置き場は`src/core/player-data.ts`〔値の上限・書き方・範囲の確かめ〕と`src/modules/player-data/`〔読む`GET`と書く`POST`。書き込みの記録と値は 1 つの`batch`〕。設計の正は`docs/guides/working/player-data-design.md`）
+- `achievements`・`player_achievements`: ゲームごとの実績の宣言（実績の ID・見るキー・閾値だけ。名前・説明・絵はマスターデータ）・プレイヤーと実績ごとの解いた実績（解いた時刻と、解いた書き込みの`write_ref`。主キー〔ゲーム・プレイヤー・実績〕で二重に解かない。値が下がっても消さない）。`migrations/0014_achievements.sql`。解くのはサーバーだけで、`src/modules/player-data/`の書き込みの`batch`の中（書いた後の値が閾値以上の実績）。解いたと申告する口は無い。設計の正は`docs/guides/working/player-data-design.md` §7）
 - `event_progress`: プレイヤーごとの達成度（クエスト。Phase 2 の残り）
 - `adventurer_profiles`: 公開可能なゴースト用プロフィール
 
-PoCで実際に作るのは`games`（登録だけ。公開状態の欄はまだ無い）と`game_modules`と`accounts`と`game_players`と`ranking_entries`と`saves`と`announcements`と`rate_limit_counters`と`inventory_items`・`inventory_balances`・`inventory_ledger`と`events`・`event_rewards`・`event_claims`と`admin_audit_log`と`player_bans`と`player_data_keys`・`player_data`・`player_data_writes`のみ。`accounts`と`game_players`の境目は`docs/guides/working/account-design.md` §2。
+PoCで実際に作るのは`games`（登録だけ。公開状態の欄はまだ無い）と`game_modules`と`accounts`と`game_players`と`ranking_entries`と`saves`と`announcements`と`rate_limit_counters`と`inventory_items`・`inventory_balances`・`inventory_ledger`と`events`・`event_rewards`・`event_claims`と`admin_audit_log`と`player_bans`と`player_data_keys`・`player_data`・`player_data_writes`と`achievements`・`player_achievements`のみ。`accounts`と`game_players`の境目は`docs/guides/working/account-design.md` §2。
 
 ## 5. クライアントとの将来の境界
 
