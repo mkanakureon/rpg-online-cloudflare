@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-/** CLI モック（将来の UE・Unity・ブラウザの HTTP クライアントの代わり。ローカル専用）: 設定とマスターデータ → スコア → セーブ → イベントの報酬の流れを通す。 */
+/** CLI モック（将来の UE・Unity・ブラウザの HTTP クライアントの代わり。ローカル専用）: 設定とマスターデータ → スコア → セーブ → イベントの報酬 → プレイヤーデータと実績の流れを通す。 */
 import {
-  SMOKE_EVENT_ID, SMOKE_SLOT_ID, authHeaders, claimPath, configPath, eventsPath, guestRequest, historyPath, inventoryPath, masterDataPath,
-  saveData, saveWrite, scoreSubmission, sha256Hex, smokeBoardId, utf8Bytes
+  SMOKE_ACHIEVEMENT_ID, SMOKE_EVENT_ID, SMOKE_PLAYER_DATA_KEY, SMOKE_SLOT_ID, authHeaders, claimPath, configPath, eventsPath, guestRequest,
+  historyPath, inventoryPath, masterDataPath, newIdempotencyKey, playerDataHeaders, playerDataPath, playerDataWrite, saveData, saveWrite,
+  scoreSubmission, sha256Hex, smokeBoardId, utf8Bytes
 } from './cli-requests.mjs';
 
 const base = process.env.API_BASE_URL || 'http://127.0.0.1:8787';
@@ -117,6 +118,30 @@ try {
     if (history.items.length !== claimed.grants.length || history.items.some((item) => item.sourceId !== claimed.claimId)) {
       throw new Error('Inventory history does not have exactly the claimed rows');
     }
+  }
+
+  // 同じトークンでプレイヤーデータを読み、新しい Idempotency-Key で統計値を 1 増やす（実績 first-slime が解ける）。同じ鍵と本文で送り直しても
+  // 同じ writeId の同じ本文で、値は 1 のまま・実績は 1 つ（docs/guides/working/player-data-design.md §12）。404 は 0013・0014 の当て忘れなので call() が止める
+  const playerDataUrl = playerDataPath(submission.gameId);
+  const before = await call(playerDataUrl, { headers: authHeaders(guest.token) });
+  if (before.values.length !== 0 || before.achievements.length !== 0) throw new Error('New guest already has player data');
+  const idempotencyKey = newIdempotencyKey();
+  const writeOnce = () => call(playerDataUrl, {
+    method: 'POST',
+    headers: playerDataHeaders(guest.token, idempotencyKey),
+    body: JSON.stringify(playerDataWrite(SMOKE_PLAYER_DATA_KEY, 1))
+  });
+  const playerDataWritten = await writeOnce();
+  const valueOf = (body) => body.values.find((v) => v.key === SMOKE_PLAYER_DATA_KEY)?.value;
+  if (valueOf(playerDataWritten) !== 1 || !playerDataWritten.unlocked.some((a) => a.achievementId === SMOKE_ACHIEVEMENT_ID)) {
+    throw new Error(`Writing ${SMOKE_PLAYER_DATA_KEY} did not unlock ${SMOKE_ACHIEVEMENT_ID}`);
+  }
+  const resent = await writeOnce();
+  if (JSON.stringify(resent) !== JSON.stringify(playerDataWritten)) throw new Error('Resent player data write returned a different body');
+  const after = await call(playerDataUrl, { headers: authHeaders(guest.token) });
+  if (after.values.find((v) => v.key === SMOKE_PLAYER_DATA_KEY)?.value !== 1) throw new Error('Resent player data write was counted twice');
+  if (after.achievements.filter((a) => a.achievementId === SMOKE_ACHIEVEMENT_ID).length !== 1) {
+    throw new Error(`Achievement ${SMOKE_ACHIEVEMENT_ID} is not unlocked exactly once`);
   }
   console.log('\nPASS: local CLI smoke test');
 } catch (error) {

@@ -1,11 +1,11 @@
 /**
- * プレイヤーデータ U1: 値の読み取り（GET /v1/player-data）と書き込み（POST /v1/player-data。Idempotency-Key 必須）と、
- * 本文の形・書き方の範囲・中身のハッシュの関数の試験。
- * 名前と期待する結果の正は docs/guides/working/player-data-design.md §10 の U1 の行（エラーコードの数・スキーマの操作の数・
+ * プレイヤーデータ U1・U2: 値の読み取り（GET /v1/player-data）と書き込み（POST /v1/player-data。Idempotency-Key 必須）と、
+ * 本文の形・書き方の範囲・中身のハッシュの関数と、書き込みの中でサーバーが解く実績（GET の achievements・POST の unlocked）の試験。
+ * 名前と期待する結果の正は docs/guides/working/player-data-design.md §10 の U1・U2 の行（エラーコードの数・スキーマの操作の数・
  * モジュールの一覧・demo-rpg の設定の 4 本は test/schema-conformance.test.ts・test/modules.test.ts・test/game-modules.test.ts）。
  * L1 は関数を直に呼ぶ。L2 は src/worker.ts の default.fetch を直に呼び、APP_ENV=local を渡す。
- * 試験のゲームは専用の pd-game（4 つの書き方のキーを宣言する）と pd-off（player-data を使わない設定）。
- * 値の行を直に入れる試験は、先に宣言の行がある（beforeEach で入れる。外部キー）。
+ * 試験のゲームは専用の pd-game（4 つの書き方のキーと 3 つの実績を宣言する）と pd-off（player-data を使わない設定）。
+ * 値の行を直に入れる試験は、先に宣言の行がある（beforeEach で入れる。外部キー）。CLI の流れの試験だけ demo-rpg の手本の行を使う。
  *
  * 概要記述: Claude Opus 5.5 — 2026-10-31
  */
@@ -21,6 +21,9 @@ import { bearer } from './support/auth';
 import { registerGame } from './support/games';
 import { countRateLimitRows, fillRateLimit, resetRateLimits } from './support/rate-limits';
 import { validate, type Schema, type SchemaRoot } from './support/schema-check';
+import {
+  SMOKE_ACHIEVEMENT_ID, SMOKE_PLAYER_DATA_KEY, authHeaders, guestRequest, newIdempotencyKey, playerDataHeaders, playerDataPath, playerDataWrite,
+} from '../scripts/cli-requests.mjs';
 
 type TestEnv = { DB: D1Database; APP_ENV: string };
 const baseEnv = env as unknown as TestEnv;
@@ -34,10 +37,13 @@ const path = '/v1/player-data';
 const keys: Array<[string, 'add' | 'max' | 'set' | 'flag', number, number | null]> = [
   ['kills', 'add', 1000, 10], ['floor', 'max', 999, null], ['chapter', 'set', 100, null], ['boss', 'flag', 1, null],
 ];
+// 試験の実績の宣言（実績の ID・見るキー・閾値）
+const achievements: Array<[string, string, number]> = [['ten-kills', 'kills', 10], ['boss-down', 'boss', 1], ['chapter-3', 'chapter', 3]];
 
 type Value = { key: string; mode: string; value: number; updatedAt: string };
-type ReadBody = { gameId: string; values: Value[] };
-type WriteBody = { gameId: string; writeId: string; values: Array<{ key: string; value: number }> };
+type Unlocked = { achievementId: string; unlockedAt: string };
+type ReadBody = { gameId: string; values: Value[]; achievements: Unlocked[] };
+type WriteBody = { gameId: string; writeId: string; values: Array<{ key: string; value: number }>; unlocked: Unlocked[] };
 type ErrorBody = { error: { code: string; message: string } };
 type Who = { gameId?: string; playerId?: string; authorization?: string | null; e?: unknown; headers?: Record<string, string>;
   idempotencyKey?: string | null; body?: string };
@@ -76,6 +82,10 @@ async function count(table: 'player_data' | 'player_data_writes'): Promise<numbe
   const row = await baseEnv.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE game_id = ?`).bind(game).first<{ n: number }>();
   return row?.n ?? 0;
 }
+async function achievementRows(playerId = 'p1'): Promise<Array<{ achievementId: string; unlockedAt: number }>> {
+  return (await baseEnv.DB.prepare(`SELECT achievement_id AS achievementId, unlocked_at AS unlockedAt FROM player_achievements
+    WHERE game_id = ? AND player_id = ? ORDER BY achievement_id`).bind(game, playerId).all<{ achievementId: string; unlockedAt: number }>()).results;
+}
 async function setValue(playerId: string, key: string, value: number, updatedAt = nowSeconds()): Promise<void> {
   await baseEnv.DB.prepare('INSERT OR REPLACE INTO player_data (game_id, player_id, key, value, updated_at) VALUES (?, ?, ?, ?, ?)')
     .bind(game, playerId, key, value, updatedAt).run();
@@ -104,12 +114,15 @@ async function expectConforms(res: Response, method: 'get' | 'post'): Promise<un
   return body;
 }
 
-// 試験の間で前のデータに頼らない。demo-rpg（マイグレーションの初期データ）の宣言だけ残す。値は宣言を外部キーで指すので先に消す
+// 試験の間で前のデータに頼らない。demo-rpg（マイグレーションの初期データ）の宣言だけ残す。
+// 解いた実績は実績の宣言を、実績の宣言と値はキーの宣言を外部キーで指すので先に消す
 beforeEach(async () => {
   await baseEnv.DB.batch([
+    baseEnv.DB.prepare('DELETE FROM player_achievements'),
     baseEnv.DB.prepare('DELETE FROM player_data'),
     baseEnv.DB.prepare('DELETE FROM player_data_writes'),
     baseEnv.DB.prepare('DELETE FROM player_bans'),
+    baseEnv.DB.prepare("DELETE FROM achievements WHERE game_id <> 'demo-rpg'"),
     baseEnv.DB.prepare("DELETE FROM player_data_keys WHERE game_id <> 'demo-rpg'"),
   ]);
   await resetRateLimits(baseEnv.DB);
@@ -117,6 +130,8 @@ beforeEach(async () => {
   await registerGame(baseEnv.DB, offGame, ['rankings']);
   const insert = baseEnv.DB.prepare('INSERT INTO player_data_keys (game_id, key, mode, max_value, max_delta) VALUES (?, ?, ?, ?, ?)');
   await baseEnv.DB.batch(keys.map(([k, mode, max, delta]) => insert.bind(game, k, mode, max, delta)));
+  const declare = baseEnv.DB.prepare('INSERT INTO achievements (game_id, achievement_id, key, threshold) VALUES (?, ?, ?, ?)');
+  await baseEnv.DB.batch(achievements.map(([id, k, threshold]) => declare.bind(game, id, k, threshold)));
 });
 
 describe('U1: プレイヤーデータの関数', () => {
@@ -294,13 +309,14 @@ describe('U1: プレイヤーデータの読み書き', () => {
         { key: 'chapter', mode: 'set', value: 2, updatedAt: iso },
         { key: 'kills', mode: 'add', value: 7, updatedAt: iso },
       ],
+      achievements: [],
     });
   });
 
   it('何も書いていないプレイヤーのプレイヤーデータは空の一覧で返る', async () => {
     const res = await read({ playerId: 'nobody' });
     expect(res.status).toBe(200);
-    expect(await res.json<ReadBody>()).toEqual({ gameId: game, values: [] });
+    expect(await res.json<ReadBody>()).toEqual({ gameId: game, values: [], achievements: [] });
   });
 
   it('クライアントが送った時刻はプレイヤーデータの時刻に使わない', async () => {
@@ -387,5 +403,132 @@ describe('U1: プレイヤーデータの読み書き', () => {
     const key = newKey();
     expect((await write([{ key: 'chapter', value: 1 }], { idempotencyKey: key })).status).toBe(200);
     await expectConforms(await write([{ key: 'chapter', value: 2 }], { idempotencyKey: key }), 'post');
+  });
+});
+
+describe('U2: 実績', () => {
+  it('統計値が閾値に届いた書き込みで実績が解け応答に載る', async () => {
+    const before = nowSeconds();
+    const first = await write([{ key: 'kills', value: 9 }]);
+    expect(first.status).toBe(200);
+    expect((await first.json<WriteBody>()).unlocked).toEqual([]);
+    const second = await write([{ key: 'kills', value: 1 }]);
+    expect(second.status).toBe(200);
+    const two = await second.json<WriteBody>();
+    expect(two.values).toEqual([{ key: 'kills', value: 10 }]);
+    expect(two.unlocked.map((a) => a.achievementId)).toEqual(['ten-kills']);
+    const at = Date.parse(two.unlocked[0].unlockedAt) / 1000;
+    expect(at).toBeGreaterThanOrEqual(before - 5);
+    expect(at).toBeLessThanOrEqual(nowSeconds() + 5);
+    const got = await (await read()).json<ReadBody>();
+    expect(got.achievements).toEqual(two.unlocked);
+  });
+
+  it('真偽のキーを立てると閾値1の実績が解ける', async () => {
+    const res = await write([{ key: 'boss', value: 1 }]);
+    expect(res.status).toBe(200);
+    expect((await res.json<WriteBody>()).unlocked.map((a) => a.achievementId)).toEqual(['boss-down']);
+    expect((await achievementRows()).map((r) => r.achievementId)).toEqual(['boss-down']);
+  });
+
+  it('解いた実績はもう一度届いても二重に解けず時刻が変わらない', async () => {
+    const first = await write([{ key: 'kills', value: 10 }]);
+    expect((await first.json<WriteBody>()).unlocked.map((a) => a.achievementId)).toEqual(['ten-kills']);
+    // 解いた時刻を前にずらし、2 回目の書き込みで書き換わらないことを見る
+    const past = nowSeconds() - 3600;
+    await baseEnv.DB.prepare('UPDATE player_achievements SET unlocked_at = ? WHERE game_id = ? AND player_id = ?').bind(past, game, 'p1').run();
+    const second = await write([{ key: 'kills', value: 1 }]);
+    expect(second.status).toBe(200);
+    expect((await second.json<WriteBody>()).unlocked).toEqual([]);
+    expect(await achievementRows()).toEqual([{ achievementId: 'ten-kills', unlockedAt: past }]);
+    const iso = new Date(past * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    expect((await (await read()).json<ReadBody>()).achievements).toEqual([{ achievementId: 'ten-kills', unlockedAt: iso }]);
+  });
+
+  it('値で置くキーを下げても解いた実績は消えない', async () => {
+    const up = await write([{ key: 'chapter', value: 3 }]);
+    expect((await up.json<WriteBody>()).unlocked.map((a) => a.achievementId)).toEqual(['chapter-3']);
+    const down = await write([{ key: 'chapter', value: 0 }]);
+    expect(down.status).toBe(200);
+    const body = await down.json<WriteBody>();
+    expect(body.values).toEqual([{ key: 'chapter', value: 0 }]);
+    expect(body.unlocked).toEqual([]);
+    expect((await (await read()).json<ReadBody>()).achievements.map((a) => a.achievementId)).toEqual(['chapter-3']);
+  });
+
+  it('同じIdempotency-Keyの送り直しは解いた実績も1回目と同じ本文で返す', async () => {
+    const key = newKey();
+    const first = await write([{ key: 'boss', value: 1 }, { key: 'kills', value: 10 }], { idempotencyKey: key });
+    const one = await first.json<WriteBody>();
+    expect(one.unlocked.map((a) => a.achievementId)).toEqual(['boss-down', 'ten-kills']);
+    const second = await write([{ key: 'boss', value: 1 }, { key: 'kills', value: 10 }], { idempotencyKey: key });
+    expect(second.status).toBe(200);
+    expect(await second.json<WriteBody>()).toEqual(one);
+    expect((await achievementRows()).map((r) => r.achievementId)).toEqual(['boss-down', 'ten-kills']);
+    expect(await valueOf('kills')).toBe(10);
+    expect(await count('player_data_writes')).toBe(1);
+  });
+
+  it('実績の解除を申告する欄は読まない', async () => {
+    const res = await write([], {
+      body: JSON.stringify({
+        changes: [{ key: 'kills', value: 1 }],
+        achievements: ['first-slime', 'ten-kills'],
+        unlocked: [{ achievementId: 'ten-kills', unlockedAt: '2000-01-01T00:00:00Z' }],
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json<WriteBody>()).unlocked).toEqual([]);
+    expect(await achievementRows()).toEqual([]);
+    expect((await (await read()).json<ReadBody>()).achievements).toEqual([]);
+  });
+
+  it('ほかのプレイヤーの値では自分の実績は解けない', async () => {
+    const other = await write([{ key: 'kills', value: 10 }], { playerId: 'p2' });
+    expect((await other.json<WriteBody>()).unlocked.map((a) => a.achievementId)).toEqual(['ten-kills']);
+    const mine = await write([{ key: 'kills', value: 1 }], { playerId: 'p1' });
+    expect(mine.status).toBe(200);
+    expect((await mine.json<WriteBody>()).unlocked).toEqual([]);
+    expect(await achievementRows('p1')).toEqual([]);
+    expect((await (await read({ playerId: 'p1' })).json<ReadBody>()).achievements).toEqual([]);
+  });
+
+  it('実績の応答はスキーマに合う', async () => {
+    const written = await expectConforms(await write([{ key: 'boss', value: 1 }, { key: 'chapter', value: 3 }]), 'post') as WriteBody;
+    expect(written.unlocked.length).toBe(2);
+    const got = await expectConforms(await read(), 'get') as ReadBody;
+    expect(got.achievements.length).toBe(2);
+    const none = await expectConforms(await write([{ key: 'floor', value: 1 }]), 'post') as WriteBody;
+    expect(none.unlocked).toEqual([]);
+  });
+
+  it('CLIモックと同じ流れで統計値を増やし送り直しても二重にならず実績が解ける', async () => {
+    // scripts/cli-mock.mjs のプレイヤーデータの流れ（scripts/cli-requests.mjs で共有）: demo-rpg のゲスト → 読む → 新しい鍵で 1 増やす →
+    // 同じ鍵と本文で送り直す → 読み直す（docs/guides/working/player-data-design.md §12）
+    const fetchLocal = (path: string, init: RequestInit = {}) => worker.fetch(new Request(base + path, init), localEnv as never);
+    const guestRes = await fetchLocal('/v1/accounts/guest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(guestRequest()),
+    });
+    expect(guestRes.status).toBe(200);
+    const guest = await guestRes.json<{ playerId: string; token: string }>();
+    const url = playerDataPath(guestRequest().gameId);
+    const before = await fetchLocal(url, { headers: authHeaders(guest.token) });
+    expect(before.status).toBe(200);
+    expect(await before.json<ReadBody>()).toEqual({ gameId: 'demo-rpg', values: [], achievements: [] });
+    const idempotencyKey = newIdempotencyKey();
+    const writeOnce = () => fetchLocal(url, {
+      method: 'POST', headers: playerDataHeaders(guest.token, idempotencyKey), body: JSON.stringify(playerDataWrite(SMOKE_PLAYER_DATA_KEY, 1)),
+    });
+    const first = await writeOnce();
+    const second = await writeOnce();
+    expect([first.status, second.status]).toEqual([200, 200]);
+    const one = await first.json<WriteBody>();
+    const two = await second.json<WriteBody>();
+    expect(two).toEqual(one);
+    expect(one.values).toEqual([{ key: SMOKE_PLAYER_DATA_KEY, value: 1 }]);
+    expect(one.unlocked.map((a) => a.achievementId)).toEqual([SMOKE_ACHIEVEMENT_ID]);
+    const after = await (await fetchLocal(url, { headers: authHeaders(guest.token) })).json<ReadBody>();
+    expect(after.values.map((v) => [v.key, v.value])).toEqual([[SMOKE_PLAYER_DATA_KEY, 1]]);
+    expect(after.achievements.map((a) => a.achievementId)).toEqual([SMOKE_ACHIEVEMENT_ID]);
   });
 });

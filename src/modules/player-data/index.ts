@@ -6,7 +6,9 @@
 // 書き込みは Idempotency-Key が必須（形は src/core/idempotency.ts。管理の口のコードは読み込まない）。宣言の無いキーは 404、
 // 書き方の範囲の外は 400（src/core/player-data.ts の checkChange）で、どちらも何も書かない。書き込みの記録・値・応答の写しを
 // 1 つの batch で書き、記録の一意の鍵（ゲーム・プレイヤー・鍵）で二重を止める。2 回目は 200 で 1 回目と同じ本文。時刻はサーバーの時刻だけ。
-// 順と SQL の正は docs/guides/working/player-data-design.md §4〜§6。実績（achievements・unlocked）は U2 で足す。
+// 実績は同じ batch の中でサーバーが解く（書いた後の値が閾値以上で、まだ解いていない実績。主キーで二重に解かない。値が下がっても消さない）。
+// 解いたと申告する口は作らず、本文の申告の欄も読まない。POST の unlocked はこの書き込みで解いた実績、GET の achievements は解いた実績の全部。
+// 順と SQL の正は docs/guides/working/player-data-design.md §4〜§7。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
 import { requireAuth } from '../../core/auth';
@@ -27,12 +29,15 @@ import { parseChanges, writeRequestHash, type Change } from './parse';
 type ValueRow = { key: string; mode: PlayerDataMode; value: number; updatedAt: number };
 type WriteRow = { writeRef: string; requestHash: string; resultJson: string | null };
 type WrittenValue = { key: string; value: number };
+type UnlockedRow = { achievementId: string; unlockedAt: number };
 
 const path = /^\/v1\/player-data$/;
 
 const valuesOf = `SELECT d.key AS key, k.mode AS mode, d.value AS value, d.updated_at AS updatedAt FROM player_data d
   JOIN player_data_keys k ON k.game_id = d.game_id AND k.key = d.key
   WHERE d.game_id = ? AND d.player_id = ? ORDER BY d.key`;
+const achievementsOf = `SELECT achievement_id AS achievementId, unlocked_at AS unlockedAt FROM player_achievements
+  WHERE game_id = ? AND player_id = ? ORDER BY achievement_id`;
 const writeByKey = `SELECT write_ref AS writeRef, request_hash AS requestHash, result_json AS resultJson FROM player_data_writes
   WHERE game_id = ? AND player_id = ? AND request_key = ?`;
 
@@ -59,11 +64,20 @@ function upsertValueSql(mode: PlayerDataMode): string {
   SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM player_data_writes WHERE write_ref = ?)
   ON CONFLICT (game_id, player_id, key) DO UPDATE SET ${updateByMode[mode]}`;
 }
-/** 4. 応答の写し（この要求の記録に、送ったキーの書いた後の値を入れる。3 の実績は U2）。 */
+/** 3. 実績（この要求の記録が入ったときだけ。書いた後の値が閾値以上で、まだ解いていない実績。§7）。 */
+const unlockSql = `INSERT INTO player_achievements (game_id, player_id, achievement_id, unlocked_at, write_ref)
+  SELECT a.game_id, w.p, a.achievement_id, w.t, w.ref FROM (SELECT ? AS g, ? AS p, ? AS t, ? AS ref) w
+  JOIN achievements a ON a.game_id = w.g
+  JOIN player_data v ON v.game_id = a.game_id AND v.player_id = w.p AND v.key = a.key
+  WHERE v.value >= a.threshold AND EXISTS (SELECT 1 FROM player_data_writes WHERE write_ref = w.ref)
+  ON CONFLICT (game_id, player_id, achievement_id) DO NOTHING`;
+/** 4. 応答の写し（この要求の記録に、送ったキーの書いた後の値と、この書き込みで解いた実績を入れる）。 */
 function saveResultSql(keyCount: number): string {
   return `UPDATE player_data_writes SET result_json = json_object(
     'values', json((SELECT json_group_array(json_object('key', key, 'value', value)) FROM
-      (SELECT key, value FROM player_data WHERE game_id = ? AND player_id = ? AND key IN (${Array(keyCount).fill('?').join(', ')}) ORDER BY key))))
+      (SELECT key, value FROM player_data WHERE game_id = ? AND player_id = ? AND key IN (${Array(keyCount).fill('?').join(', ')}) ORDER BY key))),
+    'unlocked', json((SELECT json_group_array(json_object('achievementId', achievement_id, 'unlockedAt', unlocked_at)) FROM
+      (SELECT achievement_id, unlocked_at FROM player_achievements WHERE write_ref = ? ORDER BY achievement_id))))
   WHERE write_ref = ?`;
 }
 
@@ -108,7 +122,13 @@ async function loadKeys(db: Database, gameId: string, keys: readonly string[]): 
   return new Map(rows.results.map((r) => [r.key, r]));
 }
 
-/** 書き込みの batch の文を組み立てる（§6 の文 1・2・4）。 */
+/** 解いた実績の行を応答の形（実績の ID の昇順・時刻は ISO 8601）にする。 */
+function unlockedOf(rows: readonly UnlockedRow[]) {
+  return [...rows].sort((a, b) => (a.achievementId < b.achievementId ? -1 : a.achievementId > b.achievementId ? 1 : 0))
+    .map((r) => ({ achievementId: r.achievementId, unlockedAt: isoSeconds(r.unlockedAt) }));
+}
+
+/** 書き込みの batch の文を組み立てる（§6 の文 1〜4）。 */
 function writeStatements(db: Database, w: { ref: string; gameId: string; playerId: string; key: string; hash: string; now: number },
   changes: readonly Change[], defs: Map<string, PlayerDataKey>) {
   const adds = changes.filter((c) => defs.get(c.key)!.mode === 'add');
@@ -117,7 +137,8 @@ function writeStatements(db: Database, w: { ref: string; gameId: string; playerI
       ...adds.flatMap((c) => [c.key, c.value, defs.get(c.key)!.maxValue])),
     ...changes.map((c) => db.prepare(upsertValueSql(defs.get(c.key)!.mode))
       .bind(w.gameId, w.playerId, c.key, c.value, w.now, w.ref)),
-    db.prepare(saveResultSql(changes.length)).bind(w.gameId, w.playerId, ...changes.map((c) => c.key), w.ref),
+    db.prepare(unlockSql).bind(w.gameId, w.playerId, w.now, w.ref),
+    db.prepare(saveResultSql(changes.length)).bind(w.gameId, w.playerId, ...changes.map((c) => c.key), w.ref, w.ref),
   ];
 }
 
@@ -133,7 +154,8 @@ export const playerData: GameModule = {
         const { gameId, claims } = access;
         const rows = (await env.DB.prepare(valuesOf).bind(gameId, claims.playerId).all<ValueRow>()).results;
         const values = rows.map((r) => ({ key: r.key, mode: r.mode, value: r.value, updatedAt: isoSeconds(r.updatedAt) }));
-        return json({ gameId, values });
+        const unlocked = (await env.DB.prepare(achievementsOf).bind(gameId, claims.playerId).all<UnlockedRow>()).results;
+        return json({ gameId, values, achievements: unlockedOf(unlocked) });
       },
     },
     {
@@ -168,10 +190,11 @@ export const playerData: GameModule = {
           return error('IDEMPOTENCY_KEY_REUSED', 'Idempotency-Key was used for a different request', 422);
         }
         if (row.resultJson === null) throw new Error('Player data write has no result');
-        const values = (JSON.parse(row.resultJson) as { values: WrittenValue[] }).values
+        const result = JSON.parse(row.resultJson) as { values: WrittenValue[]; unlocked: UnlockedRow[] };
+        const values = result.values
           .map((v) => ({ key: v.key, value: v.value }))
           .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-        return json({ gameId, writeId: row.writeRef, values });
+        return json({ gameId, writeId: row.writeRef, values, unlocked: unlockedOf(result.unlocked) });
       },
     },
   ],

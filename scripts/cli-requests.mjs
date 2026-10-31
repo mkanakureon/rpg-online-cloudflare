@@ -11,11 +11,14 @@
 // （masterDataPath・utf8Bytes。テスト「CLIモックと同じ流れで設定に載ったマスターデータを読める」）。
 // セーブを消した後、同じトークンでイベントの一覧を読み、デイリーの報酬を 2 回受け取って所持品と受領の履歴が 1 回分だけ増えたことを見る
 // （SMOKE_EVENT_ID・eventsPath・claimPath・inventoryPath・historyPath。テスト「CLIモックと同じ流れでイベントの報酬を受け取り二回目は二重にならない」）。
+// イベントの後、同じトークンでプレイヤーデータを読み、新しい Idempotency-Key で統計値を 1 増やし、同じ鍵と本文で送り直して二重にならず、
+// 実績が解けたことを読み直して見る（SMOKE_PLAYER_DATA_KEY・SMOKE_ACHIEVEMENT_ID・playerDataPath・playerDataWrite・newIdempotencyKey・
+// playerDataHeaders。テスト「CLIモックと同じ流れで統計値を増やし送り直しても二重にならず実績が解ける」）。
 // スコアはローカルの D1 に積み上がっても上位 10 件に入るよう、回すたびに smokeBoardId(now) の別のボードに送る
 // （テスト「CLIモックの通しは同点のスコアが上位10件を埋めていても自分の投稿を見つける」）。
 // Node.js と Workers のランタイムの両方で読めるよう、Node.js の API を使わない（チェックサムは crypto.subtle）。型は cli-requests.d.mts。
 //
-// 概要記述: Claude Opus 5.5 — 2026-10-30
+// 概要記述: Claude Opus 5.5 — 2026-10-31
 
 /** CLI モックのスモークでスコアを送るときの盤の ID。 */
 export const SMOKE_BOARD_ID = 'boss-score';
@@ -101,4 +104,30 @@ export function inventoryPath(gameId = 'demo-rpg') {
 /** 受領の履歴のパス（GET /v1/inventory/history）。 */
 export function historyPath(gameId = 'demo-rpg') {
   return `/v1/inventory/history?gameId=${encodeURIComponent(gameId)}`;
+}
+
+/** CLI モックの通しで増やす統計値のキー（demo-rpg の手本の add のキー。migrations/0013_player_data.sql）。 */
+export const SMOKE_PLAYER_DATA_KEY = 'slimes-defeated';
+
+/** CLI モックの通しで解ける実績（SMOKE_PLAYER_DATA_KEY が 1 以上で解ける demo-rpg の手本。migrations/0014_achievements.sql）。 */
+export const SMOKE_ACHIEVEMENT_ID = 'first-slime';
+
+/** プレイヤーデータのパス（GET・POST /v1/player-data。docs/guides/working/player-data-design.md §12）。 */
+export function playerDataPath(gameId = 'demo-rpg') {
+  return `/v1/player-data?gameId=${encodeURIComponent(gameId)}`;
+}
+
+/** プレイヤーデータの書き込みの本文（POST /v1/player-data。キーの書き方は宣言で決まり、add のキーなら value だけ増える）。 */
+export function playerDataWrite(key = SMOKE_PLAYER_DATA_KEY, value = 1) {
+  return { changes: [{ key, value }] };
+}
+
+/** 書き込みごとの新しい Idempotency-Key（^[a-zA-Z0-9_-]{8,64}$ に合う UUID）。送り直しのときだけ同じ鍵を使う。 */
+export function newIdempotencyKey() {
+  return crypto.randomUUID();
+}
+
+/** プレイヤーデータの書き込みに付ける見出し（トークンと Idempotency-Key。鍵は必須）。 */
+export function playerDataHeaders(token, idempotencyKey) {
+  return { ...authHeaders(token), 'Idempotency-Key': idempotencyKey };
 }

@@ -2,7 +2,7 @@
 //
 // 中身の正は cli-requests.mjs。欄を変えたらここも合わせる。
 //
-// 概要記述: Claude Opus 5.5 — 2026-10-24
+// 概要記述: Claude Opus 5.5 — 2026-10-31
 
 export declare const SMOKE_BOARD_ID: string;
 
@@ -52,3 +52,19 @@ export declare function claimPath(eventId?: string, gameId?: string): string;
 export declare function inventoryPath(gameId?: string): string;
 
 export declare function historyPath(gameId?: string): string;
+
+export declare const SMOKE_PLAYER_DATA_KEY: string;
+
+export declare const SMOKE_ACHIEVEMENT_ID: string;
+
+export declare function playerDataPath(gameId?: string): string;
+
+export declare function playerDataWrite(key?: string, value?: number): { changes: Array<{ key: string; value: number }> };
+
+export declare function newIdempotencyKey(): string;
+
+export declare function playerDataHeaders(token: string, idempotencyKey: string): {
+  'Content-Type': string;
+  Authorization: string;
+  'Idempotency-Key': string;
+};

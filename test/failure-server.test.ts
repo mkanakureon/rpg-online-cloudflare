@@ -15,7 +15,8 @@ import { bearerForBody } from './support/auth';
 import { registerGame } from './support/games';
 import {
   CLI_CLIENT_VERSION, SMOKE_BOARD_ID, SMOKE_EVENT_ID, SMOKE_SLOT_ID, authHeaders, claimPath, configPath, eventsPath, guestRequest, historyPath,
-  inventoryPath, masterDataPath, saveData, saveWrite, scoreSubmission, sha256Hex, smokeBoardId, utf8Bytes,
+  inventoryPath, masterDataPath, newIdempotencyKey, playerDataHeaders, playerDataPath, playerDataWrite, saveData, saveWrite, scoreSubmission,
+  sha256Hex, smokeBoardId, utf8Bytes,
 } from '../scripts/cli-requests.mjs';
 
 type Migration = { name: string; queries: string[] };
@@ -284,7 +285,8 @@ describe('ケース 7: マイグレーションと互換', () => {
   });
 
   it('CLIモックの通しの流れを続けて2回回しても利用制限に掛からない', async () => {
-    // scripts/cli-mock.mjs の書き込みの流れ（ゲストの発行 → スコア → セーブの書く・読む・一覧・消す → イベントの報酬）を、同じ IP から 2 回続けて回す。
+    // scripts/cli-mock.mjs の書き込みの流れ（ゲストの発行 → スコア → セーブの書く・読む・一覧・消す → イベントの報酬 → プレイヤーデータ）を、
+    // 同じ IP から 2 回続けて回す。
     // 1 つでも 429 になったら利用制限の数（src/core/rate-limit-policy.ts）が CLI モックの使い方より小さい合図
     // （docs/guides/working/abuse-protection-design.md §7）
     const ip = { 'CF-Connecting-IP': '198.51.100.7' };
@@ -315,8 +317,15 @@ describe('ケース 7: マイグレーションと互換', () => {
       await send(claimPath(SMOKE_EVENT_ID, submission.gameId), { method: 'POST', headers });
       await send(inventoryPath(submission.gameId), { headers });
       await send(historyPath(submission.gameId), { headers });
+      // イベントの後のプレイヤーデータの 4 手順（読む → 増やす → 同じ鍵で送り直す → 読み直す。プレイヤーデータの利用制限を 4 回）
+      const playerDataUrl = playerDataPath(submission.gameId);
+      const writeInit = { method: 'POST', headers: { ...playerDataHeaders(token, newIdempotencyKey()), ...ip }, body: JSON.stringify(playerDataWrite()) };
+      await send(playerDataUrl, { headers });
+      await send(playerDataUrl, writeInit);
+      await send(playerDataUrl, writeInit);
+      await send(playerDataUrl, { headers });
     }
-    expect(statuses).toEqual(Array(24).fill(200));
+    expect(statuses).toEqual(Array(32).fill(200));
   });
 
   it('CLIモックの通しは同点のスコアが上位10件を埋めていても自分の投稿を見つける', async () => {
