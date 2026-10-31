@@ -35,7 +35,7 @@
 
 ## Phase 2：運営・非同期の機能（P1）
 
-- [ ] プレイヤーデータ（実績・進行状態・統計値）
+- [x] プレイヤーデータ（実績・進行状態・統計値）（`docs/guides/working/player-data-design.md`。Issue #39〜#41。2026-10-31 に `npm run cli:smoke` と `node scripts/admin-cli.mjs smoke` と §8 の管理の 4 つの操作で確認）
 - [x] 期間限定イベント・デイリー／週間の報酬（`docs/guides/working/event-reward-design.md`。Issue #32。2026-10-30 に `npm run cli:smoke` で受け取りと二重にならないことを確認）
 - [x] 所持品・通貨・配布と受領の履歴（Issue #31・#32。消費の口は範囲の外）
 - [ ] クエスト（達成条件・報酬・進捗）
