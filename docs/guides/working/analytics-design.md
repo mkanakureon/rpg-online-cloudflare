@@ -283,7 +283,7 @@ DELETE FROM <表> WHERE rowid IN (SELECT rowid FROM <表> WHERE <切り目の列
 | 利用制限 | 新しい `RATE_LIMITS` の行を足さない。読む口は今の `RATE_LIMITS.admin`（IP ごと）を数える。記録はトークンの要る口の今の決まりの中（`consume` の数え方を変えない） |
 | `game_modules` | 機能の名前を足さない（「遊んだ」の記録と掃除は全部のゲームに効く仕組みで、利用制限と同じく core）。demo-rpg の設定とモジュールの一覧は変わらない |
 | エラーコード | 足さない。読む口は今の管理のコード（400 `INVALID_ARGUMENT`・404 `NOT_FOUND`・401・403・429・500）だけ。ゲームのクライアントのスキーマ `openapi/rpg-online.v1.json` は変えない。管理のスキーマ `openapi/rpg-online-admin.v1.json` には操作を足すが ErrorCode の列挙は変えない |
-| 文書（実装の束で直す） | `docs/api-contract.md` の「管理の API」に 2 つの読む口（N1・N3）と、プレイヤーデータの `Idempotency-Key` の期限 30 日（N2）。`docs/guides/working/architecture.md` に `scheduled` の入口（N2）。`admin-design.md` §5 の「消す仕組みは分析の束で」の文・`player-data-design.md` §6 の鍵の期限の「掃除は §15 の分析で作る」の文（30 日にする）・`quest-design.md` §3 と §16 の掃除の行を、この設計書の §6 を指す文に置き換える（N2）。`roadmap.md` の Phase 2 の行は N3 の後に印を付ける（統合のセッション） |
+| 文書（実装の束で直す） | `docs/api-contract.md` の「管理の API」に 2 つの読む口（N1・N3）と継続の数の偏りの注意（N1。§5 のトークンの期限）と、プレイヤーデータの `Idempotency-Key` の期限 30 日（N2）。`docs/guides/working/architecture.md` に `scheduled` の入口（N2）。`admin-design.md` §5 の「消す仕組みは分析の束で」の文・`player-data-design.md` §6 の鍵の期限の「掃除は §15 の分析で作る」の文（30 日にする）・`quest-design.md` §3 と §16 の掃除の行を、この設計書の §6 を指す文に置き換える（N2）。`roadmap.md` の Phase 2 の行は N3 の後に印を付ける（統合のセッション） |
 
 ## 10. 試験の名前の表
 
@@ -314,6 +314,7 @@ DELETE FROM <表> WHERE rowid IN (SELECT rowid FROM <表> WHERE <切り目の列
 | N1 | `管理の集計の応答は管理のスキーマに合う` | L2 | 200・400・404 | `openapi/rpg-online-admin.v1.json` に合う |
 | N1 | `管理コマンドと同じ要求の形で集計を読める` | L2 | `scripts/admin-requests.mjs` の関数で、ゲスト → 要求 → 集計 | 今日の `activePlayers` と `newPlayers` が 1 以上 |
 | N2 | `掃除の切り目は表ごとの保持の日数から決まり監査のログは保持の定数を読む` | L1 | `cutoffFor` に各表と `now` | `now - 日数 × 86400`。監査のログの日数が `AUDIT_RETENTION_DAYS` と同じ |
+| N2 | `保持の日数の表は消す表だけを持ち受け取りの行と受領の履歴を持たない` | L1 | `RETENTION_DAYS` を読み込んでキーを見る | キーが §6 の消す 5 つの表とちょうど同じ。`quest_claims`・`event_claims`・`inventory_ledger` が無い |
 | N2 | `掃除は保持の日数を過ぎた行だけを消し切り目の行は残す` | L2 | 各表に切り目の 1 秒前・切り目ちょうどの行 | 前だけ消える |
 | N2 | `掃除は受け取りの行と受領の履歴を消さない` | L2 | 400 日前の `quest_claims`（一度きりとデイリー）・`event_claims`・`inventory_ledger` の行 | 全部残る。一度きりのクエストをもう一度受け取ると今までどおり同じ本文 |
 | N2 | `掃除はいまの区切りの値を消さずクエストの進捗が変わらない` | L2 | 今日のデイリーの値と 36 日前の値 | 今日の行だけ残り、クエストの一覧の `progress` が同じ |
@@ -329,7 +330,7 @@ DELETE FROM <表> WHERE rowid IN (SELECT rowid FROM <表> WHERE <切り目の列
 | N3 | `管理の配った量の集計の応答は管理のスキーマに合う` | L2 | 200・400・404 | 管理のスキーマに合う |
 | N3 | `管理コマンドと同じ要求の形で配った量を読める` | L2 | `scripts/admin-requests.mjs` の関数で、イベントの受け取り → 集計 | 今日の `event-claim` の行がある |
 
-数（行）: N1 が 15・N2 が 9・N3 が 6。
+数（行）: N1 が 15・N2 が 10・N3 が 6。
 
 ## 11. 挙動が変わる既存の試験と、直す手続き
 
@@ -479,12 +480,11 @@ check(/"crons"\s*:\s*\[\s*"30 18 \* \* \*"\s*\]/.test(wr), 'wrangler.jsonc に�
 check(/scheduled/.test(read('src/worker.ts')), 'Worker の入口が scheduled を書き出す');
 const cleanup = read('src/core/cleanup.ts');
 check(/AUDIT_RETENTION_DAYS/.test(cleanup), '掃除が監査のログの保持の定数を読む');
-// 頭書きのコメントには消さない表の名前が出てよいので、保持の日数の表（RETENTION_DAYS の中身）だけを見る
-const retention = (cleanup.match(/RETENTION_DAYS[^=]*=\s*\{[\s\S]*?\n\}/) || [''])[0];
-check(retention.length > 0 && !/quest_claims|event_claims|inventory_ledger/.test(retention), '保持の日数の表に受け取りの行と受領の履歴が無い');
+// 消さない表が保持の日数の表に無いことは、文字列でなく試験（RETENTION_DAYS のキーを読む L1）で見る。頭書きのコメントには表の名前が出てよい
 runTests();
 requireTests([
   '掃除の切り目は表ごとの保持の日数から決まり監査のログは保持の定数を読む',
+  '保持の日数の表は消す表だけを持ち受け取りの行と受領の履歴を持たない',
   '掃除は保持の日数を過ぎた行だけを消し切り目の行は残す',
   '掃除は受け取りの行と受領の履歴を消さない',
   '掃除はいまの区切りの値を消さずクエストの進捗が変わらない',
