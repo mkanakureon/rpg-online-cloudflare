@@ -383,7 +383,7 @@ INSERT INTO player_data_period_values (game_id, player_id, key, kind, period_key
 | `docs/guides/working/player-data-design.md` | §15 のクエストの行を、この設計書を指す形に置き換える | §16 の「区切りごとの統計値」の行を、この設計書の §6・§7 を指す形に置き換える | — |
 | `docs/guides/decisions/roadmap.md` | — | — | Phase 2 のクエストの行に印と Issue の番号（Q3 の後、会話の側の通しの確かめが済んでから） |
 
-`CLAUDE.md` は変えない（プロジェクトの行の「認証・レート制限・不正対策は未実装」は、守りを外すとき＝ユーザーが決めるときに直す。`admin-design.md` §10 のとおり）。
+`CLAUDE.md` は変えない（守るものの 2 行は、守りを外すとき＝ユーザーが決めるときに直す。`admin-design.md` §10 のとおり）。
 
 ## 10. 試験の名前の表
 

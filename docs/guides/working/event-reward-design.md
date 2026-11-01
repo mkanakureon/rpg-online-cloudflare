@@ -343,7 +343,7 @@ INSERT INTO inventory_balances (game_id, player_id, item_id, amount, updated_at)
 | `docs/guides/working/failure-case-test-plan.md` | — | ケース 6 の `UEクライアントは端末の時刻がずれていても期間の判定にサーバーの時刻を使う` の「イベントの API は Phase 2」を、この設計の口（`GET /v1/events` の `serverTime`・受け取りの 409）を指す形に置き換える |
 | `docs/guides/decisions/roadmap.md` | — | Phase 2 の 2 項目に印（`npm run cli:smoke` が通った後。会話の側） |
 
-`CLAUDE.md` は変えない（プロジェクトの行の「認証・レート制限・不正対策は未実装」は、守りを外すとき＝ユーザーが決めるときに直す。`abuse-protection-design.md` §9 のとおり）。
+`CLAUDE.md` は変えない（守るものの 2 行は、守りを外すとき＝ユーザーが決めるときに直す。`abuse-protection-design.md` §9 のとおり）。
 
 ## 8. 試験の名前の表
 

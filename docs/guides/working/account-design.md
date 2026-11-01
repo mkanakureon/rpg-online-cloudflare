@@ -440,7 +440,7 @@ done();
 
 そのとき直す所:
 
-- `CLAUDE.md` の「守るもの」の 2 行: 「**無認証の API をデプロイしない**」と「**書き込みの API は `APP_ENV === 'local'` のときだけ通し、ほかは `403 NOT_READY_FOR_PRODUCTION`。** `wrangler.jsonc` の既定 `APP_ENV=disabled` を変えない」を、新しい決まり（例: 書き込みはトークンを確かめたときだけ通す・鍵をファイルに書かない）に置き換える。プロジェクトの節の「認証・レート制限・不正対策は未実装」も置き換える。
+- `CLAUDE.md` の「守るもの」の 2 行: 「**無認証の API をデプロイしない**」と「**書き込みの API は `APP_ENV === 'local'` のときだけ通し、ほかは `403 NOT_READY_FOR_PRODUCTION`。** `wrangler.jsonc` の既定 `APP_ENV=disabled` を変えない」を、新しい決まり（例: 書き込みはトークンを確かめたときだけ通す・鍵をファイルに書かない）に置き換える。
 - `docs/guides/decisions/operations-security.md`: 冒頭の「現状」（無認証のスコア投稿は `APP_ENV=local` でのみ許可）を置き換え、公開前の必須要件の 1・2・4・7・10 のどれを満たしたかを書く。
 - `docs/api-contract.md` の冒頭の「書込み系APIは公開用に使用しない」と、`NOT_READY_FOR_PRODUCTION` の説明。
 
