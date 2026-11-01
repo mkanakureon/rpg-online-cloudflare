@@ -71,7 +71,7 @@ npx wrangler deploy --env production
 | 確かめ | どうするか |
 | --- | --- |
 | マイグレーションが全部流れた | `npx wrangler d1 migrations list DB --env staging --remote` で、まだ流していないものが無い |
-| 古いクライアントが動く | 前の版のクライアント（CLI モック `npm run cli:smoke` など）で、読み取りの口が通る（P6 の前は書き込みが 403。`deploy.md` の冒頭） |
+| 古いクライアントが動く | P6 の前は、staging の `GET /v1/announcements?gameId=demo-rpg` と `GET /v1/config?gameId=demo-rpg` が 200 を返すことを見る（書き込みは 403。`deploy.md` の冒頭）。P6 の後は、前の版の CLI モックで `API_BASE_URL=<staging の URL> npm run cli:smoke` が PASS になる |
 | 版がそろっている | `npm test` の `UnityとUnrealのクライアント層の版は同じで版の説明書の表と一致する` が通る |
 
 ## 困ったとき
