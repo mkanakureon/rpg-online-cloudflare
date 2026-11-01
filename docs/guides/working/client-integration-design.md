@@ -416,6 +416,7 @@ Phase 3 の完了条件の「同一の API シナリオ」は、**いまの CLI 
 | `モジュールの一覧はannouncementsとrankingsとsavesとconfigとinventoryとeventsとplayer-dataとquestsでルートが重ならない` | — | 同上。モジュールを足さない。CORS の `OPTIONS` はルーターの前で答える（モジュールのルートにしない） |
 | `今のCLIモックと同じ形の要求を受け付ける` | B2 | 変わらない。CLI モックの送り方を SDK にしても、要求の形は `scripts/cli-requests.mjs` のまま。互換を見張り続ける |
 | `利用制限の回数と窓は定数のモジュールにある` | B3 | 更新の口の単位（`tokenRefresh: { scope: 'token-refresh', limit: 10, period: 60 }`）を足すので、期待の表に 1 行足す。名前は変えない。`abuse-protection-design.md` の単位の表にも同じコミットで行を足す |
+| `PLAYER_BANNEDの応答はスキーマに合う` | B3 | スキーマの 401 を持つ操作を全部集め、手で書いた送り方の一覧と `toEqual` で比べる。更新の口も 401 を持つので、一覧に `refreshToken`（止めたプレイヤーの更新が 403 `PLAYER_BANNED`）を 1 行足す。名前は変えない（Issue #53 の回で見つかった） |
 | `スキーマの全部の操作が再試行の種類を持つ`（B1 で作る） | B3 | `refreshToken` の `new-resource`（§2.2）を期待の表に足す。名前は変えない |
 | `CLIモックの通しの流れを続けて2回回しても利用制限に掛からない` | B3 | CLI モックの通しにトークンの更新（§4 の 6）を足すので、試験の流れにも更新を 1 回足す。更新の口の利用制限（プレイヤーごと 60 秒に 10 回）に 2 回の通しで掛からないことを見る |
 
