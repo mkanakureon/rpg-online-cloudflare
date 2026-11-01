@@ -336,6 +336,8 @@ describe('O2 スキーマ', () => {
       // クエストの 2 つの口も、止めた印は利用制限の直後（クエストの宣言が無くても 403 PLAYER_BANNED。quest-design.md §11）
       listQuests: () => send('GET', '/v1/quests'),
       claimQuest: () => send('POST', '/v1/quests/first-hunt/claim'),
+      // トークンの更新も、止めた印は利用制限の直後（client-integration-design.md §2.7。B3 で足した）
+      refreshToken: () => send('POST', '/v1/accounts/token'),
     };
     // スキーマのトークンの要る操作（401 を持つ操作）を全部送る
     const tokenOps = Object.values(spec.paths).flatMap((item) => methods.filter((m) => m in item).map((m) => item[m]))
