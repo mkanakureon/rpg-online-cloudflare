@@ -56,11 +56,11 @@
 
 ## Phase 4：配布／OSS 公開
 
-- [ ] 利用者が自分のCloudflareにデプロイできる手順を確立
-- [ ] 管理画面・設定画面・サンプルゲームを同梱
-- [ ] ライセンス（MIT を推す）・リポジトリの名前・サポートの範囲を決める
+- [ ] 利用者が自分のCloudflareにデプロイできる手順を確立（設計は `docs/guides/working/distribution-design.md`。手順書は `docs/guides/manuals/deploy.md`〔Issue #61〕。残りは staging で手順を流す人の確かめと、守りを外す束 P6〔ユーザーが決める〕）
+- [ ] 管理画面・設定画面・サンプルゲームを同梱（`distribution-design.md` の束 P4・P5。Phase 3 の人の確かめ H1 の後）
+- [ ] ライセンス（MIT を推す）・リポジトリの名前・サポートの範囲を決める（ライセンスは MIT・サポートの範囲は `docs/adr/0003-distribution-license-support.md` と `README.md` で決めた〔Issue #60〕。残りはリポジトリの名前と、`LICENSE` の著作者の名前の確かめ〔ユーザー〕）
 - [ ] Fab 販売の規約を確認（RPG 制作ツールのアドオンとして出す場合）
-- [ ] 利用上限・コストモデル・バージョン移行を説明
+- [x] 利用上限・コストモデル・バージョン移行を説明（`docs/guides/manuals/` の `limits-and-costs.md`・`versioning.md`、バックアップと費用アラートは `backup-restore.md`・`cost-alerts.md`。Issue #62。2026-11-01 に試験 421 本の PASS で確認。ダッシュボードでの予算のアラートと staging の復元演習はユーザー）
 
 ## 後で（未計画・P2 以降）
 

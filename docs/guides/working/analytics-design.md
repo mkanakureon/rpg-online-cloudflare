@@ -169,7 +169,7 @@ CREATE INDEX IF NOT EXISTS quest_claims_game_claimed ON quest_claims (game_id, c
 
 - `days` は `from`〜`to` の全部の日を昇順に並べ、数の無い日は 0（`fillDays`）。`activePlayers` がその日の DAU、`newPlayers` はその日に発行した人の数。
 - `cohorts` は同じ日の範囲で、その日に発行した人（`is_new = 1`）のうち N 日目（`RETENTION_OFFSETS`）に遊んだ人の数。**継続率**は `retained.dN / newPlayers` で、割り算はクライアント（管理コマンド）がする（0 で割らないため・数のまま渡すと合計し直せるため）。N 日目がサーバーの今日より後なら `null`（まだ決まらない）。`newPlayers` が 0 の日は行を出さない。
-- **トークンの期限による偏り**: ゲストのトークンは 30 日で切れ、更新の口が無い（`src/core/token.ts` の `TOKEN_TTL_SECONDS`・`account-design.md` §8 の決めること 3。切れたらゲストを発行し直し、前のプレイヤーを引き継がない）。そのため 30 日目は発行の時刻より前に遊んだときだけ数えられ、31 日目からは同じ人が新しい `playerId` で戻る。**D30 は低く、`newPlayers` は高く出る**（D1・D7 は効かない）。応答の形は変えず、管理コマンドの出力と `docs/api-contract.md` にこの偏りを書く。トークンの更新か、アカウントの引き継ぎが入るまでの限界（§16）。
+- **トークンの期限による偏り**: ゲストのトークンは 30 日で切れる（`src/core/token.ts` の `TOKEN_TTL_SECONDS`・`account-design.md` §8 の決めること 3。切れたらゲストを発行し直し、前のプレイヤーを引き継がない）。期限の前に更新の口（`POST /v1/accounts/token`。B3）で取り替えたクライアントは同じ `playerId` のまま続くが、更新しないまま 30 日を越えた人は新しい `playerId` で戻る。**D30 は低く、`newPlayers` は高く出る**（D1・D7 は効かない）。応答の形は変えず、管理コマンドの出力と `docs/api-contract.md` にこの偏りを書く。端末をまたぐ引き継ぎが入るまでの限界（§16）。
 - 文（バインドはどちらも 3 つ: `gameId`・`from`・`to`）:
 
 ```sql
@@ -268,11 +268,11 @@ DELETE FROM <表> WHERE rowid IN (SELECT rowid FROM <表> WHERE <切り目の列
 
 | 項目 | このリポジトリのコード | 手順書（この Issue では書かない） |
 | --- | --- | --- |
-| バックアップ | 作らない。D1 の Time Travel がいつも有効で、30 日（Paid）／7 日（Free）の内は分単位で戻せる（§1 で確かめた） | Phase 4 の配布の手順（使う人に渡す説明書。置き場は `docs/guides/manuals/`、名前の案は `backup-restore.md`）に、`wrangler d1 time-travel info` で印を控える・`wrangler d1 export --remote` で 30 日より長く残す写しを取る（R2 への書き出しの自動化は §16）手順を書く |
+| バックアップ | 作らない。D1 の Time Travel がいつも有効で、30 日（Paid）／7 日（Free）の内は分単位で戻せる（§1 で確かめた） | 配布の説明書 `docs/guides/manuals/backup-restore.md`（Issue #62）に、`wrangler d1 time-travel info` で印を控える・`wrangler d1 export --remote` で 30 日より長く残す写しを取る（R2 への書き出しの自動化は §16）手順を書く |
 | 復元 | 作らない | 同じ説明書に、`wrangler d1 time-travel restore` が上書きする壊す操作であること・戻した時の印で取り消せること・復元演習（`operations-security.md` の 8）のやり方を書く。ローカルの D1 での演習のやり方は**要確認** |
-| 費用アラート | サーバーで額を数えない。今ある数の口（§5 の DAU）と D1 の料金の数え方（読んだ行・書いた行・保存の量）を見積もりの手がかりにする | Phase 4 の配布の手順（同じ置き場、名前の案は `cost-alerts.md`）に、予算のアラート（Billing → Billable Usage。知らせるだけで止めない・従量のアカウントだけ）と使用量の通知（Notifications。細部は**要確認**）の作り方と、通知の宛先をファイルに書かないことを書く |
+| 費用アラート | サーバーで額を数えない。今ある数の口（§5 の DAU）と D1 の料金の数え方（読んだ行・書いた行・保存の量）を見積もりの手がかりにする | 配布の説明書 `docs/guides/manuals/cost-alerts.md`（Issue #62）に、予算のアラート（Billing → Billable Usage。知らせるだけで止めない・従量のアカウントだけ）と使用量の通知（Notifications。細部は**要確認**）の作り方と、通知の宛先をファイルに書かないことを書く |
 
-本番の Cloudflare の操作（`wrangler d1 time-travel restore`・`--remote`・ダッシュボードの設定）は、このリポジトリのコードとスクリプトに入れない（`CLAUDE.md` の守るもの: デプロイしない・本番の設定の値をファイルに書かない）。手順書は Phase 4 の「利用者が自分の Cloudflare にデプロイできる手順を確立」「利用上限・コストモデル・バージョン移行を説明」（`roadmap.md`）と同じ Issue で書く。
+本番の Cloudflare の操作（`wrangler d1 time-travel restore`・`--remote`・ダッシュボードの設定）は、このリポジトリのコードとスクリプトに入れない（`CLAUDE.md` の守るもの: デプロイしない・本番の設定の値をファイルに書かない）。手順書は `docs/guides/manuals/` の下にある（`deploy.md`・`backup-restore.md`・`cost-alerts.md`・`limits-and-costs.md`。`distribution-design.md` の束 P2・P3）。
 
 ## 9. 認証・`APP_ENV`・利用制限・`game_modules`・文書のどこが変わるか
 
@@ -556,7 +556,7 @@ done();
 | Phase（`roadmap.md`） | この設計が渡すもの |
 | --- | --- |
 | Phase 3（クライアント統合） | クライアントは何も足さない（「遊んだ」の記録はサーバーがトークンの要る要求から取る）。Unreal・Unity・ブラウザの SDK が起動の時に 1 回トークンの要る口（プレイヤーデータの読み取りなど）を呼べば、その日に遊んだに数えられる。SDK の手引きにその 1 行を書く |
-| Phase 4（配布／OSS 公開） | §8 のバックアップと復元・費用アラートの説明書（`docs/guides/manuals/` の下）。「利用上限・コストモデル」の説明に、§6 の保持の日数・消さない 3 つの表の量の見積もり・`player_activity_days` の行の数（DAU × 400 日）を使う。管理画面（ブラウザ）で §5 の 2 つの口を表やグラフにする。`APP_ENV` の守りを外すとき、`scheduled` の門（§13 の決めること 16）も一緒に決める |
+| Phase 4（配布／OSS 公開） | §8 のバックアップと復元・費用アラートの説明書と、§6 の保持の日数・消さない 3 つの表の量の見積もり・`player_activity_days` の行の数（DAU × 400 日）を使った利用上限とコストの説明は、`docs/guides/manuals/` の下に書いた（束 P3。Issue #62）。管理画面（ブラウザ）で §5 の 2 つの口を表やグラフにする。`APP_ENV` の守りを外すとき、`scheduled` の門（§13 の決めること 16）も一緒に決める |
 
 ## 16. 範囲の外と、後から足せる形
 

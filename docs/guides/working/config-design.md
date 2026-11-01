@@ -339,7 +339,6 @@ C2（マスターデータ）:
 | SHA-256 の手伝いを `src/core/` に一つにまとめる | `src/modules/saves/checksum.ts` と `src/modules/config/etag.ts` の SHA-256 を core の 1 関数にする片付け。挙動は変わらない |
 | 64 KiB を超えるマスターデータ | R2 に置き、`config_master_data` に置き場の列を新しいマイグレーションで足す。API の形（`data`）は変えない |
 | `demo-rpg` のマスターデータの手本（`npm run cli:smoke` でマスターデータの流れも通す） | C1 の試験（`test/config.test.ts`）の `demo-rpg` の応答の比べ方を、見る欄だけの `toMatchObject` に直す Issue の後で、新しい番号のマイグレーションに手本の `INSERT` を書く。API は変えない |
-| ブラウザから読むときの CORS（`ETag` を読ませる `Access-Control-Expose-Headers`） | Phase 3 のブラウザのクライアントで、全部の API の CORS と一緒に決める |
 
 ## 10. 決めること
 

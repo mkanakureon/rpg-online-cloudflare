@@ -157,7 +157,7 @@ const commands = {
     const body = await send(k, analyticsPlayersOp(gameId, { from: f.from ?? range.from, to: f.to ?? range.to }), { actor });
     console.log('日の区切りは UTC の 0 時（日本の 9 時）。継続率 = retained.dN / newPlayers（null はまだ N 日目が来ていない）:');
     for (const row of retentionRates(body)) console.log(`  ${row.date} newPlayers=${row.newPlayers}`, JSON.stringify(row.rates));
-    console.log('注意: ゲストのトークンは 30 日で切れ更新の口が無いため、D30 は低く・newPlayers は高く出る（docs/api-contract.md の「管理の API」）。');
+    console.log('注意: ゲストのトークンは 30 日で切れ、更新しないまま越えた人は新しいプレイヤーで戻るため、D30 は低く・newPlayers は高く出る（docs/api-contract.md の「管理の API」）。');
   },
   'analytics-grants': async (k, _a, f, actor, gameId) => {
     const range = defaultAnalyticsRange();

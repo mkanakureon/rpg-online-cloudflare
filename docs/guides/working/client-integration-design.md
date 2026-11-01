@@ -593,9 +593,9 @@ done();
 
 | 範囲の外 | いつ・どこで |
 | --- | --- |
-| npm の包みの公開・SDK の版の付け方 | Phase 4（配布／OSS 公開）。`CLAUDE.md` の「公開をしない」はそれまで有効 |
-| 本番の CORS のオリジン・デプロイの手順 | Phase 4。この設計では `APP_ENV=local` の外に何も足さない |
-| サンプルゲーム・管理画面 | Phase 4 の「管理画面・設定画面・サンプルゲームを同梱」 |
+| npm の包みの公開・SDK の版の付け方 | `distribution-design.md` の束 P7（ユーザーが公開を決めた後）。版の決まりは `docs/guides/manuals/versioning.md`。`CLAUDE.md` の「公開をしない」はそれまで有効 |
+| 本番の CORS のオリジン・デプロイの手順 | デプロイの手順は `docs/guides/manuals/deploy.md`。本番の CORS は `distribution-design.md` §4.5（束 P6 の `CORS_ORIGINS`）。この設計では `APP_ENV=local` の外に何も足さない |
+| サンプルゲーム・管理画面 | `distribution-design.md` の束 P4・P5（H1 の後） |
 | 端末をまたぐ引き継ぎ・ログイン | Phase 4 以降（`account-design.md` §11。引き継ぎの秘密か外部 ID） |
 | Steam などのプラットフォームの認証の実装 | Steam で出すゲームが決まったとき（§8） |
 | オフラインの未送信の待ち行列 | 要る機能（オフラインで貯めた統計値を後で送る など）が出たとき。`Idempotency-Key` のある書き込みなら、待ち行列に鍵ごと残す形で足せる |
