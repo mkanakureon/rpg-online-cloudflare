@@ -48,7 +48,7 @@ npm run typecheck
 | ヘルスチェック | `GET /health` | 要らない |
 | アカウント（ゲスト） | `POST /v1/accounts/guest`・`POST /v1/accounts/token` | 発行は要らない |
 | お知らせ | `GET /v1/announcements` | 要らない |
-| ランキング | `GET`・`POST /v1/rankings/boss-score` | 投稿だけ要る |
+| ランキング | `GET`・`POST /v1/rankings/{boardId}`（例: `boss-score`） | 投稿だけ要る |
 | セーブ | `GET`・`PUT`・`DELETE /v1/saves/{slotId}`・`GET /v1/saves` | 要る |
 | 所持品 | `GET /v1/inventory`・`GET /v1/inventory/history` | 要る |
 | イベント | `GET /v1/events`・`POST /v1/events/{eventId}/claim` | 要る |
