@@ -1,0 +1,12 @@
+{
+  "name": "com.rpg-online.client",
+  "version": "0.1.0",
+  "displayName": "RPG Online Client",
+  "description": "Unity client layer for the rpg-online-cloudflare backend (local PoC). Timeouts, retries, Retry-After and error categories follow x-client-policy in openapi/rpg-online.v1.json. Source only; not published.",
+  "unity": "2021.3",
+  "dependencies": {
+    "com.unity.modules.unitywebrequest": "1.0.0",
+    "com.unity.modules.jsonserialize": "1.0.0"
+  },
+  "keywords": ["rpg-online", "client"]
+}
