@@ -68,11 +68,11 @@
 
 | 送った所 | 項目 | この設計書のどこで受けるか |
 | --- | --- | --- |
-| `admin-design.md` §10 | 管理の鍵の取り替えの手順・監査のログの保持と掃除・`X-Admin-Actor` の自己申告か Cloudflare Access か | §3.2・§5.3・§12 の 3 |
+| `admin-design.md` §10 | 管理の鍵の取り替えの手順・監査のログの保持と掃除・`X-Admin-Actor` の自己申告か Cloudflare Access か | §3.2・§4.2・§5.3・§12 の 3 |
 | `admin-design.md` §14 | 管理画面（ブラウザ）・管理の鍵をブラウザのセッションに置かない | §5・§12 の 4 |
 | `analytics-design.md` §8 | `docs/guides/manuals/` の `backup-restore.md`・`cost-alerts.md` | §8・P3 |
 | `analytics-design.md` §13・§15 | `scheduled` の門（守りを外すとき一緒に決める）・利用上限とコストの見積もりの材料・管理画面での集計の表示 | §3.4・§8.2・§5 |
-| `client-integration-design.md` §11・§13 | npm の包みの公開と SDK の版・本番の CORS のオリジン・サンプルゲーム・端末をまたぐ引き継ぎ | §9 の P7・§4.5・§6・§14 |
+| `client-integration-design.md` §11・§13 | npm の包みの公開と SDK の版・本番の CORS のオリジン・サンプルゲーム・端末をまたぐ引き継ぎ | §12 の 12・§13 の P7・§4.5・§6・§14 |
 | `client-integration-design.md` §6 | Unity・Unreal の包みの形（要確認） | §7（Fab）・§8.3（版） |
 | `account-design.md` §10 | `APP_ENV` の守りを外す条件 1〜5 | §3 |
 
@@ -128,7 +128,7 @@
 
 ### 3.4 守りを外す手順の案（P6 の中身）
 
-推しの守りの新しい決まり（§12 の 1）: **`APP_ENV` が `local`・`staging`・`production` のどれかなら通し、それ以外（既定の `disabled` を含む）は今のまま 403 `NOT_READY_FOR_PRODUCTION`。** `staging`・`production` は `AUTH_TOKEN_SECRET`・`ADMIN_API_KEY` が無ければ今のまま 500（ローカルの鍵に戻らない）。
+推しの守りの新しい決まり（§12 の 1）: **`APP_ENV` が `local`・`staging`・`production` のどれかなら通し、それ以外（既定の `disabled` を含む）は今のまま 403 `NOT_READY_FOR_PRODUCTION`。** `staging`・`production` は `AUTH_TOKEN_SECRET`・`ADMIN_API_KEY` が無ければ `tokenSecret`・`adminSecret` の今の決まりのとおり 500（ローカルの鍵に戻らない。いまは `local` でない環境では守りの 403 が先に返るので、外から 500 は見えない）。
 
 - `wrangler.jsonc` の既定 `APP_ENV=disabled` は残す。デプロイの説明書の環境の設定（§4.1）でだけ `staging`・`production` を渡す。既定のまま `wrangler deploy` した Worker は今と同じく書き込みを断る（うっかりの公開を止める網が残る）。
 - `scheduled` の掃除は `local`・`staging`・`production` で動かし、`disabled` では今のまま消さない。
@@ -140,7 +140,7 @@
 | いまの行 | 置き換えの案 |
 | --- | --- |
 | **デプロイ・公開をしない**（…）。本番の設定の値（ID・鍵）をファイルに書かない。**無認証の API をデプロイしない**（`wrangler.jsonc` の D1 ID はダミー） | **このリポジトリのスクリプトと無人の回はデプロイ・公開をしない**（デプロイは利用者が説明書の手順で自分の Cloudflare にする）。本番の設定の値（ID・鍵・通知の宛先）をファイルに書かない（`wrangler.jsonc` の D1 ID はダミーのまま） |
-| **書き込みの API は `APP_ENV === 'local'` のときだけ通し、ほかは `403 NOT_READY_FOR_PRODUCTION`。** `wrangler.jsonc` の既定 `APP_ENV=disabled` を変えない | **書き込みの API は `APP_ENV` が `local`・`staging`・`production` のときだけ通し、ほかは `403 NOT_READY_FOR_PRODUCTION`。** `staging`・`production` はトークンと管理の鍵を確かめたときだけ通す。`wrangler.jsonc` の既定 `APP_ENV=disabled` を変えない |
+| **書き込みの API は `APP_ENV === 'local'` のときだけ通し、ほかは `403 NOT_READY_FOR_PRODUCTION`。** `wrangler.jsonc` の既定 `APP_ENV=disabled` を変えない | **書き込みの API は `APP_ENV` が `local`・`staging`・`production` のときだけ通し、ほかは `403 NOT_READY_FOR_PRODUCTION`。** `staging`・`production` では、ゲストの発行（利用制限つき）のほかの書き込みはトークン、管理の口は管理の鍵を確かめたときだけ通す。`wrangler.jsonc` の既定 `APP_ENV=disabled` を変えない |
 
 同じ P6 で置き換える文書: `operations-security.md` の冒頭の「現状」と必須要件の満たした印・`docs/api-contract.md` の冒頭の「書込み系APIは公開用に使用しない」と `NOT_READY_FOR_PRODUCTION` の説明と「CORS」の節・`README.md` の「いまは書き込みが 403」の注意・`openapi/rpg-online.v1.json` の `info.description` の「ローカル専用の PoC」・`account-design.md` §10 と `admin-design.md` §10 の「この設計では外さない」を、この節を指す文に。
 
@@ -430,7 +430,7 @@ requireTests([
   'デプロイの説明書が使うnpmのコマンドはpackage.jsonのscriptsにある',
   'wranglerの設定のcronは掃除の定数と同じでAPP_ENVの既定は変わらない',
 ]);
-gitClean(['src/', 'migrations/', 'openapi/', 'clients/', 'wrangler.jsonc', 'package.json'], { base });
+gitClean(['src/', 'migrations/', 'openapi/', 'clients/', 'wrangler.jsonc', 'package.json', 'package-lock.json'], { base });
 done();
 ```
 
@@ -447,7 +447,7 @@ requireTests([
   '費用アラートの説明書は通知の宛先をファイルに書かないと書く',
   'UnityとUnrealのクライアント層の版は同じで版の説明書の表と一致する',
 ]);
-gitClean(['src/', 'migrations/', 'openapi/', 'clients/', 'wrangler.jsonc', 'package.json'], { base });
+gitClean(['src/', 'migrations/', 'openapi/', 'clients/', 'wrangler.jsonc', 'package.json', 'package-lock.json'], { base });
 done();
 ```
 
@@ -467,7 +467,7 @@ requireTests([
   'ローカルでない環境と決めていないオリジンにはCORSの見出しを返さない',
   'スキーマのファイルはOpenAPI 3.1で20個の操作を持つ',
 ]);
-gitClean(['src/core/guards.ts', 'migrations/', 'openapi/', 'wrangler.jsonc', 'package.json'], { base });
+gitClean(['src/core/guards.ts', 'migrations/', 'openapi/', 'wrangler.jsonc', 'package.json', 'package-lock.json'], { base });
 done();
 ```
 
@@ -482,7 +482,7 @@ requireTests([
   'サンプルゲームはシナリオの関数をページに写さない',
   'ブラウザのサンプルはSDKを読み込みシナリオの関数を呼ぶ',
 ]);
-gitClean(['src/', 'migrations/', 'openapi/', 'wrangler.jsonc', 'package.json'], { base });
+gitClean(['src/', 'migrations/', 'openapi/', 'wrangler.jsonc', 'package.json', 'package-lock.json'], { base });
 done();
 ```
 
