@@ -57,7 +57,7 @@ npm run typecheck
 | 設定配信 | `GET /v1/config`・`GET /v1/config/master/{key}` | 要らない |
 | 管理（運営の人だけ） | `/v1/admin/...`（`node scripts/admin-cli.mjs` から呼ぶ） | 管理の鍵 |
 
-`npm run cli:smoke` が CLI モック（ブラウザの SDK `clients/browser/` で送る）で、ヘルスチェック・設定配信・お知らせ・ゲストの発行・ランキング・セーブ・クエストを順に呼び、応答を確かめます。サーバーの本番の仕様を保証するものではありません。
+`npm run cli:smoke` が CLI モック（ブラウザの SDK `clients/browser/` で送る）で、ヘルスチェック・設定配信・マスターデータ・お知らせ・ゲストの発行・トークンの取り替え・ランキング・セーブ・イベントの受け取り・プレイヤーデータ・クエストを順に呼び（手順の名前は `clients/browser/rpg-online-client.mjs` の `SCENARIO_STEPS`）、応答を確かめます。サーバーの本番の仕様を保証するものではありません。
 
 ## いまの制限
 
