@@ -169,7 +169,7 @@ describe('B2 ブラウザの SDK の決まり（L1）', () => {
   });
 
   it('SDKはRetry-Afterが無いか上限を超えたら待たずにRATE_LIMITEDを返す', async () => {
-    for (const headers of [{}, { 'Retry-After': '61' }, { 'Retry-After': 'abc' }] as Array<Record<string, string>>) {
+    for (const headers of [{}, { 'Retry-After': '61' }, { 'Retry-After': 'abc' }, { 'Retry-After': '0' }] as Array<Record<string, string>>) {
       const f = fake(() => json(429, errorBody('RATE_LIMITED'), headers));
       const res = await createClient({ baseUrl, fetch: f.fetch, sleep: f.sleep }).getRanking('b');
       expect(f.calls, JSON.stringify(headers)).toHaveLength(1);

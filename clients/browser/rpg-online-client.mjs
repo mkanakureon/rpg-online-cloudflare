@@ -97,11 +97,11 @@ export function backoffCapSeconds(retryNumber) {
   return Math.min(maxSeconds, baseSeconds * factor ** (retryNumber - 1));
 }
 
-/** Retry-After の見出しの値を秒にする。無い・数でない・上限を超えるときは null（待たずに返す。設計書 §2.3）。 */
+/** Retry-After の見出しの値を秒（1〜60）にする。無い・数でない・0・上限を超えるときは null（待たずに返す。設計書 §2.3）。 */
 export function parseRetryAfter(value) {
   if (typeof value !== 'string' || !/^\d+$/.test(value.trim())) return null;
   const seconds = Number(value.trim());
-  return seconds <= CLIENT_POLICY.retryAfter.maxWaitSeconds ? seconds : null;
+  return seconds >= 1 && seconds <= CLIENT_POLICY.retryAfter.maxWaitSeconds ? seconds : null;
 }
 
 /** text の UTF-8 のバイト列の SHA-256 を小文字の 16 進で返す（セーブの checksum）。 */
