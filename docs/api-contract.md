@@ -697,7 +697,7 @@
 {"error":{"code":"INVALID_ARGUMENT","message":"Invalid parameters"}}
 ```
 
-現PoCの代表コード: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）、`UNAUTHENTICATED`（401）、`TOKEN_EXPIRED`（401）、`PERMISSION_DENIED`（403）、`SAVE_CONFLICT`（409）、`PAYLOAD_TOO_LARGE`（413）、`SLOT_LIMIT_EXCEEDED`（409）、`RATE_LIMITED`（429）、`EVENT_NOT_ACTIVE`（409）、`INVENTORY_LIMIT_EXCEEDED`（409）、`PLAYER_BANNED`（403）、`PLAYER_DATA_LIMIT_EXCEEDED`（409）、`IDEMPOTENCY_KEY_REUSED`（422）、`QUEST_NOT_COMPLETED`（409）、`QUEST_NOT_ACTIVE`（409）。
+ゲームのクライアントの口が返すコードは次の 19 個で全部（列挙の正はスキーマの`ErrorCode`。コードごとの画面の文の種類と自動の再試行の可否は下の「クライアントの決まり」）: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）、`UNAUTHENTICATED`（401）、`TOKEN_EXPIRED`（401）、`PERMISSION_DENIED`（403）、`SAVE_CONFLICT`（409）、`PAYLOAD_TOO_LARGE`（413）、`SLOT_LIMIT_EXCEEDED`（409）、`RATE_LIMITED`（429）、`EVENT_NOT_ACTIVE`（409）、`INVENTORY_LIMIT_EXCEEDED`（409）、`PLAYER_BANNED`（403）、`PLAYER_DATA_LIMIT_EXCEEDED`（409）、`IDEMPOTENCY_KEY_REUSED`（422）、`QUEST_NOT_COMPLETED`（409）、`QUEST_NOT_ACTIVE`（409）。
 
 管理の口だけのコード（ゲームのクライアントの口は返さない。形の正は`openapi/rpg-online-admin.v1.json`）: `INSUFFICIENT_BALANCE`（409）。
 
@@ -738,6 +738,17 @@
 
 - 要求の知らない欄は無視する（保存しない）。
 - `/v1/`の中では、欄は**足すだけ**。消す・意味を変えるときは`/v2/`を足す。
+- 新しく続きのある一覧を足すときは、カーソルの形（`limit`・`before`・`nextBefore`。いまの`GET /v1/inventory/history`と同じ）だけを使い、`offset`は使わない（行が増えるとずれるため）。ほかの一覧は件数の上限で切り、続きの欄を持たない。
+
+## クライアントの決まり
+
+3 つのクライアント（Unreal・Unity・ブラウザ）と CLI モックが同じに動くための、タイムアウト・再試行・`Retry-After`の待ち・エラーコードの扱いの決まり。**値の正はスキーマ`openapi/rpg-online.v1.json`**で、ここには値を写さない。設計（理由と案）の正は`docs/guides/working/client-integration-design.md` §2・§3。
+
+- 最上位の`x-client-policy`: 1 回の要求のタイムアウト（`timeoutSeconds`）・試す回数（`maxAttempts`。初回を含む）・再試行の前の待ち（`backoff`。指数・上限・揺らぎ）・429 の`Retry-After`を待つ上限と回数（`retryAfter`）・再試行する状態（`retryStatuses`。ほかに回線断・タイムアウトも再試行する）・エラーコードの表（`errorCatalog`。コードごとの画面の文の種類`category`と自動の再試行の可否`retry`）。
+- 操作ごとの`x-retry`: 自動で送り直してよいかの種類。`safe`（読むだけ）・`natural-key`（一意の鍵か最高値で同じ結果）・`idempotency-key`（同じ`Idempotency-Key`と同じ本文で送り直す）・`new-resource`（送り直すと別のものができるが害が無い）は再試行してよい。`revision`（`baseRevision`で止まる）は自動で送り直さず、結果が分からないときは`GET`で読み直して確かめる。
+- 再試行は「状態が`retryStatuses`か回線断・タイムアウト」かつ「操作の`x-retry`が`revision`でない」ときだけ。400・401・403・404・409・413・422 は送り直さない。
+- `errorCatalog`に無いコード・JSON でない 4xx は種類`unknown`、コードの無い回線断・タイムアウト・5xx は`network`として扱う（新しいサーバーがコードを足しても古いクライアントが壊れない）。サーバーの`message`は画面に出さない。
+- コードを足すときは、`ErrorCode`の列挙と`errorCatalog`を同じコミットで直す（`test/client-policy.test.ts`が揃いを見張る）。
 
 ## 将来予定（未実装）
 

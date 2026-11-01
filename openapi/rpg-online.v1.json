@@ -11,10 +11,111 @@
       "description": "npm run dev（APP_ENV=local）"
     }
   ],
+  "x-client-policy": {
+    "description": "3 つのクライアント（Unreal・Unity・ブラウザ）と CLI モックで共通の決まり。値の正はここ（docs/api-contract.md の「クライアントの決まり」は指すだけ）。timeoutSeconds は 1 回の要求のタイムアウト、maxAttempts は初回を含む試す回数、backoff は再試行の前の待ち（baseSeconds × factor の n 乗・maxSeconds で頭打ち・jitter full は 0〜その秒の一様乱数）、retryAfter は 429 の Retry-After を待つ上限と送り直す回数（maxAttempts の中に数える）、retryStatuses は再試行する状態（回線断・タイムアウトも再試行する）。再試行してよいのは各操作の x-retry が safe・natural-key・idempotency-key・new-resource のときだけで、revision は自動で送り直さない。errorCatalog はエラーコードごとの画面の文の種類（category）と自動の再試行の可否（retry）。表に無いコードと JSON でない 4xx は unknown、コードの無い回線断・タイムアウト・5xx は network。設計は docs/guides/working/client-integration-design.md §2・§3。",
+    "timeoutSeconds": 10,
+    "maxAttempts": 3,
+    "backoff": {
+      "baseSeconds": 1,
+      "factor": 2,
+      "maxSeconds": 8,
+      "jitter": "full"
+    },
+    "retryAfter": {
+      "maxWaitSeconds": 60,
+      "maxRetries": 1
+    },
+    "retryStatuses": [
+      429,
+      500,
+      502,
+      503,
+      504
+    ],
+    "errorCatalog": {
+      "INVALID_ARGUMENT": {
+        "category": "client-bug",
+        "retry": false
+      },
+      "INVALID_JSON": {
+        "category": "client-bug",
+        "retry": false
+      },
+      "PERMISSION_DENIED": {
+        "category": "client-bug",
+        "retry": false
+      },
+      "IDEMPOTENCY_KEY_REUSED": {
+        "category": "client-bug",
+        "retry": false
+      },
+      "PAYLOAD_TOO_LARGE": {
+        "category": "client-bug",
+        "retry": false
+      },
+      "NOT_FOUND": {
+        "category": "not-found",
+        "retry": false
+      },
+      "NOT_READY_FOR_PRODUCTION": {
+        "category": "unavailable",
+        "retry": false
+      },
+      "INTERNAL_ERROR": {
+        "category": "network",
+        "retry": true
+      },
+      "RATE_LIMITED": {
+        "category": "busy",
+        "retry": true
+      },
+      "UNAUTHENTICATED": {
+        "category": "session",
+        "retry": false
+      },
+      "TOKEN_EXPIRED": {
+        "category": "session",
+        "retry": false
+      },
+      "PLAYER_BANNED": {
+        "category": "banned",
+        "retry": false
+      },
+      "SAVE_CONFLICT": {
+        "category": "conflict",
+        "retry": false
+      },
+      "SLOT_LIMIT_EXCEEDED": {
+        "category": "limit",
+        "retry": false
+      },
+      "INVENTORY_LIMIT_EXCEEDED": {
+        "category": "limit",
+        "retry": false
+      },
+      "PLAYER_DATA_LIMIT_EXCEEDED": {
+        "category": "limit",
+        "retry": false
+      },
+      "EVENT_NOT_ACTIVE": {
+        "category": "expired",
+        "retry": false
+      },
+      "QUEST_NOT_ACTIVE": {
+        "category": "expired",
+        "retry": false
+      },
+      "QUEST_NOT_COMPLETED": {
+        "category": "not-ready",
+        "retry": false
+      }
+    }
+  },
   "paths": {
     "/health": {
       "get": {
         "operationId": "getHealth",
+        "x-retry": "safe",
         "summary": "生存確認",
         "responses": {
           "200": {
@@ -66,6 +167,7 @@
     "/v1/accounts/guest": {
       "post": {
         "operationId": "issueGuest",
+        "x-retry": "new-resource",
         "summary": "ゲストのアカウントを発行し、そのゲームのプレイヤー ID とトークンを返す。APP_ENV=local のときだけ受け付ける",
         "requestBody": {
           "required": true,
@@ -228,6 +330,7 @@
     "/v1/announcements": {
       "get": {
         "operationId": "listAnnouncements",
+        "x-retry": "safe",
         "summary": "ゲームのお知らせの一覧（最大 50 件・id の昇順）",
         "parameters": [
           {
@@ -345,6 +448,7 @@
       ],
       "get": {
         "operationId": "getRanking",
+        "x-retry": "safe",
         "summary": "ランキングの上位（score DESC, updated_at ASC, player_id ASC の順）",
         "parameters": [
           {
@@ -462,6 +566,7 @@
       },
       "post": {
         "operationId": "submitScore",
+        "x-retry": "natural-key",
         "summary": "スコアを送る（同じプレイヤーは最高スコアを残す）。APP_ENV=local のときだけ・トークンの本人の分だけ受け付ける",
         "security": [
           {
@@ -655,6 +760,7 @@
     "/v1/saves": {
       "get": {
         "operationId": "listSaves",
+        "x-retry": "safe",
         "summary": "トークンのプレイヤーのセーブのメタデータの一覧（data を入れない・slotId の昇順）。APP_ENV=local のときだけ受け付ける",
         "security": [
           {
@@ -859,6 +965,7 @@
       ],
       "get": {
         "operationId": "getSave",
+        "x-retry": "safe",
         "summary": "トークンのプレイヤーのスロットのセーブを読む。APP_ENV=local のときだけ受け付ける",
         "security": [
           {
@@ -1050,6 +1157,7 @@
       },
       "put": {
         "operationId": "putSave",
+        "x-retry": "revision",
         "summary": "トークンのプレイヤーのスロットにセーブを書く（baseRevision が今のリビジョンと同じときだけ）。APP_ENV=local のときだけ受け付ける",
         "security": [
           {
@@ -1299,6 +1407,7 @@
       },
       "delete": {
         "operationId": "deleteSave",
+        "x-retry": "revision",
         "summary": "トークンのプレイヤーのスロットのセーブを消す（baseRevision が今のリビジョンと同じときだけ。行は墓石にしてリビジョンを進める）。APP_ENV=local のときだけ受け付ける",
         "security": [
           {
@@ -1526,6 +1635,7 @@
     "/v1/config": {
       "get": {
         "operationId": "getConfig",
+        "x-retry": "safe",
         "summary": "ゲームの設定（機能フラグ・クライアントの版・マスターデータのキーと大きさの一覧）。トークンは要らない",
         "parameters": [
           {
@@ -1680,6 +1790,7 @@
     "/v1/config/master/{key}": {
       "get": {
         "operationId": "getMasterData",
+        "x-retry": "safe",
         "summary": "ゲームのマスターデータを 1 キー読む（中身はサーバーが解釈しない文字列）。トークンは要らない",
         "parameters": [
           {
@@ -1834,6 +1945,7 @@
     "/v1/inventory": {
       "get": {
         "operationId": "getInventory",
+        "x-retry": "safe",
         "summary": "トークンのプレイヤーの通貨と所持品の残高（品目の ID の昇順）。APP_ENV=local のときだけ受け付ける",
         "security": [
           {
@@ -2027,6 +2139,7 @@
     "/v1/inventory/history": {
       "get": {
         "operationId": "listInventoryHistory",
+        "x-retry": "safe",
         "summary": "トークンのプレイヤーの受領の履歴（新しい順・limit と before で区切る）。APP_ENV=local のときだけ受け付ける",
         "security": [
           {
@@ -2242,6 +2355,7 @@
     "/v1/events": {
       "get": {
         "operationId": "listEvents",
+        "x-retry": "safe",
         "summary": "いま開いているイベントの一覧と、トークンのプレイヤーがいまの区切りで受け取り済みか。APP_ENV=local のときだけ受け付ける",
         "security": [
           {
@@ -2435,6 +2549,7 @@
     "/v1/events/{eventId}/claim": {
       "post": {
         "operationId": "claimEventReward",
+        "x-retry": "natural-key",
         "summary": "イベントの報酬をいまの区切りの分だけ受け取る（本文は要らない・読まない）。同じ区切りの 2 回目は 200 で 1 回目と同じ本文を返す。APP_ENV=local のときだけ受け付ける",
         "security": [
           {
@@ -2661,6 +2776,7 @@
     "/v1/player-data": {
       "get": {
         "operationId": "getPlayerData",
+        "x-retry": "safe",
         "summary": "トークンのプレイヤーのプレイヤーデータ（統計値と進行状態。宣言したキーごとの整数）と解いた実績を読む。APP_ENV=local のときだけ受け付ける",
         "security": [
           {
@@ -2852,6 +2968,7 @@
       },
       "post": {
         "operationId": "writePlayerData",
+        "x-retry": "idempotency-key",
         "summary": "宣言したキーの書き方（add・max・set・flag）でプレイヤーデータを書き、書いた後の値が閾値以上の実績をサーバーが解く。Idempotency-Key が必須で、同じ鍵と同じ中身の 2 回目は 200 で 1 回目と同じ本文を返す。全部書くか、どれも書かない。APP_ENV=local のときだけ受け付ける",
         "security": [
           {
@@ -3112,6 +3229,7 @@
     "/v1/quests": {
       "get": {
         "operationId": "listQuests",
+        "x-retry": "safe",
         "summary": "いま開いているクエストの一覧と、トークンのプレイヤーの進捗（プレイヤーデータの値）・達成・いまの区切りで受け取り済みか。APP_ENV=local のときだけ受け付ける",
         "security": [
           {
@@ -3305,6 +3423,7 @@
     "/v1/quests/{questId}/claim": {
       "post": {
         "operationId": "claimQuest",
+        "x-retry": "natural-key",
         "summary": "達成したクエストの報酬をいまの区切りの分だけ受け取る（本文は要らない・読まない。達成の申告・時刻・Idempotency-Key も読まない）。達成はサーバーがプレイヤーデータの値と閾値で判定する。同じ区切りの 2 回目は 200 で 1 回目と同じ本文を返す。APP_ENV=local のときだけ受け付ける",
         "security": [
           {
