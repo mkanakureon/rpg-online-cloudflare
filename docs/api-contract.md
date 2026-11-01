@@ -773,6 +773,14 @@
 - コードを足すときは、`ErrorCode`の列挙と`errorCatalog`を同じコミットで直す（`test/client-policy.test.ts`が揃いを見張る）。
 - この決まりで送る実装は、ブラウザの SDK`clients/browser/rpg-online-client.mjs`（型は`.d.mts`。値はスキーマから書き写し、揃いは`test/browser-sdk.test.ts`が見張る）。CLI モック（`scripts/cli-mock.mjs`）は SDK で送り、流れと表示は`scripts/cli-flow.mjs`の`runCli`。失敗したら画面の文の種類と理由を出して終了コード 1 で止まる。
 
+## CORS（ブラウザから呼ぶ。ローカルだけ）
+
+ブラウザのサンプル（`clients/browser/sample/index.html`。`clients/browser/`で`python3 -m http.server 5173 --bind 127.0.0.1`を起動して`http://127.0.0.1:5173/sample/`を開く）から Worker を呼ぶための決まり。見出しを作るのは`src/core/cors.ts`の 1 か所。設計の正は`docs/guides/working/client-integration-design.md` §5.5・§5.6。
+
+- **`APP_ENV=local`のときだけ**、要求の`Origin`が決めた 2 つ（`http://127.0.0.1:5173`・`http://localhost:5173`）のどちらかなら CORS の見出しを返す。`local`でない環境・ほかのオリジン・`null`のオリジン（`file://`で開いたページ）・`Origin`の無い要求には何も足さない。どのオリジンでも許す形（ワイルドカード）は使わない。本番のオリジンの決め方は未定（Phase 4）。
+- 事前確認（`OPTIONS`）: 許すときはルーターの前で**204**（本文無し）を返す。見出しは`Access-Control-Allow-Origin`（要求のオリジンそのまま）・`Access-Control-Allow-Methods: GET, POST, PUT, DELETE`・`Access-Control-Allow-Headers: Authorization, Content-Type, Idempotency-Key, If-None-Match`・`Access-Control-Max-Age: 600`・`Vary: Origin`。許さないときは`OPTIONS`のルートが無いので 404 `NOT_FOUND`。
+- ふつうの応答（エラー・304・500 を含む全部）: 許すときは`Access-Control-Allow-Origin`・`Access-Control-Expose-Headers: Retry-After, ETag`（ページから 429 の待ちと設定の`ETag`を読めるように）・`Vary: Origin`を足す。本文と状態コードは変えない。
+
 ## 将来予定（未実装）
 
 | HTTP | パス案 | 用途 |

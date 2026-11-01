@@ -1,0 +1,115 @@
+<!doctype html>
+<!--
+  index.html — ブラウザの SDK（../rpg-online-client.mjs）で §4 の同一の API シナリオを流す、ビルド無しの 1 枚のページ。
+  出し方: clients/browser/ で `python3 -m http.server 5173 --bind 127.0.0.1` を起動し、http://127.0.0.1:5173/sample/ を開く。
+  Worker はローカル（APP_ENV=local・127.0.0.1:8787。npm run dev）で、CORS はそのときだけ 127.0.0.1:5173・localhost:5173 に返る。
+  file:// で開くとオリジンが null になり、CORS で許さない。表には手順ごとの状態コードと画面の文の種類だけを出し、
+  トークンとセーブの本体は出さない。インターネットの部品を読み込まない。
+  正は docs/guides/working/client-integration-design.md §4・§5.5・§5.6。
+  概要記述: Claude Opus 5.5 — 2026-11-01
+-->
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>rpg-online ブラウザ SDK のサンプル</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 60rem; }
+    code { background: #f2f2f2; padding: 0 0.25rem; }
+    table { border-collapse: collapse; margin-top: 1rem; width: 100%; }
+    th, td { border: 1px solid #ccc; padding: 0.3rem 0.5rem; text-align: left; vertical-align: top; }
+    .ok { color: #11632b; }
+    .fail { color: #a11; font-weight: bold; }
+    #summary { margin-top: 1rem; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>rpg-online ブラウザ SDK のサンプル</h1>
+  <p>
+    このページは <strong>http://127.0.0.1:5173/sample/ から開く</strong>（127.0.0.1:5173 から開く）。
+    <code>file://</code> で開くとオリジンが <code>null</code> になり、Worker が CORS を返さないので動かない。
+  </p>
+  <ol>
+    <li>Worker をローカルで起動する: <code>npm run db:migrate:local &amp;&amp; npm run dev</code>（<code>127.0.0.1:8787</code>・<code>APP_ENV=local</code>）</li>
+    <li>このページを出す: <code>clients/browser/</code> で <code>python3 -m http.server 5173 --bind 127.0.0.1</code></li>
+    <li>ブラウザで <code>http://127.0.0.1:5173/sample/</code> を開き、下のボタンを押す。終わったら 2 つのサーバーを止める。</li>
+  </ol>
+  <p>
+    <label>Worker の URL: <input id="base-url" value="http://127.0.0.1:8787" size="32"></label>
+    <button id="run" type="button">シナリオを流す</button>
+  </p>
+  <div id="summary"></div>
+  <table>
+    <thead>
+      <tr><th>#</th><th>手順</th><th>結果</th><th>状態コード</th><th>画面の文の種類</th><th>中身</th></tr>
+    </thead>
+    <tbody id="steps"></tbody>
+  </table>
+
+  <script type="module">
+    import { createClient, runScenario } from '../rpg-online-client.mjs';
+
+    const button = document.getElementById('run');
+    const tbody = document.getElementById('steps');
+    const summary = document.getElementById('summary');
+
+    /** 1 行を表に足す。文字は textContent で入れる（HTML として読まない）。 */
+    function addRow(index, step, statuses) {
+      const tr = document.createElement('tr');
+      const cells = [
+        String(index),
+        step.name,
+        step.ok ? 'ok' : 'FAIL',
+        statuses.length ? statuses.join(', ') : '—',
+        step.ok ? '—' : (step.category ?? 'unknown'),
+        step.detail ?? '',
+      ];
+      for (const text of cells) {
+        const td = document.createElement('td');
+        td.textContent = text;
+        tr.appendChild(td);
+      }
+      tr.className = step.ok ? 'ok' : 'fail';
+      tbody.appendChild(tr);
+    }
+
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      tbody.replaceChildren();
+      summary.textContent = '流しています…';
+      summary.className = '';
+      // 手順ごとの状態コード（SDK の要求の記録から。記録には見出し・本文が入っていない）。回線断は "no response"。
+      let statuses = [];
+      const client = createClient({
+        baseUrl: document.getElementById('base-url').value,
+        log: (event) => {
+          if (event.reason === 'retry-wait') return;
+          statuses.push(event.status === null ? `no response (${event.reason})` : String(event.status));
+        },
+      });
+      let index = 0;
+      try {
+        const result = await runScenario(client, {
+          onStep: (step) => {
+            index += 1;
+            addRow(index, step, statuses);
+            statuses = [];
+          },
+        });
+        if (result.ok) {
+          summary.textContent = `全部成功（${result.steps.length} 手順）`;
+          summary.className = 'ok';
+        } else {
+          summary.textContent = `失敗: 手順「${result.failed.name}」・画面の文の種類 ${result.failed.category}`;
+          summary.className = 'fail';
+        }
+      } catch (e) {
+        summary.textContent = `失敗: 思わぬ例外（${e?.message ?? e}）`;
+        summary.className = 'fail';
+      } finally {
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
