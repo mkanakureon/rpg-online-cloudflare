@@ -77,6 +77,7 @@ Cloudflare の機能（**公式の文書と、リポジトリに入っている 
 | 管理の API（`/v1/admin/...` の全部の口） | IP（`CF-Connecting-IP` のハッシュ。正しい管理の鍵でも数え、鍵を確かめる前に数える） | 60 秒に 60 回（管理の口で合わせて。`RATE_LIMITS.admin`・単位の名前 `admin-ip`） | D1 | O1（`admin-design.md`） |
 | `GET`・`POST /v1/player-data` | プレイヤー（トークンの `g`・`p`） | 60 秒に 60 回（2 つの口で合わせて。`RATE_LIMITS.playerData`・単位の名前 `player-data`） | D1 | U1（`player-data-design.md`） |
 | `GET /v1/quests`・`POST /v1/quests/{questId}/claim` | プレイヤー（トークンの `g`・`p`） | 60 秒に 60 回（2 つの口で合わせて。`RATE_LIMITS.quests`・単位の名前 `quests`） | D1 | Q1（`quest-design.md`） |
+| `POST /v1/accounts/token`（トークンの更新） | プレイヤー（トークンの `g`・`p`） | 60 秒に 10 回（`RATE_LIMITS.tokenRefresh`・単位の名前 `token-refresh`。ほかの操作とは別に数える） | D1 | B3（`client-integration-design.md` §2.7） |
 | 公開の読み取り（`/health`・お知らせ・ランキングの `GET`・設定・マスターデータ） | — | 掛けない（Worker の中では） | 公開するときに WAF の規則で（§10 の決めること 1 の D） | — |
 
 - 数・窓・単位の名前は**定数のモジュール 1 か所**（`src/core/rate-limit-policy.ts`）に置く（design-cycle §2）。上の表の数はそこの初期値で、変えるときは定数とこの表を同じコミットで直す。
@@ -101,7 +102,7 @@ Cloudflare の機能（**公式の文書と、リポジトリに入っている 
 
 ```sql
 CREATE TABLE IF NOT EXISTS rate_limit_counters (
-  scope TEXT NOT NULL,          -- 'guest-ip'・'guest-game'・'score'・'saves'・'rewards'・'admin-ip'・'player-data'・'quests'（定数のモジュールの名前。rewards は E1、admin-ip は O1、player-data は U1、quests は Q1 で足した）
+  scope TEXT NOT NULL,          -- 'guest-ip'・'guest-game'・'score'・'saves'・'rewards'・'admin-ip'・'player-data'・'quests'・'token-refresh'（定数のモジュールの名前。rewards は E1、admin-ip は O1、player-data は U1、quests は Q1、token-refresh は B3 で足した）
   subject TEXT NOT NULL,        -- IP のハッシュ・gameId・'<gameId>:<playerId>'
   window_start INTEGER NOT NULL, -- 窓の始まり（UNIX 秒）
   count INTEGER NOT NULL CHECK (count >= 1),
@@ -150,6 +151,7 @@ content-type: application/json; charset=utf-8
 | ゲストの発行 | ルート → `requireLocalWrite`（403）→ **IP の制限（429）** → JSON（400）→ 本文の形（400）→ ゲームの登録（404）→ **ゲームの制限（429）** → 鍵 → 書き込み |
 | スコアの投稿 | ルート → `requireLocalWrite`（403）→ `requireAuth`（401）→ JSON（400）→ 形（400）→ **プレイヤーの制限（429）** → なりすまし（403）→ ゲームの登録 → 書き込み（R1 の実装で、制限を JSON の前から形の後へ移した。既存の試験 `形の正しくないgameIdはゲームの登録を引く前にINVALID_ARGUMENTの400を返す` は壊れた DB を渡して 400 を待つので、形の外れた要求で DB を引けないため。鍵はトークンの `g`・`p` なので、本文を読んだ後でも偽れない） |
 | セーブ（R2） | ルート → `requireLocalWrite`（403）→ `requireAuth`（401）→ **プレイヤーの制限（429）** → `gameId` → トークンのゲーム → …（`save-design.md` §3 の順のまま） |
+| トークンの更新（B3） | ルート → `requireLocalWrite`（403）→ `requireAuth`（401）→ **プレイヤーの制限（429）** → 止めた印（403 `PLAYER_BANNED`）→ 新しいトークン（本文は読まない。`client-integration-design.md` §2.7） |
 
 - `APP_ENV` の守りが一番先（本番の設定では数の表にも書かない）。トークンの無い・正しくない要求は数えない（401 が先。他人のプレイヤーの数を減らさせない）。
 - IP の制限は本文を読む前（本文を読まずに断る）。ゲームの制限は `gameId` が要るので登録の後。
@@ -214,7 +216,7 @@ content-type: application/json; charset=utf-8
 | --- | --- | --- | --- | --- |
 | R1 | `利用制限の窓の始まりと残りの秒は時刻と長さから決まる` | L1 | `windowStart(125, 60)`・`retryAfterSeconds(125, 60)`・`retryAfterSeconds(120, 60)` | 120・55・60 |
 | R1 | `足した後の数が上限までなら通し上限を超えたら断る` | L1 | `decide(30, 30)`・`decide(31, 30)` | 通す・断る |
-| R1 | `利用制限の回数と窓は定数のモジュールにある` | L1 | `src/core/rate-limit-policy.ts` の書き出し | `guest-ip` 10／60・`guest-game` 300／60・`score` 30／60・`saves` 60／60・`rewards` 60／60・`admin-ip` 60／60・`player-data` 60／60・`quests` 60／60（§2 の表と同じ） |
+| R1 | `利用制限の回数と窓は定数のモジュールにある` | L1 | `src/core/rate-limit-policy.ts` の書き出し | `guest-ip` 10／60・`guest-game` 300／60・`score` 30／60・`saves` 60／60・`rewards` 60／60・`admin-ip` 60／60・`player-data` 60／60・`quests` 60／60・`token-refresh` 10／60（§2 の表と同じ。`token-refresh` は B3 で足した） |
 | R1 | `同じIPからゲストを上限より多く発行すると429とRetry-Afterを返し行を作らない` | L2 | `CF-Connecting-IP: 203.0.113.1` の鍵に `count = 10` を入れてゲストを発行 | 429・`RATE_LIMITED`・`Retry-After` が 1〜60 の整数。`accounts` と `game_players` の行は増えない |
 | R1 | `ゲストの発行の利用制限はIPごとに別に数える` | L2 | `203.0.113.1` を上限まで埋め、`203.0.113.2` で発行 | 200 で発行できる |
 | R1 | `ゲームごとのゲストの発行の上限を超えると429を返す` | L2 | `guest-game`・`demo-rpg` に `count = 300` を入れ、新しい IP で発行 | 429・`RATE_LIMITED`。行は増えない |

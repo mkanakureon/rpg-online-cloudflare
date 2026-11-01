@@ -4,10 +4,16 @@
 // → IP ごとの利用制限（本文を読む前。429）→ JSON → 本文の形 → ゲームの登録（game_modules は見ない。アカウントはどのゲームにも
 // 要る土台）→ ゲームごとの利用制限（429）→ 鍵 → accounts と game_players と、発行の日の遊んだ行（player_activity_days の is_new = 1。
 // docs/guides/working/analytics-design.md §4）に 1 行ずつ（batch で全部か無し）→ トークン。応答・トークン・ログに account_id を出さない。
+// トークンの更新（POST /v1/accounts/token。refreshRoute）も同じファイルに置く。確かめの順はほかのトークンの口と同じ:
+// APP_ENV=local の門 → トークン（requireAuth。期限切れは 401 TOKEN_EXPIRED・壊れたものは 401 UNAUTHENTICATED）→ プレイヤーごとの
+// 利用制限（RATE_LIMITS.tokenRefresh）→ 止めた印（403 PLAYER_BANNED）→ 同じ g・p で期限を更新した時刻から 30 日先にした新しいトークン。
+// 本文は読まない。表は足さず（トークンは自己完結のまま）、遊んだ記録にも数えない。設計の正は client-integration-design.md §2.7。
 // モジュールでなく core に置き、src/core/router.ts が /health の次に当てる。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
 import { activityDay } from './activity';
+import { requireAuth } from './auth';
+import { requireNotBanned } from './bans';
 import { loadGame } from './games';
 import { requireLocalWrite } from './guards';
 import { error, json } from './http';
@@ -16,6 +22,13 @@ import type { Route } from './module';
 import { consume, ipSubject } from './rate-limit';
 import { RATE_LIMITS } from './rate-limit-policy';
 import { signToken, tokenSecret, TOKEN_TTL_SECONDS } from './token';
+
+/** トークンの本文（g・p）と発行の時刻から、応答の本文（ゲストの発行と同じ形）を作る。期限は now から TOKEN_TTL_SECONDS 先。 */
+async function issueToken(gameId: string, playerId: string, now: number, secret: string) {
+  const exp = now + TOKEN_TTL_SECONDS;
+  const token = await signToken({ gameId, playerId, exp }, secret);
+  return { gameId, playerId, token, expiresAt: new Date(exp * 1000).toISOString() };
+}
 
 /** 本文の形を確かめる（知らない欄は無視する）。 */
 export function parseGuestRequest(value: unknown): { ok: true; gameId: string } | { ok: false; message: string } {
@@ -55,8 +68,27 @@ export const guestRoute: Route = {
       env.DB.prepare('INSERT INTO player_activity_days (game_id, day, player_id, is_new) VALUES (?, ?, ?, 1)')
         .bind(gameId, activityDay(now), playerId),
     ]);
-    const exp = now + TOKEN_TTL_SECONDS;
-    const token = await signToken({ gameId, playerId, exp }, secret);
-    return json({ gameId, playerId, token, expiresAt: new Date(exp * 1000).toISOString() });
+    return json(await issueToken(gameId, playerId, now, secret));
+  },
+};
+
+export const refreshRoute: Route = {
+  method: 'POST',
+  pattern: /^\/v1\/accounts\/token$/,
+  async handle(req, env) {
+    const blocked = requireLocalWrite(env);
+    if (blocked) return blocked;
+    const now = Math.floor(Date.now() / 1000);
+    const auth = await requireAuth(req, env, now);
+    if (!auth.ok) return auth.response;
+    const { gameId, playerId } = auth.claims;
+    const limited = await consume(env.DB, RATE_LIMITS.tokenRefresh, `${gameId}:${playerId}`, now);
+    if (limited) return limited;
+    const banned = await requireNotBanned(env, auth.claims, now);
+    if (banned) return banned;
+    const secret = tokenSecret(env);
+    // requireAuth が鍵の無いときに投げるので、ここに来るときは必ずある
+    if (!secret) throw new Error('Token signing secret is not configured');
+    return json(await issueToken(gameId, playerId, now, secret));
   },
 };

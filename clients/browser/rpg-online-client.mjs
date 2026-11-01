@@ -1,4 +1,4 @@
-// rpg-online-client.mjs — ブラウザの SDK（依存の無い ES モジュール）。ゲームのクライアントの口 19 個・タイムアウト・再試行・Retry-After・画面の文の種類。
+// rpg-online-client.mjs — ブラウザの SDK（依存の無い ES モジュール）。ゲームのクライアントの口 20 個・タイムアウト・再試行・Retry-After・画面の文の種類・トークンの更新。
 //
 // 決まりの正はスキーマ openapi/rpg-online.v1.json の x-client-policy と各操作の x-retry（設計は
 // docs/guides/working/client-integration-design.md §2〜§5）。ブラウザで JSON を取りに行かないため、値はここへ書き写す。
@@ -6,6 +6,8 @@
 // 再試行は request() の 1 か所だけで決め、操作の関数には書かない。失敗は例外にせず { ok: false, error } で返す。
 // ブラウザ・Node.js（scripts/cli-flow.mjs）・Workers のランタイム（vitest）のどれでも読めるよう、scripts/ と Node.js だけの部品を読み込まない。
 // 自分で console に出さない（ログは createClient の log の口だけ）。トークンは storage にだけ置き、結果にもログにも出さない。型は rpg-online-client.d.mts。
+// トークンの要る要求の前に、期限までの残りが tokenRefreshBeforeSeconds（7 日）を切っていれば POST /v1/accounts/token で更新する（設計書 §2.7）。
+// 期限切れ・壊れたトークン（TOKEN_EXPIRED・UNAUTHENTICATED）は session の結果を返すだけで、ゲストを自動で発行し直さない。
 //
 // 概要記述: Claude Opus 5.5 — 2026-11-01
 
@@ -16,6 +18,7 @@ export const CLIENT_POLICY = Object.freeze({
   backoff: Object.freeze({ baseSeconds: 1, factor: 2, maxSeconds: 8, jitter: 'full' }),
   retryAfter: Object.freeze({ maxWaitSeconds: 60, maxRetries: 1 }),
   retryStatuses: Object.freeze([429, 500, 502, 503, 504]),
+  tokenRefreshBeforeSeconds: 604800,
   errorCatalog: Object.freeze({
     INVALID_ARGUMENT: { category: 'client-bug', retry: false },
     INVALID_JSON: { category: 'client-bug', retry: false },
@@ -60,11 +63,12 @@ export const OPERATION_RETRY = Object.freeze({
   writePlayerData: 'idempotency-key',
   listQuests: 'safe',
   claimQuest: 'natural-key',
+  refreshToken: 'new-resource',
 });
 
-/** §4 の同一の API シナリオの手順の名前（順。6 のトークンの更新は B3 で足す）。Unity・Unreal も同じ名前で書く。 */
+/** §4 の同一の API シナリオの手順の名前（順。6 のトークンの更新は B3 で足した）。Unity・Unreal も同じ名前で書く。 */
 export const SCENARIO_STEPS = Object.freeze([
-  'health', 'config', 'master-data', 'announcements', 'guest', 'ranking', 'saves', 'event-reward', 'player-data', 'quests',
+  'health', 'config', 'master-data', 'announcements', 'guest', 'token-refresh', 'ranking', 'saves', 'event-reward', 'player-data', 'quests',
 ]);
 
 /** シナリオが使う demo-rpg の手本（migrations の初期データ。scripts/cli-requests.mjs の SMOKE_* と同じ値）。 */
@@ -159,6 +163,34 @@ export function createClient(options = {}) {
     }
   }
 
+  /** 応答の本文（gameId・playerId・token・expiresAt）を storage に置き、トークンを除いた本文を返す。 */
+  function storeSession(data) {
+    const { token, ...rest } = data;
+    storage.setItem(sessionKey, JSON.stringify({ ...rest, token }));
+    return rest;
+  }
+
+  /** 保存したトークンの期限まで tokenRefreshBeforeSeconds を切っているか（期限の読めないトークンは更新しない）。 */
+  function needsRefresh(session) {
+    const expiresAt = Date.parse(session.expiresAt);
+    return Number.isFinite(expiresAt) && expiresAt - now() < CLIENT_POLICY.tokenRefreshBeforeSeconds * 1000;
+  }
+
+  // 同時に送った要求が更新を重ねて送らないよう、進行中の更新を 1 つだけ持つ
+  let refreshing = null;
+  function refreshOnce() {
+    refreshing ??= (async () => {
+      try {
+        const res = await request('refreshToken', { method: 'POST', path: '/v1/accounts/token', auth: true, skipRefresh: true });
+        if (!res.ok || !res.data) return res;
+        return { ...res, data: storeSession(res.data) };
+      } finally {
+        refreshing = null;
+      }
+    })();
+    return refreshing;
+  }
+
   function emit(event) {
     try { log(event); } catch { /* ログの口の失敗で送り方を変えない */ }
   }
@@ -192,7 +224,7 @@ export function createClient(options = {}) {
    * 操作を 1 つ送る。再試行・Retry-After・画面の文の種類はここだけで決める（設計書 §2.1〜§2.5）。
    * 成功は { ok: true, status, data, etag, attempts }、失敗は { ok: false, error: { code, category, status, retryable, reason, outcomeUnknown }, attempts }。
    */
-  async function request(operationId, { method = 'GET', path, query, body, auth = false, headers: extra = {} }) {
+  async function request(operationId, { method = 'GET', path, query, body, auth = false, headers: extra = {}, skipRefresh = false }) {
     const kind = OPERATION_RETRY[operationId];
     const autoRetry = kind !== undefined && kind !== 'revision';
     const qs = new URLSearchParams();
@@ -202,9 +234,16 @@ export function createClient(options = {}) {
     const headers = { ...extra };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (auth) {
-      const session = readSession();
+      let session = readSession();
       if (!session) {
         return { ok: false, attempts: 0, error: { code: null, category: 'session', status: null, retryable: false, reason: 'no-session', outcomeUnknown: false } };
+      }
+      if (!skipRefresh && needsRefresh(session)) {
+        const refreshed = await refreshOnce();
+        // 期限切れ・壊れたトークンは更新できない。ゲストを発行し直さず session を返す（§2.7）。
+        // ほかの失敗（回線・混雑など）は、まだ期限の前のトークンでそのまま送る（次の要求でまた更新を試す）
+        if (!refreshed.ok && refreshed.error.category === 'session') return refreshed;
+        session = readSession() ?? session;
       }
       headers.Authorization = 'Bearer ' + session.token;
     }
@@ -289,10 +328,13 @@ export function createClient(options = {}) {
     async issueGuest() {
       const res = await request('issueGuest', { method: 'POST', path: '/v1/accounts/guest', body: { gameId } });
       if (!res.ok || !res.data) return res;
-      const { token, ...rest } = res.data;
-      storage.setItem(sessionKey, JSON.stringify({ ...rest, token }));
-      return { ...res, data: rest };
+      return { ...res, data: storeSession(res.data) };
     },
+    /**
+     * 保存したトークンを、期限を 30 日先にした新しいトークンに取り替えて storage に置く（POST /v1/accounts/token）。結果の data にトークンは入れない。
+     * トークンの要る要求の前に、期限まで 7 日を切っていれば SDK が自分で呼ぶ。期限切れ・壊れたトークンは session の結果になる。
+     */
+    refreshToken: () => refreshOnce(),
 
     listAnnouncements: () => request('listAnnouncements', { path: '/v1/announcements', query: { gameId } }),
 
@@ -417,7 +459,14 @@ export async function runScenario(client, options = {}) {
     guest: async () => {
       const res = need(await client.issueGuest(), 'POST /v1/accounts/guest');
       o.playerId = res.data.playerId;
+      o.expiresAt = res.data.expiresAt;
       return `player issued (expiresAt=${res.data.expiresAt})`;
+    },
+    'token-refresh': async () => {
+      const res = need(await client.refreshToken(), 'POST /v1/accounts/token');
+      check(res.data.playerId === o.playerId && res.data.gameId === client.gameId, 'Refreshed token is for a different player');
+      check(Date.parse(res.data.expiresAt) >= Date.parse(o.expiresAt), 'Refreshed token expires earlier than the issued one');
+      return `same player (expiresAt=${res.data.expiresAt})`;
     },
     ranking: async () => {
       const boardId = o.boardId ?? `${o.boardPrefix}-${Math.floor(o.now ?? Date.now()).toString(36)}`;

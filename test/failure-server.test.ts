@@ -5,6 +5,8 @@
  * docs/guides/working/save-design.md §7 が正、`CLIモックと同じ流れで設定を読み変わっていなければ304を受け取る`・
  * `CLIモックと同じ流れで設定に載ったマスターデータを読める` は docs/guides/working/config-design.md §7 が正（互換の試験の隣に置く）。
  * `CLIモックの通しは同点のスコアが上位10件を埋めていても自分の投稿を見つける` は Issue #28（CLI モックは回すたびに別のボードに投稿する）。
+ * K4 の `旧CLIはスキーマ変更後のAPIでもランキングを送って読める` と、通しの流れに足したトークンの更新は
+ * docs/guides/working/client-integration-design.md §7・§10（B3）。
  * src/worker.ts の default.fetch を直に呼ぶ L2 の試験。DB の失敗は prepare が投げる偽の DB で起こす。
  */
 import { env } from 'cloudflare:workers';
@@ -16,7 +18,7 @@ import { registerGame } from './support/games';
 import {
   CLI_CLIENT_VERSION, SMOKE_BOARD_ID, SMOKE_EVENT_ID, SMOKE_SLOT_ID, authHeaders, claimPath, configPath, eventsPath, guestRequest, historyPath,
   inventoryPath, masterDataPath, newIdempotencyKey, playerDataHeaders, playerDataPath, playerDataWrite, questClaimPath, questsPath, saveData,
-  saveWrite, scoreSubmission, sha256Hex, smokeBoardId, utf8Bytes,
+  saveWrite, scoreSubmission, sha256Hex, smokeBoardId, TOKEN_REFRESH_PATH, utf8Bytes,
 } from '../scripts/cli-requests.mjs';
 
 type Migration = { name: string; queries: string[] };
@@ -285,7 +287,7 @@ describe('ケース 7: マイグレーションと互換', () => {
   });
 
   it('CLIモックの通しの流れを続けて2回回しても利用制限に掛からない', async () => {
-    // scripts/cli-mock.mjs の書き込みの流れ（ゲストの発行 → スコア → セーブの書く・読む・一覧・消す → イベントの報酬 → プレイヤーデータ → クエスト）を、
+    // scripts/cli-mock.mjs の書き込みの流れ（ゲストの発行 → トークンの更新 → スコア → セーブの書く・読む・一覧・消す → イベントの報酬 → プレイヤーデータ → クエスト）を、
     // 同じ IP から 2 回続けて回す。
     // 1 つでも 429 になったら利用制限の数（src/core/rate-limit-policy.ts）が CLI モックの使い方より小さい合図
     // （docs/guides/working/abuse-protection-design.md §7）
@@ -300,7 +302,10 @@ describe('ケース 7: マイグレーションと互換', () => {
       const guest = await send('/v1/accounts/guest', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...ip }, body: JSON.stringify(guestRequest()),
       });
-      const { playerId, token } = await guest.json<{ playerId: string; token: string }>();
+      const { playerId, token: issuedToken } = await guest.json<{ playerId: string; token: string }>();
+      // ゲストの発行の後のトークンの更新（§4 の 6。更新の利用制限をプレイヤーごとに 1 回）。以後は新しいトークンで送る
+      const refreshed = await send(TOKEN_REFRESH_PATH, { method: 'POST', headers: { ...authHeaders(issuedToken), ...ip } });
+      const { token } = await refreshed.json<{ token: string }>();
       const headers = { ...authHeaders(token), ...ip };
       const submission = scoreSubmission(playerId);
       await send(`/v1/rankings/${SMOKE_BOARD_ID}`, { method: 'POST', headers, body: JSON.stringify(submission) });
@@ -330,7 +335,7 @@ describe('ケース 7: マイグレーションと互換', () => {
       await send(questClaimPath(undefined, submission.gameId), { method: 'POST', headers });
       await send(questsPath(submission.gameId), { headers });
     }
-    expect(statuses).toEqual(Array(40).fill(200));
+    expect(statuses).toEqual(Array(42).fill(200));
   });
 
   it('CLIモックの通しは同点のスコアが上位10件を埋めていても自分の投稿を見つける', async () => {
@@ -369,6 +374,27 @@ describe('ケース 7: マイグレーションと互換', () => {
     const fixed = await items(await get(`/v1/rankings/${SMOKE_BOARD_ID}?gameId=${submission.gameId}&limit=10`));
     expect(fixed).toHaveLength(10);
     expect(fixed.every((e) => e.playerId.startsWith('old-'))).toBe(true);
+  });
+
+  it('旧CLIはスキーマ変更後のAPIでもランキングを送って読める', async () => {
+    // B3（トークンの更新の口を足した束）より前の CLI モックの要求の形を、scripts/cli-requests.mjs を読まずにここへ写して固定する。
+    // 試験の D1 には全部のマイグレーションが当たっている（test/apply-migrations.ts）。以後のマイグレーションの束で落ちたら互換が壊れた合図
+    // （docs/guides/working/failure-case-test-plan.md の K4・設計書 §7）。版の番号の扱いは決めない（同 決めること 5）
+    const oldGuestBody = '{"gameId":"demo-rpg"}';
+    const guest = await worker.fetch(new Request(`${base}/v1/accounts/guest`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: oldGuestBody,
+    }), localEnv as never);
+    expect(guest.status).toBe(200);
+    const { playerId, token } = await guest.json<{ playerId: string; token: string }>();
+    const oldBoardId = 'boss-score-old-cli';
+    const oldScoreBody = JSON.stringify({ gameId: 'demo-rpg', playerId, displayName: 'Mac CLI Tester', score: 1200 });
+    const sent = await worker.fetch(new Request(`${base}/v1/rankings/${oldBoardId}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: oldScoreBody,
+    }), localEnv as never);
+    expect(sent.status).toBe(200);
+    expect(await sent.json()).toMatchObject({ ok: true });
+    const list = await items(await get(`/v1/rankings/${oldBoardId}?gameId=demo-rpg&limit=10`));
+    expect(list).toEqual([{ playerId, displayName: 'Mac CLI Tester', score: 1200 }]);
   });
 
   it('知らない欄が付いた要求も受け付ける', async () => {

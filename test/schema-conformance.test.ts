@@ -8,7 +8,7 @@
  * エラーコードの数の試験は管理の O2 でも置き換え、`エラーの応答はスキーマに書いた状態とエラーコードの組で返る` に BAN したプレイヤーの行を足した。
  * docs/guides/working/admin-design.md §9。操作の数とエラーコードの数の試験はプレイヤーデータの U1 でも置き換え、エラーの組の試験に
  * プレイヤーデータの書き込みの 409・422 の行を足した。docs/guides/working/player-data-design.md §10・§11。クエストの Q1 でも操作の数と
- * エラーコードの数の試験を置き換え、エラーの組の試験にクエストの受け取りの 2 つの 409 の行を足した。docs/guides/working/quest-design.md §10・§11）。挙動（状態コード・データ）は
+ * エラーコードの数の試験を置き換え、エラーの組の試験にクエストの受け取りの 2 つの 409 の行を足した。docs/guides/working/quest-design.md §10・§11。操作の数の試験はトークンの更新の B3 でも置き換えた。docs/guides/working/client-integration-design.md §10）。挙動（状態コード・データ）は
  * test/failure-*.test.ts が見る。ここはスキーマの側から見る。
  * L2 の試験は src/worker.ts の default.fetch を直に呼ぶ（docs/guides/working/failure-case-test-plan.md §2）。
  *
@@ -210,12 +210,12 @@ beforeEach(async () => {
 });
 
 describe('S1: スキーマのファイル', () => {
-  it('スキーマのファイルはOpenAPI 3.1で19個の操作を持つ', () => {
+  it('スキーマのファイルはOpenAPI 3.1で20個の操作を持つ', () => {
     expect(spec.openapi).toMatch(/^3\.1\.\d+$/);
     expect(operations().map((o) => o.operationId).sort())
       .toEqual(['claimEventReward', 'claimQuest', 'deleteSave', 'getConfig', 'getHealth', 'getInventory', 'getMasterData', 'getPlayerData',
         'getRanking', 'getSave', 'issueGuest', 'listAnnouncements', 'listEvents', 'listInventoryHistory', 'listQuests', 'listSaves', 'putSave',
-        'submitScore', 'writePlayerData']);
+        'refreshToken', 'submitScore', 'writePlayerData']);
     const refs = collectRefs(spec);
     expect(refs.length).toBeGreaterThan(0);
     for (const ref of refs) expect(() => resolveRef(ref, spec), ref).not.toThrow();
@@ -317,6 +317,39 @@ describe('S1: 応答がスキーマに合う', () => {
       const actual = (body as { error: { code: string } }).error.code;
       expect(actual).toBe(code);
       expect(r['x-error-codes'], `issueGuest の ${status} の x-error-codes`).toContain(actual);
+    }
+  });
+
+  it('トークンの更新の応答はスキーマに合う', async () => {
+    const refresh = (authorization: string | null, e: unknown = localEnv) => worker.fetch(new Request(`${base}/v1/accounts/token`, {
+      method: 'POST', headers: authorization === null ? {} : { authorization },
+    }), e as never);
+    const ok = await refresh(await bearer('demo-rpg', 'schema-refresh'));
+    expect(ok.status).toBe(200);
+    await expectConforms(ok, 'refreshToken');
+    const cases: Array<[number, string, () => Promise<Response>]> = [
+      [401, 'UNAUTHENTICATED', () => refresh(null)],
+      [401, 'TOKEN_EXPIRED', async () => refresh(await bearer('demo-rpg', 'schema-refresh', { exp: 1 }))],
+      [403, 'NOT_READY_FOR_PRODUCTION', async () => refresh(await bearer('demo-rpg', 'schema-refresh'), baseEnv)],
+      [403, 'PLAYER_BANNED', async () => {
+        await baseEnv.DB.prepare("INSERT OR REPLACE INTO player_bans (game_id, player_id, reason, banned_at) VALUES ('demo-rpg', 'schema-refresh-banned', 'test', 1)").run();
+        const res = await refresh(await bearer('demo-rpg', 'schema-refresh-banned'));
+        await baseEnv.DB.prepare("DELETE FROM player_bans WHERE game_id = 'demo-rpg' AND player_id = 'schema-refresh-banned'").run();
+        return res;
+      }],
+      [429, 'RATE_LIMITED', async () => {
+        await fillRateLimit(baseEnv.DB, RATE_LIMITS.tokenRefresh, 'demo-rpg:schema-refresh');
+        return refresh(await bearer('demo-rpg', 'schema-refresh'));
+      }],
+      [500, 'INTERNAL_ERROR', async () => refresh(await bearer('demo-rpg', 'schema-refresh'), { ...localEnv, DB: brokenDB })],
+    ];
+    for (const [status, code, send] of cases) {
+      const res = await send();
+      expect(res.status, code).toBe(status);
+      const { spec: r, body } = await expectConforms(res, 'refreshToken');
+      const actual = (body as { error: { code: string } }).error.code;
+      expect(actual).toBe(code);
+      expect(r['x-error-codes'], `refreshToken の ${status} の x-error-codes`).toContain(actual);
     }
   });
 

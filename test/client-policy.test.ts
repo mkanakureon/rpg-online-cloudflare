@@ -41,7 +41,7 @@ function operations(): { op: Operation; params: Parameter[] }[] {
   );
 }
 
-/** 設計書 §2.2 の表（操作 → 再試行の種類）。B3 で refreshToken を足す（§10）。 */
+/** 設計書 §2.2 の表（操作 → 再試行の種類）。B3 で refreshToken を足した（§10）。 */
 const expectedRetry: Record<string, string> = {
   getHealth: 'safe',
   issueGuest: 'new-resource',
@@ -62,6 +62,7 @@ const expectedRetry: Record<string, string> = {
   writePlayerData: 'idempotency-key',
   listQuests: 'safe',
   claimQuest: 'natural-key',
+  refreshToken: 'new-resource',
 };
 const retryKinds = ['safe', 'natural-key', 'idempotency-key', 'new-resource', 'revision'];
 /** 設計書 §2.5 の画面の文の種類（unknown はコードの無い失敗のためで、表には出ない）。 */
@@ -83,7 +84,7 @@ describe('クライアントの共通の決まり（スキーマの x-client-pol
 
   it('スキーマの全部の操作が再試行の種類を持つ', () => {
     const actual = Object.fromEntries(operations().map(({ op }) => [op.operationId, op['x-retry']]));
-    expect(Object.keys(actual)).toHaveLength(19);
+    expect(Object.keys(actual)).toHaveLength(20);
     for (const [id, kind] of Object.entries(actual)) expect(retryKinds, `${id} の x-retry`).toContain(kind);
     expect(actual).toEqual(expectedRetry);
   });

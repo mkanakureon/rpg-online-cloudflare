@@ -3,7 +3,7 @@
   "info": {
     "title": "RPG Online Backend (local PoC)",
     "version": "1.0.0",
-    "description": "ローカル専用の PoC。認証はゲストのトークン（POST /v1/accounts/guest が返す Bearer）だけで、ログインは未実装。ゲストの発行・スコアの投稿・セーブの操作・所持品の読み取り・イベントの一覧と報酬の受け取り・プレイヤーデータの読み書き・クエストの一覧と報酬の受け取りに回数の制限（429 RATE_LIMITED と Retry-After の秒）があり、スコアは値の範囲と回数までしか確かめない。形（欄・型・範囲・状態コードとエラーコードの組）の正はこのファイル、挙動の説明の正は docs/api-contract.md。本文のある応答はどれも content-type: application/json; charset=utf-8（本文の無い 304 は除く）。状態ごとに返りうるエラーコードは各応答の x-error-codes に書く。スキーマに無いパスとメソッドは 404 NOT_FOUND。"
+    "description": "ローカル専用の PoC。認証はゲストのトークン（POST /v1/accounts/guest が返し、期限の前に POST /v1/accounts/token で更新できる Bearer）だけで、ログインは未実装。ゲストの発行・トークンの更新・スコアの投稿・セーブの操作・所持品の読み取り・イベントの一覧と報酬の受け取り・プレイヤーデータの読み書き・クエストの一覧と報酬の受け取りに回数の制限（429 RATE_LIMITED と Retry-After の秒）があり、スコアは値の範囲と回数までしか確かめない。形（欄・型・範囲・状態コードとエラーコードの組）の正はこのファイル、挙動の説明の正は docs/api-contract.md。本文のある応答はどれも content-type: application/json; charset=utf-8（本文の無い 304 は除く）。状態ごとに返りうるエラーコードは各応答の x-error-codes に書く。スキーマに無いパスとメソッドは 404 NOT_FOUND。"
   },
   "servers": [
     {
@@ -12,7 +12,7 @@
     }
   ],
   "x-client-policy": {
-    "description": "3 つのクライアント（Unreal・Unity・ブラウザ）と CLI モックで共通の決まり。値の正はここ（docs/api-contract.md の「クライアントの決まり」は指すだけ）。timeoutSeconds は 1 回の要求のタイムアウト、maxAttempts は初回を含む試す回数、backoff は再試行の前の待ち（baseSeconds × factor の n 乗・maxSeconds で頭打ち・jitter full は 0〜その秒の一様乱数）、retryAfter は 429 の Retry-After を待つ上限と送り直す回数（maxAttempts の中に数える）、retryStatuses は再試行する状態（回線断・タイムアウトも再試行する）。再試行してよいのは各操作の x-retry が safe・natural-key・idempotency-key・new-resource のときだけで、revision は自動で送り直さない。errorCatalog はエラーコードごとの画面の文の種類（category）と自動の再試行の可否（retry）。表に無いコードと JSON でない 4xx は unknown、コードの無い回線断・タイムアウト・5xx は network。設計は docs/guides/working/client-integration-design.md §2・§3。",
+    "description": "3 つのクライアント（Unreal・Unity・ブラウザ）と CLI モックで共通の決まり。値の正はここ（docs/api-contract.md の「クライアントの決まり」は指すだけ）。timeoutSeconds は 1 回の要求のタイムアウト、maxAttempts は初回を含む試す回数、backoff は再試行の前の待ち（baseSeconds × factor の n 乗・maxSeconds で頭打ち・jitter full は 0〜その秒の一様乱数）、retryAfter は 429 の Retry-After を待つ上限と送り直す回数（maxAttempts の中に数える）、retryStatuses は再試行する状態（回線断・タイムアウトも再試行する）。再試行してよいのは各操作の x-retry が safe・natural-key・idempotency-key・new-resource のときだけで、revision は自動で送り直さない。tokenRefreshBeforeSeconds はトークンの期限までの残りがこの秒（7 日）を切ったら次の要求の前に POST /v1/accounts/token で更新する時期（期限切れ・壊れたトークンは更新できず、ゲストを自動で発行し直さずに session を返す）。errorCatalog はエラーコードごとの画面の文の種類（category）と自動の再試行の可否（retry）。表に無いコードと JSON でない 4xx は unknown、コードの無い回線断・タイムアウト・5xx は network。設計は docs/guides/working/client-integration-design.md §2・§3。",
     "timeoutSeconds": 10,
     "maxAttempts": 3,
     "backoff": {
@@ -32,6 +32,7 @@
       503,
       504
     ],
+    "tokenRefreshBeforeSeconds": 604800,
     "errorCatalog": {
       "INVALID_ARGUMENT": {
         "category": "client-bug",
@@ -272,6 +273,142 @@
           },
           "429": {
             "description": "利用制限を超えた（同じ IP から・同じゲームへの発行が窓の中で上限を超えた）。行は作らない。どの鍵で断ったか・上限の数は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Retry-After": {
+                "description": "次に送ってよいまでの秒（窓の終わりまで。1 以上の整数）。クライアントはこの秒だけ待ってから送り直す。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "想定外の失敗（DB の失敗・署名の鍵が無いなど）。中身は返さない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/token": {
+      "post": {
+        "operationId": "refreshToken",
+        "x-retry": "new-resource",
+        "summary": "期限の前の正しいトークンを、同じゲームとプレイヤーで期限を 30 日先にした新しいトークンに取り替える。本文は読まない。APP_ENV=local のときだけ受け付ける",
+        "security": [
+          {
+            "bearerToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "更新した。同じ gameId・playerId で、期限を更新した時刻から 30 日先にした新しいトークンを返す（ゲストの発行と同じ形）。前のトークンも自分の期限までは使える。表は作らない（トークンは自己完結）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuestIssued"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization が無い・Bearer でない・トークンの形か署名が正しくない（UNAUTHENTICATED）か、トークンの期限が過ぎた（TOKEN_EXPIRED）。どちらも更新できない（ゲストを発行し直す）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED",
+              "TOKEN_EXPIRED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "APP_ENV が local でない（トークンを見る前に断る）か、トークンのプレイヤーが管理の口で止められている（PLAYER_BANNED。message は Player is banned。理由・期限は返さない。プレイヤーの利用制限の後に確かめる）。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_READY_FOR_PRODUCTION",
+              "PLAYER_BANNED"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "利用制限を超えた（同じプレイヤーの更新が窓の中で上限を超えた）。どの鍵で断ったか・上限の数は返さない。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -3851,7 +3988,7 @@
           },
           "expiresAt": {
             "type": "string",
-            "description": "トークンの期限（ISO 8601・UTC）。過ぎたらゲストを発行し直す。"
+            "description": "トークンの期限（ISO 8601・UTC）。期限の前なら POST /v1/accounts/token で更新できる。過ぎたらゲストを発行し直す。"
           }
         }
       },
@@ -4830,7 +4967,7 @@
       "bearerToken": {
         "type": "http",
         "scheme": "bearer",
-        "description": "POST /v1/accounts/guest が返す token（v1.<本文>.<HMAC-SHA256>・期限 30 日）。形の正は docs/guides/working/account-design.md §4。"
+        "description": "POST /v1/accounts/guest か POST /v1/accounts/token が返す token（v1.<本文>.<HMAC-SHA256>・期限 30 日）。形の正は docs/guides/working/account-design.md §4。"
       }
     }
   }

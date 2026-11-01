@@ -1,7 +1,8 @@
 /**
  * クライアント統合の試験 B2: ブラウザの SDK（clients/browser/rpg-online-client.mjs）と、SDK で送る CLI モックの流れ（scripts/cli-flow.mjs）。
  * 名前と期待する結果の正は docs/guides/working/client-integration-design.md §9 の B2 の 13 本と、
- * docs/guides/working/failure-case-test-plan.md の K4 の `CLIはタイムアウトしたら決めた回数だけ再試行して失敗を表示する`（設計書 §7）。
+ * docs/guides/working/failure-case-test-plan.md の K4 の `CLIはタイムアウトしたら決めた回数だけ再試行して失敗を表示する`（設計書 §7）と、
+ * B3 の SDK の 2 本（期限まで 7 日を切ったトークンの更新・TOKEN_EXPIRED で session を返す。§9）。
  * L1 の試験は偽の fetch と差し替えた sleep で、実時間を待たずにタイムアウト・再試行・Retry-After を見る（AbortSignal.timeout に依らない）。
  * L2 の試験は src/worker.ts の default.fetch を SDK の fetch に差し替えて回す（ほかの L2 の試験と同じ）。
  *
@@ -327,6 +328,7 @@ describe('B2 ブラウザの SDK を Worker に当てる（L2）', () => {
       const ok = <T extends { ok: boolean }>(r: T, what: string): T => { if (!r.ok) expect.unreachable(`${what}: ${JSON.stringify(r)}`); return r; };
       ok(await client.getHealth(), 'getHealth');
       ok(await client.issueGuest(), 'issueGuest');
+      ok(await client.refreshToken(), 'refreshToken');
       ok(await client.listAnnouncements(), 'listAnnouncements');
       ok(await client.submitScore('sdk-board', { score: 10, displayName: 'SDK' }), 'submitScore');
       ok(await client.getRanking('sdk-board', { limit: 5 }), 'getRanking');
@@ -345,7 +347,7 @@ describe('B2 ブラウザの SDK を Worker に当てる（L2）', () => {
       ok(await client.listQuests(), 'listQuests');
       ok(await client.claimQuest('first-hunt'), 'claimQuest');
 
-      // 応答の本文がスキーマに合う（19 の操作を全部通した）
+      // 応答の本文がスキーマに合う（20 の操作を全部通した）
       const sent = events.filter((e) => e.reason !== 'retry-wait');
       expect(sent).toHaveLength(raw.length);
       const byId = new Map(operations().map((op) => [op.operationId, op]));
@@ -404,6 +406,66 @@ describe('B2 ブラウザの SDK を Worker に当てる（L2）', () => {
     } finally {
       await baseEnv.DB.prepare("DELETE FROM config_master_data WHERE game_id = 'demo-rpg' AND key = 'sdk-items'").run();
     }
+  });
+});
+
+describe('B3 SDK のトークンの更新（L1）', () => {
+  const day = 24 * 60 * 60 * 1000;
+  const clock = Date.parse('2026-11-01T00:00:00Z');
+  /** 期限が clock から daysLeft 日後のセッションを置いた storage。 */
+  function storedSession(daysLeft: number, token = 'v1.old-token-body.old-signature') {
+    const store = new Map<string, string>();
+    const storage: StorageLike = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => { store.set(k, v); }, removeItem: (k) => { store.delete(k); } };
+    storage.setItem('rpg-online:demo-rpg:session', JSON.stringify({
+      gameId: 'demo-rpg', playerId: 'p-fake', expiresAt: new Date(clock + daysLeft * day).toISOString(), token,
+    }));
+    return storage;
+  }
+  const inventoryBody = { gameId: 'demo-rpg', currencies: [], items: [] };
+
+  it('SDKは期限まで7日を切ったトークンを更新してから送る', async () => {
+    const renewed = { gameId: 'demo-rpg', playerId: 'p-fake', token: 'v1.new-token-body.new-signature', expiresAt: new Date(clock + 30 * day).toISOString() };
+    const f = fake((_, call) => (call.url.endsWith('/v1/accounts/token') ? json(200, renewed) : json(200, inventoryBody)));
+    const storage = storedSession(6);
+    const client = createClient({ baseUrl, fetch: f.fetch, sleep: f.sleep, now: () => clock, storage });
+    const res = await client.getInventory();
+    expect(res.ok).toBe(true);
+    // 更新 → 読む、の順に 2 回送る。更新は古いトークン、読むのは新しいトークン
+    expect(f.calls.map((c) => `${c.init.method} ${c.url.replace(baseUrl, '').split('?')[0]}`)).toEqual(['POST /v1/accounts/token', 'GET /v1/inventory']);
+    expect(headerOf(f.calls[0], 'Authorization')).toBe('Bearer v1.old-token-body.old-signature');
+    expect(headerOf(f.calls[1], 'Authorization')).toBe(`Bearer ${renewed.token}`);
+    expect(client.session()).toEqual({ gameId: 'demo-rpg', playerId: 'p-fake', expiresAt: renewed.expiresAt });
+    // 更新した後は期限まで 30 日あるので、次の要求の前には更新しない
+    expect((await client.getInventory()).ok).toBe(true);
+    expect(f.calls).toHaveLength(3);
+    // 期限まで 8 日あるトークンは更新しない
+    const g = fake(() => json(200, inventoryBody));
+    const fresh = createClient({ baseUrl, fetch: g.fetch, sleep: g.sleep, now: () => clock, storage: storedSession(8) });
+    expect((await fresh.getInventory()).ok).toBe(true);
+    expect(g.calls.map((c) => c.url.replace(baseUrl, '').split('?')[0])).toEqual(['/v1/inventory']);
+  });
+
+  it('SDKはTOKEN_EXPIREDを受けたらゲストを発行し直さずsessionを返す', async () => {
+    // 要求が 401 TOKEN_EXPIRED（端末の時計では期限の前）
+    const f = fake(() => json(401, errorBody('TOKEN_EXPIRED')));
+    const client = createClient({ baseUrl, fetch: f.fetch, sleep: f.sleep, now: () => clock, storage: storedSession(20) });
+    const res = await client.getInventory();
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error.category).toBe('session');
+    expect(res.error.code).toBe('TOKEN_EXPIRED');
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls.some((c) => c.url.endsWith('/v1/accounts/guest'))).toBe(false);
+    // 更新の口が TOKEN_EXPIRED を返したら、本来の要求も発行も送らずに session を返す
+    const g = fake(() => json(401, errorBody('TOKEN_EXPIRED')));
+    const late = createClient({ baseUrl, fetch: g.fetch, sleep: g.sleep, now: () => clock, storage: storedSession(1) });
+    const again = await late.getInventory();
+    expect(again.ok).toBe(false);
+    if (again.ok) return;
+    expect(again.error.category).toBe('session');
+    expect(g.calls.map((c) => c.url.replace(baseUrl, '').split('?')[0])).toEqual(['/v1/accounts/token']);
+    // 保存したセッションは消さない（「新しく始める」はゲームが選んで clearSession と issueGuest を呼ぶ）
+    expect(late.session()?.playerId).toBe('p-fake');
   });
 });
 

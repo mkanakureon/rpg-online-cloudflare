@@ -15,6 +15,8 @@ export declare function scoreSubmission(playerId?: string): {
   score: number;
 };
 
+/** トークンの更新の口（POST /v1/accounts/token）。 */
+export declare const TOKEN_REFRESH_PATH: string;
 export declare function guestRequest(): { gameId: string };
 
 export declare function authHeaders(token: string): {

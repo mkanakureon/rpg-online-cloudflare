@@ -1,6 +1,6 @@
 // rpg-online-client.d.mts — clients/browser/rpg-online-client.mjs の型の宣言（手で書く。型を作る道具は足さない。設計書 §5.2）。
 //
-// 応答の型の名前と欄はスキーマ openapi/rpg-online.v1.json の components.schemas と同じにする（GuestIssued だけは、SDK がトークンを
+// 応答の型の名前と欄はスキーマ openapi/rpg-online.v1.json の components.schemas と同じにする（GuestIssued〔ゲストの発行とトークンの更新の応答〕だけは、SDK がトークンを
 // 結果に出さないので token を除いた GuestSession）。欄の食い違いは試験「SDKの応答の型はスキーマの応答と同じ欄を持つ」が、
 // このファイルを文字列として読んで見る。そのため interface の欄は 1 行に 1 つ、2 つの空白の字下げで書く。
 // DOM の型に頼らない（tsconfig.json の lib は ES2022 だけ）。
@@ -14,9 +14,10 @@ export type ErrorCategory =
 export type OperationId =
   | 'getHealth' | 'issueGuest' | 'listAnnouncements' | 'getRanking' | 'submitScore' | 'listSaves' | 'getSave' | 'putSave'
   | 'deleteSave' | 'getConfig' | 'getMasterData' | 'getInventory' | 'listInventoryHistory' | 'listEvents' | 'claimEventReward'
-  | 'getPlayerData' | 'writePlayerData' | 'listQuests' | 'claimQuest';
+  | 'getPlayerData' | 'writePlayerData' | 'listQuests' | 'claimQuest' | 'refreshToken';
 export type ScenarioStep =
-  | 'health' | 'config' | 'master-data' | 'announcements' | 'guest' | 'ranking' | 'saves' | 'event-reward' | 'player-data' | 'quests';
+  | 'health' | 'config' | 'master-data' | 'announcements' | 'guest' | 'token-refresh' | 'ranking' | 'saves' | 'event-reward'
+  | 'player-data' | 'quests';
 
 export interface ClientPolicy {
   readonly timeoutSeconds: number;
@@ -24,6 +25,8 @@ export interface ClientPolicy {
   readonly backoff: { readonly baseSeconds: number; readonly factor: number; readonly maxSeconds: number; readonly jitter: 'full' };
   readonly retryAfter: { readonly maxWaitSeconds: number; readonly maxRetries: number };
   readonly retryStatuses: readonly number[];
+  /** 期限までの残りがこの秒を切ったら、トークンの要る次の要求の前に更新する（7 日）。 */
+  readonly tokenRefreshBeforeSeconds: number;
   readonly errorCatalog: Readonly<Record<string, { category: ErrorCategory; retry: boolean }>>;
 }
 
@@ -319,6 +322,8 @@ export interface RpgOnlineClient {
   clearSession(): void;
   getHealth(): Promise<Result<Health>>;
   issueGuest(): Promise<Result<GuestSession>>;
+  /** 保存したトークンを期限を 30 日先にした新しいトークンに取り替える（POST /v1/accounts/token）。期限切れ・壊れたトークンは session の失敗。 */
+  refreshToken(): Promise<Result<GuestSession>>;
   listAnnouncements(): Promise<Result<AnnouncementList>>;
   getRanking(boardId: string, options?: { limit?: number }): Promise<Result<RankingList>>;
   submitScore(boardId: string, entry: { score: number; displayName: string; playerId?: string }): Promise<Result<ScoreAccepted>>;

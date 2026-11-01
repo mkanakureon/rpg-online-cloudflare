@@ -2,7 +2,8 @@
 //
 // scripts/cli-mock.mjs と test/failure-server.test.ts の両方がここを読み込む。本文と見出しの形を変えると
 // テスト「今のCLIモックと同じ形の要求を受け付ける」で API と合っているかが確かめられる。
-// 流れはゲストの発行（guestRequest）→ そのトークンを付けたスコアの投稿（authHeaders・scoreSubmission）→ 同じトークンで
+// 流れはゲストの発行（guestRequest）→ そのトークンでトークンの更新（TOKEN_REFRESH_PATH。本文無し・以後は新しいトークン。
+// client-integration-design.md §4 の 6）→ そのトークンを付けたスコアの投稿（authHeaders・scoreSubmission）→ 同じトークンで
 // セーブを書いて読む（SMOKE_SLOT_ID・saveData・sha256Hex・saveWrite。テスト「CLIモックと同じ流れでゲストのセーブを書いて読み直せる」）→
 // 一覧に出たスロットを消す（テスト「CLIモックと同じ流れでセーブの一覧に出たスロットを消せる」）。
 // 設定はトークンの要らない読み取りで、ゲストの発行より前に読み、ETag を If-None-Match に付けて 304 を受け取る
@@ -43,6 +44,9 @@ export function scoreSubmission(playerId = 'cli-smoke-player') {
 export function guestRequest() {
   return { gameId: 'demo-rpg' };
 }
+
+/** トークンの更新の口（POST。本文無し・Authorization: Bearer に今のトークン。応答は発行と同じ形で、以後は新しいトークンを使う）。 */
+export const TOKEN_REFRESH_PATH = '/v1/accounts/token';
 
 /** スコアの投稿に付ける見出し（発行されたトークンを Authorization: Bearer で送る）。 */
 export function authHeaders(token) {

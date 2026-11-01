@@ -3,7 +3,7 @@
 //
 // 環境の変数 API_BASE_URL（既定 http://127.0.0.1:8787）を読み、ブラウザの SDK（clients/browser/rpg-online-client.mjs）で
 // クライアントを作って scripts/cli-flow.mjs の runCli を呼ぶだけ。自分では送らない（タイムアウト・再試行・Retry-After は SDK。
-// 設計書 docs/guides/working/client-integration-design.md §5.3）。流れ（設定とマスターデータ → スコア → セーブ → イベントの報酬 →
+// 設計書 docs/guides/working/client-integration-design.md §5.3）。流れ（設定とマスターデータ → ゲストの発行とトークンの更新 → スコア → セーブ → イベントの報酬 →
 // プレイヤーデータと実績 → クエスト）と表示は cli-flow.mjs と SDK の runScenario。トークンは SDK が記録にも画面にも出さない。
 //
 // 概要記述: Claude Opus 5.5 — 2026-11-01

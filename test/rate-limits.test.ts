@@ -83,6 +83,7 @@ describe('R1: 数え方（L1）', () => {
       admin: { scope: 'admin-ip', limit: 60, period: 60 },
       playerData: { scope: 'player-data', limit: 60, period: 60 },
       quests: { scope: 'quests', limit: 60, period: 60 },
+      tokenRefresh: { scope: 'token-refresh', limit: 10, period: 60 },
     });
   });
 });

@@ -1,6 +1,7 @@
 /**
  * アカウント A1: トークン（src/core/token.ts）とゲストの発行（POST /v1/accounts/guest）。
  * 名前と確かめることの正は docs/guides/working/account-design.md §6 の A1（スキーマの 2 本は test/schema-conformance.test.ts）。
+ * トークンの更新（POST /v1/accounts/token）の B3 の 3 本の正は docs/guides/working/client-integration-design.md §2.7・§9。
  * L1 はトークンの関数を直に呼ぶ。L2 は src/worker.ts の default.fetch を直に呼び、書き込みだけ APP_ENV=local を渡す。
  *
  * 概要記述: Claude Opus 5.5 — 2026-10-30
@@ -12,7 +13,8 @@ import { idPattern } from '../src/core/ids';
 import {
   LOCAL_DEV_TOKEN_SECRET, parseBearer, signToken, tokenSecret, TOKEN_TTL_SECONDS, verifyToken,
 } from '../src/core/token';
-import { resetRateLimits } from './support/rate-limits';
+import { fillRateLimit, resetRateLimits } from './support/rate-limits';
+import { RATE_LIMITS } from '../src/core/rate-limit-policy';
 
 type TestEnv = { DB: D1Database; APP_ENV: string };
 const baseEnv = env as unknown as TestEnv;
@@ -28,6 +30,12 @@ function postGuestRaw(body: string, e: unknown = localEnv): Promise<Response> {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body,
+  }), e as never);
+}
+function postRefresh(authorization: string | null, e: unknown = localEnv): Promise<Response> {
+  return worker.fetch(new Request(`${base}/v1/accounts/token`, {
+    method: 'POST',
+    headers: authorization === null ? {} : { authorization },
   }), e as never);
 }
 function postGuest(body: unknown, e: unknown = localEnv): Promise<Response> {
@@ -203,5 +211,78 @@ describe('A1: ゲストの発行（L2）', () => {
     await expectError(await postGuest({ gameId: 'demo.rpg' }), 400, 'INVALID_ARGUMENT');
     expect(await count('accounts')).toBe(0);
     expect(await count('game_players')).toBe(0);
+  });
+});
+
+describe('B3: トークンの更新（L2）', () => {
+  it('期限の前のトークンを更新すると同じプレイヤーの新しいトークンを返す', async () => {
+    const issued = await (await postGuest({ gameId: 'demo-rpg' })).json<Issued>();
+    // 期限まで 6 日のトークン（同じ g・p を、期限だけ近くして作る）
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const old = await signToken({ gameId: issued.gameId, playerId: issued.playerId, exp: nowSeconds + 6 * 24 * 60 * 60 }, LOCAL_DEV_TOKEN_SECRET);
+    const res = await postRefresh(`Bearer ${old}`);
+    expect(res.status).toBe(200);
+    const body = await res.json<Issued>();
+    expect(Object.keys(body).sort()).toEqual(['expiresAt', 'gameId', 'playerId', 'token']);
+    expect(body.gameId).toBe('demo-rpg');
+    expect(body.playerId).toBe(issued.playerId);
+    expect(body.token).not.toBe(old);
+    const verified = await verifyToken(body.token, LOCAL_DEV_TOKEN_SECRET, nowSeconds);
+    expect(verified.ok).toBe(true);
+    if (!verified.ok) return;
+    expect(verified.claims).toMatchObject({ gameId: 'demo-rpg', playerId: issued.playerId });
+    // 期限は更新した時刻から 30 日先（前のトークンより先）
+    expect(verified.claims.exp).toBeGreaterThan(nowSeconds + 6 * 24 * 60 * 60);
+    expect(verified.claims.exp - nowSeconds).toBeGreaterThanOrEqual(TOKEN_TTL_SECONDS);
+    expect(verified.claims.exp - nowSeconds).toBeLessThanOrEqual(TOKEN_TTL_SECONDS + 5);
+    expect(body.expiresAt).toBe(new Date(verified.claims.exp * 1000).toISOString());
+    // 表は作らない（トークンは自己完結）
+    expect(await count('accounts')).toBe(1);
+    expect(await count('game_players')).toBe(1);
+    // 新しいトークンで書ける
+    const write = await worker.fetch(new Request(`${base}/v1/rankings/refresh-board`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${body.token}` },
+      body: JSON.stringify({ gameId: 'demo-rpg', playerId: issued.playerId, displayName: 'Refreshed', score: 10 }),
+    }), localEnv as never);
+    expect(write.status).toBe(200);
+    await baseEnv.DB.prepare("DELETE FROM ranking_entries WHERE board_id = 'refresh-board'").run();
+  });
+
+  it('期限切れのトークンは更新できずTOKEN_EXPIREDの401を返す', async () => {
+    const expired = await signToken({ gameId: 'demo-rpg', playerId: 'p-refresh', exp: Math.floor(Date.now() / 1000) - 1 }, LOCAL_DEV_TOKEN_SECRET);
+    await expectError(await postRefresh(`Bearer ${expired}`), 401, 'TOKEN_EXPIRED');
+  });
+
+  it('トークンの更新はAPP_ENVがlocalでなければ403を返す', async () => {
+    const token = await signToken({ gameId: 'demo-rpg', playerId: 'p-refresh', exp: Math.floor(Date.now() / 1000) + 3600 }, LOCAL_DEV_TOKEN_SECRET);
+    for (const e of [baseEnv, { ...baseEnv, APP_ENV: 'production' }, { ...baseEnv, APP_ENV: 'disabled', AUTH_TOKEN_SECRET: 'x'.repeat(32) }]) {
+      await expectError(await postRefresh(`Bearer ${token}`, e), 403, 'NOT_READY_FOR_PRODUCTION');
+      // トークンが無くても、トークンを見る前に断る
+      await expectError(await postRefresh(null, e), 403, 'NOT_READY_FOR_PRODUCTION');
+    }
+  });
+
+  it('トークンの更新は壊れたトークンと止めたプレイヤーと上限を超えた更新を断る', async () => {
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    const token = await signToken({ gameId: 'demo-rpg', playerId: 'p-refresh', exp }, LOCAL_DEV_TOKEN_SECRET);
+    await expectError(await postRefresh(null), 401, 'UNAUTHENTICATED');
+    await expectError(await postRefresh(`Bearer ${flip(token, token.length - 2)}`), 401, 'UNAUTHENTICATED');
+    await expectError(await postRefresh(`Bearer ${await signToken({ gameId: 'demo-rpg', playerId: 'p-refresh', exp }, key)}`), 401, 'UNAUTHENTICATED');
+    // 止めたプレイヤー（利用制限の後に確かめる）
+    await baseEnv.DB.prepare("INSERT OR REPLACE INTO player_bans (game_id, player_id, reason, banned_at) VALUES ('demo-rpg', 'p-refresh', 'test', 1)").run();
+    try {
+      await expectError(await postRefresh(`Bearer ${token}`), 403, 'PLAYER_BANNED');
+    } finally {
+      await baseEnv.DB.prepare("DELETE FROM player_bans WHERE game_id = 'demo-rpg' AND player_id = 'p-refresh'").run();
+    }
+    // プレイヤーごとに 60 秒に 10 回
+    await fillRateLimit(baseEnv.DB, RATE_LIMITS.tokenRefresh, 'demo-rpg:p-refresh');
+    const limited = await postRefresh(`Bearer ${token}`);
+    await expectError(limited, 429, 'RATE_LIMITED');
+    expect(limited.headers.get('Retry-After')).toMatch(/^[1-9][0-9]*$/);
+    // ほかのプレイヤーは別に数える
+    const other = await signToken({ gameId: 'demo-rpg', playerId: 'p-refresh-2', exp }, LOCAL_DEV_TOKEN_SECRET);
+    expect((await postRefresh(`Bearer ${other}`)).status).toBe(200);
   });
 });

@@ -29,12 +29,33 @@
 ```
 
 - `playerId`はゲームごとに分けた公開用の ID（UUID）。内部のアカウント ID は応答にもトークンにも入れない。同じ本文で 2 回呼ぶと、別のアカウントと別の`playerId`になる。
-- `token`は`v1.<本文>.<署名>`（HMAC-SHA256）で、期限は 30 日（`expiresAt`）。期限が切れたらゲストを発行し直す（前のプレイヤーは引き継がない）。
+- `token`は`v1.<本文>.<署名>`（HMAC-SHA256）で、期限は 30 日（`expiresAt`）。期限の前なら`POST /v1/accounts/token`（次の節）で期限を 30 日先にした新しいトークンに取り替えられる。期限が切れたらゲストを発行し直す（前のプレイヤーは引き継がない）。
 - 登録の無い`gameId`は**404 `NOT_FOUND`**（`message`は`Unknown game`）。アカウントはどのゲームにも要る土台なので、ゲームの機能の設定（`game_modules`）は見ない。
 - 書込み系 API なので、`npm run dev`でローカル実行し`APP_ENV=local`を与えた時のみ発行できる（ほかは本文を読む前に**403 `NOT_READY_FOR_PRODUCTION`**）。
 - 同じ IP（`CF-Connecting-IP`）からは 60 秒の窓に 10 回、同じゲームへは 60 秒の窓に 300 回まで。超えると**429 `RATE_LIMITED`**と`Retry-After`で、行を作らない（下の「利用制限」）。
 - 確かめの順: `APP_ENV`の守り（403）→ IP の利用制限（429。本文を読む前）→ 本文の JSON（400 `INVALID_JSON`）→ 欄の形（400 `INVALID_ARGUMENT`）→ ゲームの登録（404 `NOT_FOUND`）→ ゲームの利用制限（429）→ 書き込み。
 - 発行した日（UTC）の「遊んだ」の印を、新しい人として同じ書き込みで 1 行残す（下の「管理の API」の`GET /v1/admin/analytics/players`が数える。応答は変わらない）。
+
+## POST /v1/accounts/token
+
+期限の前の正しいトークンを、同じゲームと同じプレイヤー（トークンの`g`・`p`）で、期限を更新した時刻から 30 日先にした新しいトークンに取り替える。本文は要らない（送っても読まない）。表は作らない（トークンは自己完結のまま）。設計の正は`docs/guides/working/client-integration-design.md` §2.7（トレードオフは`docs/guides/working/account-design.md` §8 の決めること 3）。
+
+見出し: `Authorization: Bearer <token>`（`POST /v1/accounts/guest`か、この口が前に返したもの）。
+
+レスポンス例（200。ゲストの発行と同じ形）:
+
+```json
+{"gameId":"demo-rpg","playerId":"6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f","token":"v1.eyJnIjoiZGVtby1ycGcifQ.c2lnbmF0dXJl","expiresAt":"2026-12-29T00:00:00.000Z"}
+```
+
+- 前のトークンも自分の期限までは使える（取り消さない）。応答が届かずに送り直しても、同じプレイヤーのトークンが 1 つ余るだけ。
+- 期限が切れたトークンは**401 `TOKEN_EXPIRED`**、`Authorization`が無い・形か署名が正しくないトークンは**401 `UNAUTHENTICATED`**で、どちらも更新できない（ゲストを発行し直す。前のプレイヤーは引き継がない）。
+- 止めたプレイヤーは**403 `PLAYER_BANNED`**（下の「エラーレスポンス」）。
+- 同じプレイヤーからは 60 秒の窓に 10 回まで。超えると**429 `RATE_LIMITED`**と`Retry-After`（下の「利用制限」）。
+- 書込み系 API なので`APP_ENV=local`の時のみ受け付ける（ほかはトークンを見る前に**403 `NOT_READY_FOR_PRODUCTION`**）。
+- 確かめの順（ほかのトークンの口と同じ）: `APP_ENV`の守り（403）→ トークン（401）→ プレイヤーの利用制限（429）→ 止めた印（403 `PLAYER_BANNED`）→ 新しいトークン。
+- 「遊んだ」の印には数えない（数えるのはゲームの機能の口とゲストの発行）。
+- クライアントは、期限までの残りが`x-client-policy`の`tokenRefreshBeforeSeconds`（7 日）を切ったら、トークンの要る次の要求の前にこの口を呼ぶ（下の「クライアントの決まり」）。
 
 ## GET /v1/announcements?gameId=demo-rpg
 
@@ -407,7 +428,7 @@
 - `from`・`to`は UTC の`YYYY-MM-DD`で両方要る（両端を含む）。`from`が`to`より後・日数が 92 を越える・`to`がサーバーの今日（UTC）より後・形の外れは**400 `INVALID_ARGUMENT`**。日の区切りは全部のゲームで UTC の 0 時（日本の 9 時）。
 - `days`は`from`〜`to`の全部の日の昇順で、数の無い日は 0。`activePlayers`はその日の DAU、`newPlayers`はその日にゲストを発行した人の数。
 - `cohorts`は新しい人のいた日（0 日目）ごとに、ちょうど 1・7・30 日目に遊んだ人の数（`retained.d1`・`d7`・`d30`）。その日がサーバーの今日より後なら`null`（まだ決まらない）。新しい人のいない日は行が無い。**継続率**（`retained.dN / newPlayers`）の割り算はクライアントがする（管理コマンドの`analytics`が出す）。
-- **トークンの 30 日の期限による偏り**: ゲストのトークンは 30 日で切れ、更新の口が無い（切れたらゲストを発行し直し、前のプレイヤーを引き継がない）。そのため 30 日目は発行の時刻より前に遊んだときだけ数えられ、31 日目からは同じ人が新しい`playerId`で戻る。**D30 は低く、`newPlayers`は高く出る**（D1・D7 は効かない）。トークンの更新か、アカウントの引き継ぎが入るまでの限界。
+- **トークンの 30 日の期限による偏り**: ゲストのトークンは 30 日で切れる（切れたらゲストを発行し直し、前のプレイヤーを引き継がない）。期限の前に更新の口（`POST /v1/accounts/token`）で取り替えたクライアントは同じ`playerId`のまま続くが、更新しないまま 30 日を越えた人は新しい`playerId`で戻る。その分 **D30 は低く、`newPlayers`は高く出る**（D1・D7 は効かない）。端末をまたぐ引き継ぎは無く、アカウントの引き継ぎが入るまでの限界。
 - 記録は`0017`のマイグレーションの後から始まり、それより前に発行したプレイヤーは新しい人に数えない。読み取りなので監査のログに残さない。機能の設定（`game_modules`）は見ない。
 
 ### GET /v1/admin/analytics/grants?gameId=demo-rpg&from=2026-10-01&to=2026-10-31
@@ -701,7 +722,7 @@
 
 管理の口だけのコード（ゲームのクライアントの口は返さない。形の正は`openapi/rpg-online-admin.v1.json`）: `INSUFFICIENT_BALANCE`（409）。
 
-- **`PLAYER_BANNED`（403）**: トークンの要る口（スコアの投稿・セーブの 4 つ・所持品・受領の履歴・イベントの一覧と受け取り・プレイヤーデータの読み書き・クエストの一覧と受け取り）で、トークンのプレイヤーが管理の口（`PUT /v1/admin/players/{playerId}/ban`）で止められているとき。`message`は`Player is banned`で、止めた理由・期限は返さない。トークンは正しいので、ゲストを発行し直しても同じプレイヤーには戻らない（別の`playerId`の新しいゲストになる）。確かめるのはプレイヤーの利用制限の後（止めた人の要求も数える）で、トークンの無い要求（401）・本文の形の外れ（400）はそれより先に断る。止めた人の要求は何も書かない。トークンを読まない口（お知らせ・ランキングの`GET`・設定）は止めない。
+- **`PLAYER_BANNED`（403）**: トークンの要る口（トークンの更新・スコアの投稿・セーブの 4 つ・所持品・受領の履歴・イベントの一覧と受け取り・プレイヤーデータの読み書き・クエストの一覧と受け取り）で、トークンのプレイヤーが管理の口（`PUT /v1/admin/players/{playerId}/ban`）で止められているとき。`message`は`Player is banned`で、止めた理由・期限は返さない。トークンは正しいので、ゲストを発行し直しても同じプレイヤーには戻らない（別の`playerId`の新しいゲストになる）。確かめるのはプレイヤーの利用制限の後（止めた人の要求も数える）で、トークンの無い要求（401）・本文の形の外れ（400）はそれより先に断る。止めた人の要求は何も書かない。トークンを読まない口（お知らせ・ランキングの`GET`・設定）は止めない。
 - **`INSUFFICIENT_BALANCE`（409。管理の口だけ）**: 管理の所持品と通貨の増減で、取り消すと残高が 0 未満になるとき。何も書かない。
 - **`PLAYER_DATA_LIMIT_EXCEEDED`（409）**: プレイヤーデータの書き込み（`POST /v1/player-data`）で、`add`のキーの書いた後の値がキーの値の上限を超えるとき。その書き込みを全部断り、何も書かない。
 - **`IDEMPOTENCY_KEY_REUSED`（422）**: 同じ`Idempotency-Key`を違う中身に使ったとき。プレイヤーデータの書き込み（同じプレイヤーの鍵）と、管理の所持品と通貨の増減（同じゲームの鍵）が返す。何も書かない。
@@ -710,12 +731,13 @@
 
 ## 利用制限
 
-ゲストの発行・スコアの投稿・セーブの操作・所持品の読み取り・イベントの一覧と報酬の受け取り・プレイヤーデータの読み書き・クエストの一覧と報酬の受け取り・管理の API は、決めた秒の窓（固定。窓の始まりは UNIX 秒を窓の長さで割り切った時刻）の中の回数を数え、上限を超えると断る。設計の正は`docs/guides/working/abuse-protection-design.md`。
+ゲストの発行・トークンの更新・スコアの投稿・セーブの操作・所持品の読み取り・イベントの一覧と報酬の受け取り・プレイヤーデータの読み書き・クエストの一覧と報酬の受け取り・管理の API は、決めた秒の窓（固定。窓の始まりは UNIX 秒を窓の長さで割り切った時刻）の中の回数を数え、上限を超えると断る。設計の正は`docs/guides/working/abuse-protection-design.md`。
 
 | 口 | 数える単位 | 上限 |
 | --- | --- | --- |
 | `POST /v1/accounts/guest` | IP（`CF-Connecting-IP`。見出しが無ければ全員で 1 つ） | 60 秒に 10 回 |
 | `POST /v1/accounts/guest` | ゲーム（本文の`gameId`） | 60 秒に 300 回 |
+| `POST /v1/accounts/token`（単位の名前`token-refresh`） | プレイヤー（トークンのゲームとプレイヤー。ほかの操作とは別に数える） | 60 秒に 10 回 |
 | `POST /v1/rankings/{boardId}` | プレイヤー（トークンのゲームとプレイヤー） | 60 秒に 30 回 |
 | `PUT`・`GET`・`DELETE /v1/saves/{slotId}`と`GET /v1/saves` | プレイヤー（トークンのゲームとプレイヤー。4 つの操作を合わせて数え、スコアの投稿とは別に数える） | 60 秒に 60 回 |
 | `GET /v1/inventory`・`GET /v1/inventory/history`・`GET /v1/events`・`POST /v1/events/{eventId}/claim` | プレイヤー（トークンのゲームとプレイヤー。報酬の操作として 4 つを合わせて数え、セーブの操作とは別に数える） | 60 秒に 60 回 |
@@ -744,7 +766,7 @@
 
 3 つのクライアント（Unreal・Unity・ブラウザ）と CLI モックが同じに動くための、タイムアウト・再試行・`Retry-After`の待ち・エラーコードの扱いの決まり。**値の正はスキーマ`openapi/rpg-online.v1.json`**で、ここには値を写さない。設計（理由と案）の正は`docs/guides/working/client-integration-design.md` §2・§3。
 
-- 最上位の`x-client-policy`: 1 回の要求のタイムアウト（`timeoutSeconds`）・試す回数（`maxAttempts`。初回を含む）・再試行の前の待ち（`backoff`。指数・上限・揺らぎ）・429 の`Retry-After`を待つ上限と回数（`retryAfter`）・再試行する状態（`retryStatuses`。ほかに回線断・タイムアウトも再試行する）・エラーコードの表（`errorCatalog`。コードごとの画面の文の種類`category`と自動の再試行の可否`retry`）。
+- 最上位の`x-client-policy`: 1 回の要求のタイムアウト（`timeoutSeconds`）・試す回数（`maxAttempts`。初回を含む）・再試行の前の待ち（`backoff`。指数・上限・揺らぎ）・429 の`Retry-After`を待つ上限と回数（`retryAfter`）・再試行する状態（`retryStatuses`。ほかに回線断・タイムアウトも再試行する）・トークンを更新する時期（`tokenRefreshBeforeSeconds`。期限までの残りがこの秒を切ったら、トークンの要る次の要求の前に`POST /v1/accounts/token`で更新する。期限切れ・壊れたトークンは更新できず、ゲストを自動で発行し直さずに画面の文の種類`session`を返す）・エラーコードの表（`errorCatalog`。コードごとの画面の文の種類`category`と自動の再試行の可否`retry`）。
 - 操作ごとの`x-retry`: 自動で送り直してよいかの種類。`safe`（読むだけ）・`natural-key`（一意の鍵か最高値で同じ結果）・`idempotency-key`（同じ`Idempotency-Key`と同じ本文で送り直す）・`new-resource`（送り直すと別のものができるが害が無い）は再試行してよい。`revision`（`baseRevision`で止まる）は自動で送り直さず、結果が分からないときは`GET`で読み直して確かめる。
 - 再試行は「状態が`retryStatuses`か回線断・タイムアウト」かつ「操作の`x-retry`が`revision`でない」ときだけ。`retryStatuses`に無い状態は送り直さない（同じ要求を送っても結果は変わらない）。429 は`Retry-After`の秒を`retryAfter`の上限まで待って送り直し、見出しが無い・数でない・上限を超えるときは待たずに`RATE_LIMITED`を返す。
 - `errorCatalog`に無いコード・JSON でない 4xx は種類`unknown`、コードの無い回線断・タイムアウト・5xx は`network`として扱う（新しいサーバーがコードを足しても古いクライアントが壊れない）。サーバーの`message`は画面に出さない。
