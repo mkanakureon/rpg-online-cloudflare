@@ -749,6 +749,7 @@
 - 再試行は「状態が`retryStatuses`か回線断・タイムアウト」かつ「操作の`x-retry`が`revision`でない」ときだけ。`retryStatuses`に無い状態は送り直さない（同じ要求を送っても結果は変わらない）。429 は`Retry-After`の秒を`retryAfter`の上限まで待って送り直し、見出しが無い・数でない・上限を超えるときは待たずに`RATE_LIMITED`を返す。
 - `errorCatalog`に無いコード・JSON でない 4xx は種類`unknown`、コードの無い回線断・タイムアウト・5xx は`network`として扱う（新しいサーバーがコードを足しても古いクライアントが壊れない）。サーバーの`message`は画面に出さない。
 - コードを足すときは、`ErrorCode`の列挙と`errorCatalog`を同じコミットで直す（`test/client-policy.test.ts`が揃いを見張る）。
+- この決まりで送る実装は、ブラウザの SDK`clients/browser/rpg-online-client.mjs`（型は`.d.mts`。値はスキーマから書き写し、揃いは`test/browser-sdk.test.ts`が見張る）。CLI モック（`scripts/cli-mock.mjs`）は SDK で送り、流れと表示は`scripts/cli-flow.mjs`の`runCli`。失敗したら画面の文の種類と理由を出して終了コード 1 で止まる。
 
 ## 将来予定（未実装）
 

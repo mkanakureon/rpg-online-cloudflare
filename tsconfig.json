@@ -13,6 +13,7 @@
     "src/**/*.ts",
     "test/**/*.ts",
     "worker-configuration.d.ts",
-    "node_modules/@cloudflare/vitest-plugin/types/cloudflare-test.d.ts"
+    "node_modules/@cloudflare/vitest-plugin/types/cloudflare-test.d.ts",
+    "clients/**/*.d.mts"
   ]
 }
