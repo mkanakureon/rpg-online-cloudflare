@@ -36,8 +36,8 @@ npm run typecheck
 - Workerのローカル既定URL: `http://127.0.0.1:8787`
 - `API_BASE_URL=http://127.0.0.1:8787 npm run cli:smoke` で接続先変更
 - ローカルD1のデータは `.wrangler/` 以下に保存され、Gitには含めません。
-- `wrangler.jsonc` のD1 IDは**ローカル専用のダミー**です。本番デプロイには実際のD1 IDと環境分離・認証実装が必要です。
-- この試作は安全側の設定として`APP_ENV=disabled`を既定にしています。`npm run dev`はローカル起動時だけ`--var APP_ENV:local`を与えるため、スコア投稿ができます。**無認証APIのデプロイは行わないでください。**
+- `wrangler.jsonc` のD1 IDは**ローカル専用のダミー**です。自分の Cloudflare の staging・production に置く手順（環境の手本・秘密・リモートの D1 のマイグレーション）は [デプロイの説明書](docs/guides/manuals/deploy.md) にあります。
+- この試作は安全側の設定として`APP_ENV=disabled`を既定にしています。`npm run dev`はローカル起動時だけ`--var APP_ENV:local`を与えるため、スコア投稿ができます。`local` でない環境では書き込みの口が全部 403 `NOT_READY_FOR_PRODUCTION` になるため、いまデプロイしても動くのは読み取り（お知らせ・ランキング・設定）だけです。ゲストのトークンは本人確認ではありません。**`APP_ENV` を `local` にしてデプロイしないでください**（トークンの鍵が無いと公開の既定の鍵に戻ります）。
 
 ## API
 
