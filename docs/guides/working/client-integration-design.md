@@ -105,8 +105,9 @@ Phase 1 の残り「エラーコード、タイムアウト、ページングを
 | `writePlayerData` | `POST /v1/player-data` | `idempotency-key` | 同じ鍵と同じ本文なら 200 で同じ本文。鍵の期限 30 日 |
 | `listQuests` | `GET /v1/quests` | `safe` | — |
 | `claimQuest` | `POST /v1/quests/{questId}/claim` | `natural-key` | `claimEventReward` と同じ |
+| `refreshToken`（B3 で足す） | `POST /v1/accounts/token` | `new-resource` | 期限を先にした別のトークンができる。前の応答が届かなかった方のトークンも期限まで使えるが、同じプレイヤーなので害が無い（§2.7 の利用制限で抑える） |
 
-- 操作は 19 個（`openapi/rpg-online.v1.json` の全部）。管理の口（`openapi/rpg-online-admin.v1.json`）はゲームのクライアントが呼ばないので範囲の外（管理の CLI の決まりは `admin-design.md`）。
+- 操作は 19 個（`openapi/rpg-online.v1.json` の全部。B3 の `refreshToken` で 20 個）。管理の口（`openapi/rpg-online-admin.v1.json`）はゲームのクライアントが呼ばないので範囲の外（管理の CLI の決まりは `admin-design.md`）。
 - `Idempotency-Key` を `writePlayerData` 以外の口に付けても、サーバーは読んで無視する（`docs/api-contract.md` の「利用制限」）。クライアントは付けない。
 
 ### 2.3 429 の `Retry-After`（§11 の決めること 3）
@@ -260,6 +261,7 @@ Phase 3 の完了条件の「同一の API シナリオ」は、**いまの CLI 
 - **推し: CLI モックの送り方（`call()`）を SDK に置き換える。要求の形の関数（`scripts/cli-requests.mjs`）は残す。**
   - CLI モックはタイムアウトと再試行を SDK から得る（K4 の `CLIはタイムアウトしたら決めた回数だけ再試行して失敗を表示する` をここで作る）。
   - 互換の試験 `今のCLIモックと同じ形の要求を受け付ける` と、ほかの CLI モックの流れの試験は `scripts/cli-requests.mjs` を読み続けるので、名前も中身も変わらない。
+  - CLI モックの流れと表示は、読み込んでも何も送らない関数（`scripts/cli-flow.mjs` の `runCli({ client, log })`。終了コードを返す）に分け、`scripts/cli-mock.mjs` は環境の変数を読んでそれを呼ぶ入口だけにする。K4 の試験は Workers のランタイムの中で `runCli` を、応答しない偽の `fetch` と差し替えた `sleep` の SDK で呼び、終了コード 1 と理由の行を見る（`scripts/cli-mock.mjs` は読み込むとすぐ送るので試験から読めない）。
   - SDK の要求の形は `scripts/cli-requests.mjs` を読み込まない（`clients/` から `scripts/` へ依存しない）。同じ形であることは B2 の試験 `SDKでCLIモックと同じシナリオを通せる` が Worker に当てて見る。
 - CLI モックは画面の文の種類（§2.5）と理由を出して終了コード 1 で止まる。
 
@@ -413,6 +415,8 @@ Phase 3 の完了条件の「同一の API シナリオ」は、**いまの CLI 
 | `demo-rpgはannouncementsとrankingsとsavesとconfigとinventoryとeventsとplayer-dataとquestsを使う設定で登録される` | — | 更新の口と CORS は `src/core/` に置き、ゲームの機能（`game_modules`）を足さない。変わらない |
 | `モジュールの一覧はannouncementsとrankingsとsavesとconfigとinventoryとeventsとplayer-dataとquestsでルートが重ならない` | — | 同上。モジュールを足さない。CORS の `OPTIONS` はルーターの前で答える（モジュールのルートにしない） |
 | `今のCLIモックと同じ形の要求を受け付ける` | B2 | 変わらない。CLI モックの送り方を SDK にしても、要求の形は `scripts/cli-requests.mjs` のまま。互換を見張り続ける |
+| `利用制限の回数と窓は定数のモジュールにある` | B3 | 更新の口の単位（`tokenRefresh: { scope: 'token-refresh', limit: 10, period: 60 }`）を足すので、期待の表に 1 行足す。名前は変えない。`abuse-protection-design.md` の単位の表にも同じコミットで行を足す |
+| `スキーマの全部の操作が再試行の種類を持つ`（B1 で作る） | B3 | `refreshToken` の `new-resource`（§2.2）を期待の表に足す。名前は変えない |
 | `CLIモックの通しの流れを続けて2回回しても利用制限に掛からない` | B3 | CLI モックの通しにトークンの更新（§4 の 6）を足すので、試験の流れにも更新を 1 回足す。更新の口の利用制限（プレイヤーごと 60 秒に 10 回）に 2 回の通しで掛からないことを見る |
 
 ## 11. 決めること
@@ -447,7 +451,7 @@ ADR 0001・ADR 0002 と、これまでの 12 の設計書の決定は前提で�
 | 束 | 中身 | 前の束 | 変えるもの | 人の確かめ |
 | --- | --- | --- | --- | --- |
 | B1 | スキーマの `x-client-policy`・`x-retry`（§3）と試験。`docs/api-contract.md` に「クライアントの決まり」の節（値の正はスキーマと書く）とページングの 1 行。ロードマップの Phase 1 の「エラーコード、タイムアウト、ページングを確定」に印 | — | `openapi/`・`test/`・`docs/` | — |
-| B2 | ブラウザの SDK（`clients/browser/`）・CLI モックの送り方を SDK に・K4 の `CLIはタイムアウトしたら決めた回数だけ再試行して失敗を表示する` | B1 | `clients/`・`scripts/cli-mock.mjs`・`test/`・`tsconfig.json` | — |
+| B2 | ブラウザの SDK（`clients/browser/`）・CLI モックの送り方を SDK に（流れは `scripts/cli-flow.mjs`、`scripts/cli-mock.mjs` は入口だけ。§5.3）・K4 の `CLIはタイムアウトしたら決めた回数だけ再試行して失敗を表示する` | B1 | `clients/`・`scripts/cli-mock.mjs`・`scripts/cli-flow.mjs`・`test/`・`tsconfig.json` | — |
 | B3 | トークンの更新の口（`src/core/`・スキーマ・契約・`account-design.md` の決めること 3 の決め直し）と SDK の更新・CLI モックの通しに 1 手順・K4 の `旧CLIはスキーマ変更後のAPIでもランキングを送って読める` | B2 | `src/`・`openapi/`・`scripts/`・`clients/`・`test/`・`docs/` | — |
 | B4 | ローカルだけの CORS とブラウザのサンプル | B3 | `src/`・`clients/`・`test/` | H1 |
 | B5 | Unity のクライアント層（`clients/unity/`）と専用 PC の手順書 | B3 | `clients/`・`test/`・`docs/` | H2〜H4 |
