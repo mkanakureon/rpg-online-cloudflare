@@ -12,6 +12,7 @@ Mac の無人の回では C# をビルドしない。Mac で機械が確かめ�
 | Unity の版 | 2021.3 LTS 以上を前提に書いた（`clients/unity/package.json` の `unity` が `2021.3`） | **要確認**: 専用 PC の Unity の版。`Awaitable`（2023.1 から）は使っていない |
 | Unity の組み込みの包み | `com.unity.modules.unitywebrequest`・`com.unity.modules.jsonserialize`（どちらも Unity に同梱） | **要確認**: 依存の版の書き方 `1.0.0` で取り込めるか |
 | ビルドの先 | エディタの再生（Play）で見る。Windows・Mac のスタンドアロンを前提にした | **要確認**: WebGL では `Task.Delay` が使えず、CORS も要る（ローカルの CORS は `127.0.0.1:5173`・`localhost:5173` だけ）。WebGL は範囲の外 |
+| http での送信 | Worker は `http://`（TLS 無し）で待つ | **要確認**: Unity 2022.1 以降は Player Settings → Other Settings の「Allow downloads over HTTP」を「Always allowed」（開発ビルドだけなら「Allowed in Development Builds」）にしないと、送る前に断られる（画面に `network: InvalidOperationException` が出る）。2021.3 では要らないはず |
 | Mac | このリポジトリと Node.js 22.14.0。`npm install` 済み | Mac の手順は `CLAUDE.md` のコマンドの表 |
 | 同じ LAN | 専用 PC から Mac の IP に TCP の 8787 で届く | **要確認**: Mac のファイアウォールが 8787 の受け付けを許すか |
 

@@ -242,8 +242,10 @@ namespace RpgOnline
         private Task<RpgOnlineResult> RefreshOnce()
         {
             if (refreshing != null) return refreshing;
-            refreshing = RefreshCore();
-            return refreshing;
+            var task = RefreshCore();
+            // セッションが無いときは同期で終わり、finally が先に走る。終わった Task を持ち続けないよう、進行中のときだけ覚える
+            if (!task.IsCompleted) refreshing = task;
+            return task;
         }
 
         private async Task<RpgOnlineResult> RefreshCore()
@@ -293,7 +295,15 @@ namespace RpgOnline
                 }
                 foreach (var h in headers) req.SetRequestHeader(h.Key, h.Value);
                 req.timeout = RpgOnlineClientPolicy.TimeoutSeconds;
-                await AwaitOperation(req.SendWebRequest());
+                try
+                {
+                    await AwaitOperation(req.SendWebRequest());
+                }
+                catch (Exception e) when (e is InvalidOperationException || e is ArgumentException || e is UriFormatException)
+                {
+                    // 送る前に断られた（http が許されていない・URL が不正など）。例外にせず回線断として返す
+                    return new Outcome { Failed = true, Failure = "network: " + e.GetType().Name };
+                }
 
                 // 応答が届かなかった（回線断・タイムアウト）ときは responseCode が 0
                 if (req.responseCode == 0)
