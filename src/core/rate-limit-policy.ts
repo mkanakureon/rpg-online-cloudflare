@@ -2,7 +2,8 @@
 //
 // 数を変えるときは、ここと docs/guides/working/abuse-protection-design.md §2 の表と docs/api-contract.md の「利用制限」を
 // 同じコミットで直す。上げるのは互換を壊さない（通っていた要求は通る）。下げると壊す。
-// scope は表 rate_limit_counters の scope の列に入る名前。saves は R2 でセーブのモジュールが、rewards は E1 で所持品のモジュールが、
+// scope は表 rate_limit_counters の scope の列に入る名前。guest-ip（IP ごと）と guest-game（ゲームごと）はゲストの発行
+// （src/core/accounts.ts）が、score はスコアの投稿（ランキングのモジュール）が、saves は R2 でセーブのモジュールが、rewards は E1 で所持品のモジュールが、
 // admin は O1 で管理の口（src/core/admin/routes.ts）が、playerData は U1 でプレイヤーデータのモジュールが、
 // quests は Q1 でクエストのモジュールが、tokenRefresh は B3 でトークンの更新（src/core/accounts.ts）が使う。
 //

@@ -13,6 +13,6 @@ export type Route = {
   handle(req: Request, env: Env, match: RegExpExecArray, url: URL, known: readonly string[]): Promise<Response>;
 };
 export type GameModule = {
-  name: string;                          // 'announcements' | 'rankings' | 'saves'（game_modules の module と同じ）
+  name: string;                          // announcements・rankings・saves・config・inventory・events・player-data・quests の 8 つ（正は src/modules/index.ts。game_modules の module と同じ）
   routes: Route[];
 };
