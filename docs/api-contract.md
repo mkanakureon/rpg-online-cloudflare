@@ -738,7 +738,7 @@
 
 - 要求の知らない欄は無視する（保存しない）。
 - `/v1/`の中では、欄は**足すだけ**。消す・意味を変えるときは`/v2/`を足す。
-- 新しく続きのある一覧を足すときは、カーソルの形（`limit`・`before`・`nextBefore`。いまの`GET /v1/inventory/history`と同じ）だけを使い、`offset`は使わない（行が増えるとずれるため）。ほかの一覧は件数の上限で切り、続きの欄を持たない。
+- 新しく続きのある一覧を足すときは、カーソルの形（`limit`・`before`・`nextBefore`。いまの`GET /v1/inventory/history`と管理の監査のログ`GET /v1/admin/audit`と同じ）だけを使い、`offset`は使わない（行が増えるとずれるため）。ほかの一覧は件数の上限で切り、続きの欄を持たない。
 
 ## クライアントの決まり
 
@@ -746,7 +746,7 @@
 
 - 最上位の`x-client-policy`: 1 回の要求のタイムアウト（`timeoutSeconds`）・試す回数（`maxAttempts`。初回を含む）・再試行の前の待ち（`backoff`。指数・上限・揺らぎ）・429 の`Retry-After`を待つ上限と回数（`retryAfter`）・再試行する状態（`retryStatuses`。ほかに回線断・タイムアウトも再試行する）・エラーコードの表（`errorCatalog`。コードごとの画面の文の種類`category`と自動の再試行の可否`retry`）。
 - 操作ごとの`x-retry`: 自動で送り直してよいかの種類。`safe`（読むだけ）・`natural-key`（一意の鍵か最高値で同じ結果）・`idempotency-key`（同じ`Idempotency-Key`と同じ本文で送り直す）・`new-resource`（送り直すと別のものができるが害が無い）は再試行してよい。`revision`（`baseRevision`で止まる）は自動で送り直さず、結果が分からないときは`GET`で読み直して確かめる。
-- 再試行は「状態が`retryStatuses`か回線断・タイムアウト」かつ「操作の`x-retry`が`revision`でない」ときだけ。400・401・403・404・409・413・422 は送り直さない。
+- 再試行は「状態が`retryStatuses`か回線断・タイムアウト」かつ「操作の`x-retry`が`revision`でない」ときだけ。`retryStatuses`に無い状態は送り直さない（同じ要求を送っても結果は変わらない）。429 は`Retry-After`の秒を`retryAfter`の上限まで待って送り直し、見出しが無い・数でない・上限を超えるときは待たずに`RATE_LIMITED`を返す。
 - `errorCatalog`に無いコード・JSON でない 4xx は種類`unknown`、コードの無い回線断・タイムアウト・5xx は`network`として扱う（新しいサーバーがコードを足しても古いクライアントが壊れない）。サーバーの`message`は画面に出さない。
 - コードを足すときは、`ErrorCode`の列挙と`errorCatalog`を同じコミットで直す（`test/client-policy.test.ts`が揃いを見張る）。
 
