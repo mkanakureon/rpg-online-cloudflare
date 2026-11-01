@@ -1,7 +1,9 @@
 /**
  * 配布の試験 P1: LICENSE（MIT）・README のライセンスとサポートの範囲の節・配るものに第三者の包みが入らないこと・ADR 0003 の決定。
  * P2: デプロイの説明書 docs/guides/manuals/deploy.md の環境の手本（最初の ```jsonc の塊）・秘密の名前・冒頭の 403・npm run のコマンド。
- * 名前と見ることの正は docs/guides/working/distribution-design.md §9 の P1 の 4 本・P2 の 5 本。
+ * P3: 運用の説明書 docs/guides/manuals/ の backup-restore・cost-alerts・limits-and-costs・versioning（保持の日数を掃除の定数と比べる・料金の額を書かない・
+ * 復元が上書きだと書く・通知の宛先をファイルに書かない・Unity と Unreal の層の版が版の説明書の表と同じ）。
+ * 名前と見ることの正は docs/guides/working/distribution-design.md §9 の P1 の 4 本・P2 の 5 本・P3 の 5 本。
  * 文書は `?raw` で文字列として読み（test/raw-imports.d.ts）、clients/ の下のファイルは import.meta.glob で集める。
  *
  * 概要記述: Claude Opus 5.5 — 2026-11-01
@@ -14,7 +16,16 @@ import deploy from '../docs/guides/manuals/deploy.md?raw';
 import envSource from '../src/core/env.ts?raw';
 import wranglerText from '../wrangler.jsonc?raw';
 import pkg from '../package.json';
+import openapi from '../openapi/rpg-online.v1.json';
 import unityPkg from '../clients/unity/package.json';
+import backupManual from '../docs/guides/manuals/backup-restore.md?raw';
+import costManual from '../docs/guides/manuals/cost-alerts.md?raw';
+import limitsManual from '../docs/guides/manuals/limits-and-costs.md?raw';
+import versionManual from '../docs/guides/manuals/versioning.md?raw';
+import cleanupSource from '../src/core/cleanup.ts?raw';
+import auditSource from '../src/core/admin/audit.ts?raw';
+import opsSecurity from '../docs/guides/decisions/operations-security.md?raw';
+import unrealPlugin from '../clients/unreal/RpgOnlineClient/RpgOnlineClient.uplugin?raw';
 
 // Vite が試験を変換するときに展開する（型は tsconfig の types に無いのでここで宣言する）
 declare global {
@@ -158,5 +169,80 @@ describe('配布（P2）', () => {
     expect(used.length).toBeGreaterThan(0);
     const scripts = Object.keys(pkg.scripts);
     expect(used.filter((c) => !scripts.includes(c))).toEqual([]);
+  });
+});
+
+/** 掃除の定数（src/core/cleanup.ts の RETENTION_DAYS）を表の名前と日数の組で読む。監査の日数は src/core/admin/audit.ts から読む。 */
+function retentionFromSource(): Array<[string, number]> {
+  const auditDays = Number(auditSource.match(/AUDIT_RETENTION_DAYS\s*=\s*(\d+)/)?.[1]);
+  const body = cleanupSource.match(/RETENTION_DAYS\s*=\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+  return [...body.matchAll(/(\w+):\s*(\w+)/g)].map((m) => [m[1], m[2] === 'AUDIT_RETENTION_DAYS' ? auditDays : Number(m[2])]);
+}
+const opsManuals = { 'backup-restore.md': backupManual, 'cost-alerts.md': costManual, 'limits-and-costs.md': limitsManual, 'versioning.md': versionManual };
+
+describe('配布（P3）', () => {
+  it('利用上限の説明書の保持の日数は掃除の定数と一致する', () => {
+    const retention = retentionFromSource();
+    expect(retention).toHaveLength(5);
+    const lines = limitsManual.split('\n');
+    for (const [table, days] of retention) {
+      expect(Number.isFinite(days), table).toBe(true);
+      // 表の名前と日数が同じ行にある（ほかの数の一部に当たらないよう、前が数字でない）
+      expect(lines.some((l) => l.includes(table) && new RegExp(`(^|[^0-9])${days}\\s*日`).test(l)), `${table} ${days} 日`).toBe(true);
+    }
+    for (const w of ['quest_claims', 'event_claims', 'inventory_ledger', 'DAU', 'src/core/rate-limit-policy.ts', '要確認']) expect(limitsManual).toContain(w);
+  });
+
+  it('運用の説明書は料金の額を書かず公式の価格表を指す', () => {
+    for (const [file, text] of Object.entries(opsManuals)) {
+      const amounts = text.split('\n').filter((l) => /\$\s?\d|\d[\d,.]*\s?(円|ドル|USD|セント)/.test(l));
+      expect(amounts, file).toEqual([]);
+      // 本物らしい ID（0 だけでない UUID）とメールの宛先を書かない
+      const uuids = [...text.matchAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi)].map((m) => m[0]);
+      expect(uuids.filter((u) => !/^[0-]+$/.test(u)), file).toEqual([]);
+      expect([...text.matchAll(/[\w.+-]+@[\w-]+\.[a-z]{2,}/gi)].map((m) => m[0]), file).toEqual([]);
+      // 使う npm run のコマンドは package.json の scripts にある
+      const used = [...text.matchAll(/npm run ([a-z0-9:_-]+)/g)].map((m) => m[1]);
+      expect(used.filter((c) => !Object.keys(pkg.scripts).includes(c)), file).toEqual([]);
+    }
+    const priceUrls = opsSecurity.match(/https:\/\/developers\.cloudflare\.com\/\S+pricing\/?/g) ?? [];
+    const workersAndD1 = priceUrls.filter((u) => /workers|d1/.test(u));
+    expect(workersAndD1.length).toBeGreaterThanOrEqual(2);
+    for (const u of workersAndD1) expect(limitsManual).toContain(u);
+  });
+
+  it('バックアップの説明書は復元が上書きする操作だと書き復元演習の手順を持つ', () => {
+    for (const w of ['wrangler d1 time-travel info', 'wrangler d1 export', '--remote', 'wrangler d1 time-travel restore', '上書き', '復元演習', 'staging', '要確認'])
+      expect(backupManual).toContain(w);
+    expect(backupManual).toMatch(/wrangler d1 export [^\n]*--remote/);
+    expect(backupManual).toMatch(/time-travel restore[^\n]*上書き|上書き[^\n]*time-travel restore/);
+    // 復元演習の節に、印を控える → 行を足す → 戻す → 消えたことを見る の順がある
+    const drillHead = backupManual.match(/^###\s.*復元演習.*$/m);
+    expect(drillHead, '復元演習の見出しがある').toBeTruthy();
+    const drillStart = backupManual.indexOf(drillHead![0]);
+    const bodyStart = drillStart + drillHead![0].length;
+    const drillEnd = backupManual.slice(bodyStart).search(/^##\s/m);
+    const drill = backupManual.slice(drillStart, drillEnd < 0 ? undefined : bodyStart + drillEnd);
+    expect(drill).toContain('staging');
+    const order = ['time-travel info', 'INSERT', 'time-travel restore', '消えた'].map((w) => drill.indexOf(w));
+    expect(order.every((i) => i >= 0), order.join(',')).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  it('費用アラートの説明書は通知の宛先をファイルに書かないと書く', () => {
+    for (const w of ['予算', '通知', '宛先', '要確認']) expect(costManual).toContain(w);
+    expect(costManual).toMatch(/宛先[^\n]*ファイルに書かない|ファイルに書かない[^\n]*宛先/);
+    expect(costManual).toContain('止めません');
+  });
+
+  it('UnityとUnrealのクライアント層の版は同じで版の説明書の表と一致する', () => {
+    const unrealVer = (JSON.parse(unrealPlugin) as { VersionName?: string }).VersionName;
+    expect(unityPkg.version).toBeTruthy();
+    expect(unrealVer).toBe(unityPkg.version);
+    const rows = versionManual.split('\n').filter((l) => l.startsWith('|'));
+    expect(rows.some((l) => l.includes('Unity') && l.includes(unityPkg.version))).toBe(true);
+    expect(rows.some((l) => l.includes('Unreal') && l.includes(unrealVer!))).toBe(true);
+    for (const w of ['/v1', '/v2', 'semver', 'info.version', openapi.info.version, 'wrangler d1 migrations apply', '旧CLIはスキーマ変更後のAPIでもランキングを送って読める'])
+      expect(versionManual).toContain(w);
   });
 });
