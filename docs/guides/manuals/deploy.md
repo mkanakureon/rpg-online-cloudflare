@@ -106,9 +106,9 @@ Worker が使う秘密は 2 つです（`src/core/env.ts` の `Env` の型）。
 
 - **staging と production には別の値**を入れます（staging の鍵が漏れても production のトークンを作れないように）。4 つとも別の値です。
 - 値をファイル（`wrangler.jsonc`・ソース・`.dev.vars` を git に入れること）・チャット・Issue に書かないでください。手元に残すならパスワードの管理の道具に入れます。
-- **取り替えたとき:**
+- **取り替えたとき**（P6 の後。P6 の前は、トークンや管理の鍵を見る前に 403 になる）:
   - `AUTH_TOKEN_SECRET` を入れ直すと、前の鍵で作ったトークンは全部 **401 `UNAUTHENTICATED`** になります。遊ぶ人のクライアントはゲストを発行し直すことになります。
-  - `ADMIN_API_KEY` を入れ直すと、管理コマンド（`node scripts/admin-cli.mjs`）に渡す鍵（環境変数 `ADMIN_API_KEY`）も同時に新しい値に変えます。前の鍵では管理の口が 401 になります。
+  - `ADMIN_API_KEY` を入れ直すと、管理コマンド（`node scripts/admin-cli.mjs`）に渡す鍵（環境変数 `ADMIN_API_KEY`。行き先の Worker の URL は環境変数 `RPG_API_BASE`、既定は `http://127.0.0.1:8787`）も同時に新しい値に変えます。前の鍵では管理の口が 401 になります。
 
 ### 3. リモートの D1 を作り、マイグレーションを流す
 
