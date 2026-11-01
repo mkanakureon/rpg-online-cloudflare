@@ -31,7 +31,7 @@ import { requireLocalWrite } from '../guards';
 import { error, json } from '../http';
 import { validId } from '../ids';
 import { parseIdempotencyKey } from '../idempotency';
-import { MAX_ITEM_AMOUNT } from '../inventory';
+import { MAX_EVENTS, MAX_ITEM_AMOUNT } from '../inventory';
 import { adjustStatements, LEDGER_SOURCES } from '../ledger';
 import type { Route } from '../module';
 import { MAX_PLAYER_DATA_KEYS, type PlayerDataMode } from '../player-data';
@@ -178,10 +178,14 @@ const isoColumn = (column: string) => `strftime('%Y-%m-%dT%H:%M:%SZ', ${column},
 const eventState = `SELECT kind, starts_at AS startsAt, reset_offset_minutes AS offsetMinutes,
     EXISTS (SELECT 1 FROM event_claims c WHERE c.game_id = e.game_id AND c.event_id = e.event_id) AS claimed
   FROM events e WHERE e.game_id = ? AND e.event_id = ?`;
+const eventCount = 'SELECT COUNT(*) AS n FROM events WHERE game_id = ?';
 /** 報酬の品目のうち、そのゲームにあるものの数を数える文（品目の数だけ ? を並べる）。 */
 const knownItems = (n: number) =>
   `SELECT COUNT(*) AS n FROM inventory_items WHERE game_id = ? AND item_id IN (${Array(n).fill('?').join(', ')})`;
-/** 1 文目（監査の行）。前の定義は同じ文の中で読む（無ければ NULL）。報酬の品目が全部あり、受け取りのあるイベントの区切り・始まり・時差を変えないときだけ入る。 */
+/**
+ * 1 文目（監査の行）。前の定義は同じ文の中で読む（無ければ NULL）。報酬の品目が全部あり、受け取りのあるイベントの区切り・始まり・時差を変えず、
+ * 新しいイベントなら宣言の数が上限（MAX_EVENTS）より少ないときだけ入る。
+ */
 const insertEventAudit = (n: number) => `INSERT INTO admin_audit_log (audit_ref, game_id, actor, action, target, before_json, after_json, reason, created_at)
   SELECT ?, ?, ?, 'event.put', ?,
     (SELECT json_object('kind', kind, 'startsAt', ${isoColumn('starts_at')}, 'endsAt', ${isoColumn('ends_at')},
@@ -193,7 +197,8 @@ const insertEventAudit = (n: number) => `INSERT INTO admin_audit_log (audit_ref,
   WHERE (${knownItems(n)}) = ?
     AND NOT EXISTS (SELECT 1 FROM events e WHERE e.game_id = ? AND e.event_id = ?
       AND (e.kind <> ? OR e.starts_at <> ? OR e.reset_offset_minutes <> ?)
-      AND EXISTS (SELECT 1 FROM event_claims c WHERE c.game_id = e.game_id AND c.event_id = e.event_id))`;
+      AND EXISTS (SELECT 1 FROM event_claims c WHERE c.game_id = e.game_id AND c.event_id = e.event_id))
+    AND (EXISTS (SELECT 1 FROM events WHERE game_id = ? AND event_id = ?) OR (SELECT COUNT(*) FROM events WHERE game_id = ?) < ?)`;
 // 続く文は、この要求の監査の行が入ったときだけ書く
 const upsertEvent = `INSERT INTO events (game_id, event_id, kind, starts_at, ends_at, reset_offset_minutes)
   SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM admin_audit_log WHERE audit_ref = ?)
@@ -210,6 +215,15 @@ type EventState = { kind: string; startsAt: number; offsetMinutes: number; claim
 function changesClaimedPeriod(state: EventState | undefined, def: EventDefinition): boolean {
   return !!state && state.claimed === 1
     && (state.kind !== def.kind || state.startsAt !== def.startsAt || state.offsetMinutes !== def.resetOffsetMinutes);
+}
+
+const tooManyEvents = () => error('INVALID_ARGUMENT', `A game can declare at most ${MAX_EVENTS} events`, 400);
+
+/** 新しいイベントで、宣言の数が上限に届いているか（あるイベントの置き換えは数えない）。 */
+async function eventsFull(db: Database, gameId: string, state: EventState | undefined): Promise<boolean> {
+  if (state) return false;
+  const count = (await db.prepare(eventCount).bind(gameId).all<{ n: number }>()).results[0]?.n ?? 0;
+  return count >= MAX_EVENTS;
 }
 
 /** 報酬の品目が全部そのゲームにあるか。 */
@@ -572,20 +586,23 @@ export const adminRoutes: Route[] = [
       if (!await rewardItemsExist(env.DB, gameId, def)) return error('NOT_FOUND', 'Unknown item', 404);
       const state = (await env.DB.prepare(eventState).bind(gameId, eventId).all<EventState>()).results[0];
       if (changesClaimedPeriod(state, def)) return lockedEvent();
+      if (await eventsFull(env.DB, gameId, state)) return tooManyEvents();
       const ids = def.rewards.map((r) => r.itemId);
       const shown = shownDefinition(def);
       const ref = crypto.randomUUID();
       await env.DB.batch([
         env.DB.prepare(insertEventAudit(ids.length)).bind(ref, gameId, actor, `event:${eventId}`, gameId, eventId, gameId, eventId,
           JSON.stringify(shown), reason, serverNow(), gameId, ...ids, ids.length, gameId, eventId, def.kind, def.startsAt,
-          def.resetOffsetMinutes),
+          def.resetOffsetMinutes, gameId, eventId, gameId, MAX_EVENTS),
         env.DB.prepare(upsertEvent).bind(gameId, eventId, def.kind, def.startsAt, def.endsAt, def.resetOffsetMinutes, ref),
         env.DB.prepare(deleteRewards).bind(gameId, eventId, ref),
         ...def.rewards.map((r) => env.DB.prepare(insertReward).bind(gameId, eventId, r.itemId, r.amount, ref)),
       ]);
       if (!(await env.DB.prepare(auditByRef).bind(ref).all()).results[0]) {
-        // 読んでから書くまでの間に品目か受け取りが変わった。何も書いていないので、もう一度見分ける
-        return await rewardItemsExist(env.DB, gameId, def) ? lockedEvent() : error('NOT_FOUND', 'Unknown item', 404);
+        // 読んでから書くまでの間に品目・受け取り・イベントの数が変わった。何も書いていないので、もう一度見分ける
+        if (!await rewardItemsExist(env.DB, gameId, def)) return error('NOT_FOUND', 'Unknown item', 404);
+        const current = (await env.DB.prepare(eventState).bind(gameId, eventId).all<EventState>()).results[0];
+        return await eventsFull(env.DB, gameId, current) ? tooManyEvents() : lockedEvent();
       }
       return json({ gameId, eventId, ...shown });
     },

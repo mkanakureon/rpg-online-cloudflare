@@ -3,7 +3,7 @@
 // GET は gameId → limit → ゲームの登録と機能の設定の順に確かめて上位を返す。POST は APP_ENV=local の門（本文を読む前）
 // → トークン（本文を読む前）→ JSON の読み取り → 形の検証（validate.ts）→ トークンのプレイヤーごとの利用制限（429。DB を引くので
 // 形の検証の後。形の外れは DB を引かずに 400）→ 止めた印（403 PLAYER_BANNED）→ トークンと本文の突き合わせ
-// → ゲームの登録と機能の設定 → 書き込み（高いほうのスコアを残す）。順の正は docs/guides/working/account-design.md §5。
+// → ゲームの登録と機能の設定 → 書き込み（高いほうのスコアを残す。updated_at はスコアが上がったときだけ進め、同点は先にそのスコアに届いた人が上）。順の正は docs/guides/working/account-design.md §5。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
 import { consumeForPlayer } from '../../core/activity';
@@ -77,7 +77,7 @@ export const rankings: GameModule = {
          ON CONFLICT(game_id, board_id, player_id) DO UPDATE SET
            score = MAX(ranking_entries.score, excluded.score),
            display_name = excluded.display_name,
-           updated_at = datetime('now')`
+           updated_at = CASE WHEN excluded.score > ranking_entries.score THEN datetime('now') ELSE ranking_entries.updated_at END`
         ).bind(gameId, boardId, playerId, displayName, score).run();
         return json({ ok: true, gameId, boardId, playerId });
       },

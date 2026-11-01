@@ -176,6 +176,7 @@ INSERT OR IGNORE INTO event_rewards (game_id, event_id, item_id, amount) VALUES 
 | `MAX_ITEM_AMOUNT` | 1,000,000,000（スコアの上限と同じ） | `src/core/inventory.ts`（events と inventory の両方のモジュールが読む。モジュールどうしは読み込まないので core に置く）。DB の `CHECK` と 2 か所 | E1 |
 | `HISTORY_LIMIT_DEFAULT`・`HISTORY_LIMIT_MAX` | 20・100 | `src/modules/inventory/limits.ts` | E1 |
 | `MAX_REWARD_LINES` | 10（1 イベントの報酬の行の数。`batch` の文の数を抑える） | `src/core/inventory.ts`（events のモジュールと、管理のイベントの定義の口〔`src/core/admin/`〕の両方が読む。`admin-design.md` §7） | E2・O4 |
+| `MAX_EVENTS` | 200（1 ゲームのイベントの宣言の数。`MAX_QUESTS` と揃える。管理のイベントの定義の口が、新しいイベントで超えるなら 400 `INVALID_ARGUMENT`。あるイベントの置き換えは通す） | `src/core/inventory.ts`（`MAX_REWARD_LINES` の隣。管理の口〔`src/core/admin/routes.ts`〕が読む） | F1（Issue #55） |
 | `RATE_LIMITS.rewards` | `{ scope: 'rewards', limit: 60, period: 60 }` | `src/core/rate-limit-policy.ts`（`abuse-protection-design.md` §2 の表にも行を足す。§7） | E1 |
 
 ### モジュールのファイル
@@ -220,7 +221,7 @@ INSERT OR IGNORE INTO event_rewards (game_id, event_id, item_id, amount) VALUES 
 {"gameId":"demo-rpg","serverTime":"2026-10-30T15:30:00Z","items":[{"eventId":"daily-login","kind":"daily","startsAt":"2026-01-01T00:00:00Z","endsAt":"2100-01-01T00:00:00Z","periodKey":"2026-10-30","nextResetAt":"2026-10-31T00:00:00Z","rewards":[{"itemId":"gold","amount":100}],"claimed":false}]}
 ```
 
-- **いま開いているイベントだけ**（`isOpen`）。並びは `eventId` の昇順。`claimed` はトークンのプレイヤーがいまの区切りで受け取ったか。
+- **いま開いているイベントだけ**（`isOpen`）。並びは `eventId` の昇順。`claimed` はトークンのプレイヤーがいまの区切りで受け取ったか。受け取り済みかは、重ならない区切りの鍵だけを `period_key IN (…)` で引き、イベントとの突き合わせは JS の側でする（引数はどの時差でも数個。開いているイベントの数だけ条件を並べると D1 の 1 文の引数の上限 100 を超える。クエストの一覧と同じ形）。
 - `serverTime` はサーバーの時刻。クライアントは残り時間の表示にこれと `nextResetAt`・`endsAt` を使い、端末の時刻で期間を決めない（`failure-case-test-plan.md` のケース 6）。`nextResetAt` は一度きりのイベントでは載せない。
 
 ### `POST /v1/events/{eventId}/claim?gameId=demo-rpg`（E2）

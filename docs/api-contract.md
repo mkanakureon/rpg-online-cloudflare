@@ -94,6 +94,7 @@
 ```
 
 - PoCでは同一プレイヤーについて**最高スコアだけを保持**。
+- 同点は、先にそのスコアに届いた人が上（並びはスコアの高い順 → そのスコアに届いた時刻の早い順 → `playerId`の昇順）。低いスコアや同じスコアを出し直しても届いた時刻は進まない（表示名だけは毎回書き換わる）。
 - `score`は0～1,000,000,000の整数。
 - `npm run dev`でローカル実行し`APP_ENV=local`を与えた時だけ・トークンがある時だけ書込み可能。`APP_ENV`が`local`でなければ、トークンがあっても無くても本文を読む前に**403 `NOT_READY_FOR_PRODUCTION`**。
 - 同じプレイヤー（トークンのゲームとプレイヤー）は 60 秒の窓に 30 回まで。超えると**429 `RATE_LIMITED`**と`Retry-After`で、記録を変えない（下の「利用制限」）。トークンの無い・正しくない要求と、本文の形の外れた要求は数えない（401・400 が先）。
@@ -585,10 +586,11 @@
 
 - `kind`は`once`・`daily`・`weekly`。`startsAt`・`endsAt`は ISO 8601 の UTC（ミリ秒は切り捨て）で、`startsAt < endsAt`。`resetOffsetMinutes`は区切りの時差（分。-720〜840 の整数。無ければ 0）。`rewards`は 1〜10 行で、品目が重ならず、`amount`は 1〜1,000,000,000 の整数。外れは**400 `INVALID_ARGUMENT`**。
 - 報酬の品目がそのゲームに無ければ**404 `NOT_FOUND`**（`Unknown item`。何も書かない）。先に品目の口で入れる。
+- 1 ゲームの宣言は 200 個まで（`MAX_EVENTS`）。超える新しいイベントは**400 `INVALID_ARGUMENT`**（何も書かない。あるイベントの置き換えは通る）。
 - 無ければ作り、あれば置き換える（報酬の行は送った中身だけになる）。**受け取りが 1 つでもあるイベントは`kind`・`startsAt`・`resetOffsetMinutes`を変えられない**（**400 `INVALID_ARGUMENT`**。区切りの意味が変わり、二重の受け取りの止めが崩れるため）。`endsAt`と`rewards`は変えられ、変えた後の受け取りから新しい中身になる。
 - 応答の`startsAt`・`endsAt`は秒まで、`rewards`は品目の ID の昇順（イベントの一覧と同じ欄の名前）。
 - 監査のログに`event.put`の 1 行（`before`は前の定義`{"kind","startsAt","endsAt","resetOffsetMinutes","rewards"}`か`null`、`after`は入れた定義）。監査の行・イベント・報酬の行は 1 つの`batch`で書く。
-- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・定義の本文（400）→ 報酬の品目（404）→ 受け取りのあるイベントの守り（400）→ 書く。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・定義の本文（400）→ 報酬の品目（404）→ 受け取りのあるイベントの守り（400）→ 宣言の数（400）→ 書く。
 
 ### PUT /v1/admin/quests/{questId}?gameId=demo-rpg
 

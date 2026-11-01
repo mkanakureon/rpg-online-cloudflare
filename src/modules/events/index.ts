@@ -36,6 +36,9 @@ const eventColumns = `event_id AS eventId, kind, starts_at AS startsAt, ends_at 
 const openEvents = `SELECT ${eventColumns} FROM events WHERE game_id = ? AND starts_at <= ? AND ? < ends_at ORDER BY event_id`;
 const oneEvent = `SELECT ${eventColumns} FROM events WHERE game_id = ? AND event_id = ?`;
 const rewardsOf = `SELECT event_id AS eventId, item_id AS itemId, amount FROM event_rewards WHERE game_id = ? ORDER BY event_id, item_id`;
+/** いまの区切りの受け取り（重ならない区切りの鍵の数だけ ? を並べる。鍵は開いているイベントの数によらず数個）。 */
+const claimedOf = (n: number) => `SELECT event_id AS eventId, period_key AS periodKey FROM event_claims
+  WHERE game_id = ? AND player_id = ? AND period_key IN (${Array(n).fill('?').join(', ')})`;
 const claimOf = `SELECT claim_id AS claimId, claimed_at AS claimedAt FROM event_claims
   WHERE game_id = ? AND player_id = ? AND event_id = ? AND period_key = ?`;
 const grantsOf = `SELECT item_id AS itemId, delta AS amount FROM inventory_ledger
@@ -112,13 +115,12 @@ export const events: GameModule = {
         const open = (await env.DB.prepare(openEvents).bind(gameId, now, now).all<EventRow>()).results;
         const keys = open.map((e) => periodKey(e.kind, now, e.offsetMinutes));
         const rewards = open.length ? (await env.DB.prepare(rewardsOf).bind(gameId).all<RewardRow>()).results : [];
-        // いまの区切りの受け取りだけを引く（開いているイベントの数だけの条件。値はどれも bind する）
+        // いまの区切りの受け取りだけを引く。重ならない区切りの鍵だけを IN で引き、イベントとの突き合わせは JS でする
+        // （開いているイベントの数だけ引数を並べると D1 の 1 文の引数の上限 100 を超える。クエストの一覧と同じ形）
         const claimed = new Set<string>();
-        if (open.length) {
-          const where = open.map(() => '(event_id = ? AND period_key = ?)').join(' OR ');
-          const rows = await env.DB.prepare(`SELECT event_id AS eventId, period_key AS periodKey FROM event_claims
-            WHERE game_id = ? AND player_id = ? AND (${where})`)
-            .bind(gameId, claims.playerId, ...open.flatMap((e, i) => [e.eventId, keys[i]]))
+        const claimKeys = [...new Set(keys)];
+        if (claimKeys.length) {
+          const rows = await env.DB.prepare(claimedOf(claimKeys.length)).bind(gameId, claims.playerId, ...claimKeys)
             .all<{ eventId: string; periodKey: string }>();
           for (const r of rows.results) claimed.add(`${r.eventId} ${r.periodKey}`);
         }
