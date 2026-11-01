@@ -146,7 +146,15 @@ bool FRpgOnlineEventCommandRunner::Execute(const FString& Command, const TShared
 			FString ServerTime;
 			if (Body.IsValid() && Body->TryGetStringField(TEXT("serverTime"), ServerTime)) Clock.Update(ServerTime, FDateTime::UtcNow());
 			const TSharedPtr<FJsonObject> Row = FindRow(Body, TEXT("items"), IdField, Id);
-			if (!Row.IsValid()) return;
+			if (!Row.IsValid())
+			{
+				// サーバーは期間の内のものだけを一覧に載せる。載っていない＝期間の外なので、前の値を残さず 0 を書く（§2.8）
+				if (FlagVariable != nullptr) WriteVariable(Params, FlagVariable, 0);
+				else WriteVariable(Params, TEXT("completedVariable"), 0);
+				WriteVariable(Params, TEXT("claimedVariable"), 0);
+				WriteVariable(Params, TEXT("remainingSecondsVariable"), 0);
+				return;
+			}
 			bool bFlag = false;
 			bool bClaimed = false;
 			Row->TryGetBoolField(FlagField, bFlag);

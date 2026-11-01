@@ -55,7 +55,7 @@ npm run dev -- --ip 0.0.0.0
 | `RpgOnline.Probe` | `GET /health` を 1 回聞く（再試行を含む） |
 | `RpgOnline.Events` | ゲストを発行してイベントの一覧を読み、サーバーの時刻と端末の時刻と、期間の内外・残りを出す |
 
-- 待ちの間は、画面の左上に `frame …  (waiting for server)` が出続け、数が増える（ゲームのフレームが止まっていない印）。
+- 待ちの間は、画面の左上に `frame … (waiting for server)` が出続け、数が増える（ゲームのフレームが止まっていない印）。
 - 画面にもログにもトークンとセーブの本体は出ない（出たら不具合として記録する）。
 
 ## 4. H5・H6 を見る
@@ -100,7 +100,7 @@ HTTPServer(('0.0.0.0', 8788), H).serve_forever()
 1. `RpgOnline.Scenario` を打つ。11 の手順（`health`・`config`・`master-data`・`announcements`・`guest`・`token-refresh`・`ranking`・`saves`・`event-reward`・`player-data`・`quests`）が上から `OK` で並び、最後に `Scenario: all steps passed` が出れば通った。
 2. `RpgOnline.EventScenario` を打つ。同じ 11 の手順が、イベントコマンドの実行で `OK`（`n commands`）で並び、最後に `Scenario: all steps passed` が出れば、イベントコマンドでシナリオが通った。
    - 各コマンドは `responseVariable`（この確かめでは変数 1）に、成功なら 0、失敗なら画面の文の種類の番号（`RpgOnlineEventCommands.h` の `ResponseNumbers`。例: `not-found` は 2、`network` は 4）を書く。`saves` の最後の読み直しは、消した後なので 2（`not-found`）が来るのが正しい。
-   - `master-data` は、設定にマスターデータが載っていなければ `none (skipped)` になる（クライアント層の流し方と同じ）。
+   - イベントコマンドの流し方では、`master-data` はいつも `none (skipped)` になる（読むキーが設定の応答で決まり、コマンドの JSON に前もって書けないため）。`online.config.master` を見たいときは、設定に載ったキーを `key` に書いたコマンドを制作ツールから実行する。クライアント層の流し方（1）では、設定にマスターデータが載っていれば読む。
 3. 途中で `FAIL` になったら、その行（手順の名前・理由・`[種類]`）と、その上の要求の行（`操作 #回 -> 状態`）を写す。
    - 同じ Worker で 2 回続けて流しても、どちらの流し方も新しいゲストなので `event-reward`・`quests` は通る。通らないときは、イベントの期間など初期データの側を疑う。
 
@@ -109,7 +109,7 @@ HTTPServer(('0.0.0.0', 8788), H).serve_forever()
 このリポジトリにあるのは差し替え口までで、制作ツールのクラスは読み込まない。専用 PC で次を作り、つないだ結果を記録に残す。
 
 1. `IRpgOnlineEventHost` を実装し、`GetVariable`・`SetVariable` を制作ツールの変数（番号）の読み書きにつなぐ。
-2. 制作ツールのイベントの「オンライン」のコマンドが来たら、`{ "command": "online.ranking.submit", "params": { "boardId": "boss-score", "scoreVariable": 120, "responseVariable": 121 } }` の形の JSON を `FRpgOnlineEventCommandRunner::ExecuteJson` に渡す。`true` が返ったらイベントを「待ち」にし、`OnFinished` が来たら次のコマンドへ進める。待ちの間もマップの描画と入力を止めない。
+2. 制作ツールのイベントの「オンライン」のコマンドが来たら、`{ "command": "online.ranking.submit", "params": { "boardId": "boss-score", "scoreVariable": 120, "responseVariable": 121 } }` の形の JSON を `FRpgOnlineEventCommandRunner::ExecuteJson` に渡す。`true` が返ったらイベントを「待ち」にし、`OnFinished` が来たら次のコマンドへ進める（`true` のときの `OnFinished` は、早くても次のフレームで来る。`false` のときは返る前に `OnFinished` が済んでいて、待ちに入らない）。待ちの間もマップの描画と入力を止めない。
 3. コマンドの名前と params の入力・出力の名前は `RpgOnlineEventCommands.h` の `Commands` の表がただ 1 つの正（この手順書に写さない）。
 
 ## 5. 見た結果を残す

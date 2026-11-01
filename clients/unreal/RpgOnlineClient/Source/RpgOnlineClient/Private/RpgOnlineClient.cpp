@@ -322,10 +322,7 @@ void FRpgOnlineClient::Request(FRequestSpec Spec, FRpgOnlineResultDelegate OnDon
 	FRpgOnlineSessionInfo Info;
 	if (!ReadSession(Bearer, Info))
 	{
-		FRpgOnlineResult Res;
-		Res.Error.Category = RpgOnlineClientPolicy::SessionCategory;
-		Res.Error.Reason = TEXT("no-session");
-		Finish(State, Res);
+		FinishNoSession(State);
 		return;
 	}
 	if (!State->Spec.bSkipRefresh && NeedsRefresh(Info))
@@ -354,10 +351,7 @@ void FRpgOnlineClient::StartWithSession(TSharedRef<FRequestState, ESPMode::Threa
 	FRpgOnlineSessionInfo Info;
 	if (!ReadSession(Bearer, Info))
 	{
-		FRpgOnlineResult Res;
-		Res.Error.Category = RpgOnlineClientPolicy::SessionCategory;
-		Res.Error.Reason = TEXT("no-session");
-		Finish(State, Res);
+		FinishNoSession(State);
 		return;
 	}
 	State->Spec.Headers.Add(TEXT("Authorization"), TEXT("Bearer ") + Bearer);
@@ -403,8 +397,21 @@ void FRpgOnlineClient::SendAttempt(TSharedRef<FRequestState, ESPMode::ThreadSafe
 
 	if (!Http->ProcessRequest())
 	{
-		// 送る前に断られた（URL が不正など）。例外にせず回線断として扱う（ProcessRequest が false のとき完了は呼ばれない前提。要確認）
-		HandleComplete(State, nullptr, false);
+		// 版によっては断ったときも完了のコールバックが呼ばれうる。二重に再試行しないよう、先に外してから回線断として扱う
+		Http->OnProcessRequestComplete().Unbind();
+		// 送る前に断られた（URL が不正など）。例外にせず回線断として、次のフレームで扱う（完了を呼び出しの中で返さない）
+		TSharedRef<FTSTicker::FDelegateHandle> HandleBox = MakeShared<FTSTicker::FDelegateHandle>();
+		*HandleBox = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakThis, State, HandleBox](float /*DeltaTime*/)
+		{
+			const TSharedPtr<FRpgOnlineClient, ESPMode::ThreadSafe> This = WeakThis.Pin();
+			if (This.IsValid())
+			{
+				This->PendingTickers.Remove(*HandleBox);
+				This->HandleComplete(State, nullptr, false);
+			}
+			return false; // 1 回だけ
+		}), 0.0f);
+		PendingTickers.Add(*HandleBox);
 	}
 }
 
@@ -533,6 +540,27 @@ void FRpgOnlineClient::ScheduleRetry(TSharedRef<FRequestState, ESPMode::ThreadSa
 		}
 		return false; // 1 回だけ
 	}), WaitMs / 1000.0f);
+	PendingTickers.Add(*HandleBox);
+}
+
+void FRpgOnlineClient::FinishNoSession(TSharedRef<FRequestState, ESPMode::ThreadSafe> State)
+{
+	// 送らずに終わるときも、結果は次のフレームで返す（呼び出し側が「待ち」に入る前に完了が来ないように。どの操作も完了は必ず呼び出しの後）
+	FRpgOnlineResult Res;
+	Res.Error.Category = RpgOnlineClientPolicy::SessionCategory;
+	Res.Error.Reason = TEXT("no-session");
+	TWeakPtr<FRpgOnlineClient, ESPMode::ThreadSafe> WeakThis = AsShared();
+	TSharedRef<FTSTicker::FDelegateHandle> HandleBox = MakeShared<FTSTicker::FDelegateHandle>();
+	*HandleBox = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakThis, State, Res, HandleBox](float /*DeltaTime*/)
+	{
+		const TSharedPtr<FRpgOnlineClient, ESPMode::ThreadSafe> This = WeakThis.Pin();
+		if (This.IsValid())
+		{
+			This->PendingTickers.Remove(*HandleBox);
+			This->Finish(State, Res);
+		}
+		return false; // 1 回だけ
+	}), 0.0f);
 	PendingTickers.Add(*HandleBox);
 }
 

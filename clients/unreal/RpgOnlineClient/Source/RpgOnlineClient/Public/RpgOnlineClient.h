@@ -107,6 +107,7 @@ struct RPGONLINECLIENT_API FRpgOnlineClientOptions
 
 /**
  * Unreal のクライアント層の入口。操作ごとの関数は送るだけですぐ戻り、結果は渡した FRpgOnlineResultDelegate で受ける（ゲームのスレッド。フレームは止まらない）。
+ * 結果は必ず呼び出しから戻った後（早くても次のフレーム）に来る（送らずに終わるときも同じ）。
  * 作るときは FRpgOnlineClient::Create（コールバックが弱い参照で自分を指すため、TSharedRef で持つ）。
  */
 class RPGONLINECLIENT_API FRpgOnlineClient : public TSharedFromThis<FRpgOnlineClient, ESPMode::ThreadSafe>
@@ -202,6 +203,8 @@ private:
 	void HandleComplete(TSharedRef<FRequestState, ESPMode::ThreadSafe> State, FHttpResponsePtr Response, bool bConnectedSuccessfully);
 	void ScheduleRetry(TSharedRef<FRequestState, ESPMode::ThreadSafe> State, int32 WaitMs);
 	void Finish(TSharedRef<FRequestState, ESPMode::ThreadSafe> State, const FRpgOnlineResult& Result);
+	/** セッションが無いとき、送らずに session の結果を次のフレームで返す。 */
+	void FinishNoSession(TSharedRef<FRequestState, ESPMode::ThreadSafe> State);
 	void Emit(const FRpgOnlineRequestLog& Entry) const;
 
 	FString BuildPath(const FString& Path, const TArray<TPair<FString, FString>>& Query) const;
