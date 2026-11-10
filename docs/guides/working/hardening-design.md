@@ -372,6 +372,7 @@
 | G9 | `管理の鍵の外れだけをIPごとに数え正しい鍵の要求は外れの上限で塞がれない` | L2 | §5.1 |
 | G9 | `IPの無い要求の管理の鍵の外れが上限でも正しい鍵の管理の口は通る` | L2 | §5.1 |
 | G9 | `利用制限のIPの鍵はトークンの鍵から作った鍵付きのハッシュで素のSHA-256と違う` | L1 | §5.2 |
+| G9 | `トークンの鍵が無い環境では管理の鍵が正しくても管理の口がINTERNAL_ERRORの500を返す` | L2 | §5.2 |
 | G10 | `SDKはゲストの発行を500とタイムアウトで自動で送り直さず429だけ送り直す` | L2 | §9.1 |
 | G10 | `UnityとUnrealのクライアント層の再試行の決まりはnew-resourceを429だけ送り直す` | L1 | §9.1 |
 
@@ -415,7 +416,7 @@
 | G6 | 契約が変わる（文） | セーブの墓石の使い回し（§2.2） | G3 | `src/`・`docs/api-contract.md`・`docs/guides/working/save-design.md`・`test/` | §11 の G6 の 3 本と互換の試験 |
 | G7 | 契約が変わる（管理の口） | 実績の取り消し・キーと閾値の整合・送り直しの順・競合の文（§3.1・§3.2・§3.4・§3.5） | G3 | `src/`・`openapi/rpg-online-admin.v1.json`・`docs/api-contract.md`・`docs/guides/working/player-data-design.md`・`docs/guides/working/quest-design.md`・`test/` | §11 の G7 の 7 本と互換の試験 |
 | G8 | 契約が変わる（管理の口） | 区切りの宣言の付け替え（§3.3） | G7 | `src/`・`openapi/rpg-online-admin.v1.json`・`docs/api-contract.md`・`docs/guides/working/quest-design.md`・`test/` | §11 の G8 の 3 本と互換の試験 |
-| G9 | 契約が変わる（管理の口の説明） | 鍵の取り替えの重なり・管理の利用制限の順・IP の鍵付きのハッシュ（§4・§5） | G3 | `src/`・`openapi/rpg-online-admin.v1.json`・`docs/api-contract.md`・`docs/guides/working/admin-design.md`・`docs/guides/working/abuse-protection-design.md`・`docs/guides/working/account-design.md`・`docs/guides/manuals/deploy.md`・`test/` | §11 の G9 の 5 本と互換の試験 |
+| G9 | 契約が変わる（管理の口の説明） | 鍵の取り替えの重なり・管理の利用制限の順・IP の鍵付きのハッシュ（§4・§5） | G3 | `src/`・`openapi/rpg-online-admin.v1.json`・`docs/api-contract.md`・`docs/guides/working/admin-design.md`・`docs/guides/working/abuse-protection-design.md`・`docs/guides/working/account-design.md`・`docs/guides/manuals/deploy.md`・`test/` | §11 の G9 の 6 本と互換の試験 |
 | G10 | 契約が変わる（クライアントの決まり） | `issueGuest` の送り直しを 429 だけに（§9.1） | G3 | `clients/`・`openapi/rpg-online.v1.json`（説明の文）・`docs/api-contract.md`・`docs/guides/working/client-integration-design.md`・`test/` | §11 の G10 の 2 本と互換の試験 |
 
 - どの束も `src/core/guards.ts`・`wrangler.jsonc`・`package.json`・`package-lock.json` を変えない（`APP_ENV` の門は #67・P6 の範囲。パッケージは足さない）。
@@ -591,6 +592,7 @@ requireTests([
   '管理の鍵の外れだけをIPごとに数え正しい鍵の要求は外れの上限で塞がれない',
   'IPの無い要求の管理の鍵の外れが上限でも正しい鍵の管理の口は通る',
   '利用制限のIPの鍵はトークンの鍵から作った鍵付きのハッシュで素のSHA-256と違う',
+  'トークンの鍵が無い環境では管理の鍵が正しくても管理の口がINTERNAL_ERRORの500を返す',
   'デプロイの説明書は秘密の名前をEnvの型と同じ集合で挙げる',
   '管理の鍵の無い環境では管理の口がINTERNAL_ERRORの500を返す',
   '旧CLIはスキーマ変更後のAPIでもランキングを送って読める',
