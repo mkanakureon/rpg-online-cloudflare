@@ -238,6 +238,8 @@ describe('G1 サーバーの時刻と時計の境目', () => {
 describe('G1 並べて送る', () => {
   it('ゲストの発行を並べて送ってもIPごとの上限を超えて発行しない', async () => {
     const rule = RATE_LIMITS.guestIp;
+    // 窓の境目をまたがないように、窓の始まりに時計を止める（実の時計だと 60 秒の窓の境目で数え直して揺れる）
+    setClock(windowStart(BOUNDARY, rule.period), 0);
     const responses = await Promise.all(Array.from({ length: rule.limit + 5 }, () => guest('198.51.100.7')));
     expect(statuses(responses)).toEqual([...Array(rule.limit).fill(200), ...Array(5).fill(429)]);
     for (const r of responses.filter((x) => x.status === 429)) await expectError(r, 429, 'RATE_LIMITED');
