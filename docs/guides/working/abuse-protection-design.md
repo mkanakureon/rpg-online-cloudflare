@@ -288,7 +288,7 @@ content-type: application/json; charset=utf-8
 | R1 | `migrations/` の新しい `0008_rate_limits.sql`・`src/core/rate-limit.ts`（§3 の関数と `consume`）・`src/core/rate-limit-policy.ts`（定数）・`src/core/http.ts` の見出しの引数・`src/core/accounts.ts` と `src/modules/rankings/index.ts` に §3 の順で挟む・`test/support/` の `resetRateLimits`・§9 の契約の変わる所（ゲストの発行とスコアの投稿）・CLI モックの 429 の表示（下）・§7 の R1 の試験と K3 の 2 本 | A2（`account-design.md`） | §8 の手続きで 1 本を置き換え・1 本に行を足し・`beforeEach` を足す | 足さない |
 | R2 | `src/modules/saves/index.ts` の `checkAccess` に §3 の順で挟む・セーブの 4 つの操作の 429 の契約・§7 の R2 の試験 | R1 | セーブの試験のファイルに `beforeEach` を足す | 足さない |
 
-CLI モック（`scripts/cli-mock.mjs`）の変え方（R1）: 要求の形は変えない（`Idempotency-Key` も付けない。§5）。1 回の通しはゲストの発行 1・スコア 1・セーブ 5 回で、§2 の数に掛からない。429 を受けたら `call()` の表示に `Retry-After` の秒を足して（例: `POST /v1/rankings/boss-score: 429 {...} retry-after=37`）、いまと同じく `HTTP 429` で止まる（再試行はしない。再試行の回数と時間は `failure-case-test-plan.md` の K4・Phase 3）。
+CLI モック（`scripts/cli-mock.mjs`）の変え方（R1）: 要求の形は変えない（`Idempotency-Key` も付けない。§5）。1 回の通しはゲストの発行 1・スコア 1・セーブ 5 回で、§2 の数に掛からない。429 を受けたら `call()` の表示に `Retry-After` の秒を足して（例: `POST /v1/rankings/boss-score-mh0abc12: 429 {...} retry-after=37`）、いまと同じく `HTTP 429` で止まる（再試行はしない。再試行の回数と時間は `failure-case-test-plan.md` の K4・Phase 3）。
 
 ### 束ごとの確認コマンドの案
 
@@ -369,7 +369,6 @@ done();
 | 範囲の外 | 後から足す形 |
 | --- | --- |
 | 公開の読み取り（設定・お知らせ・ランキング）の回数の制限 | 公開するときに WAF の利用制限の規則（§10 の決めること 1 の D）。Worker の中で数えるなら、IP の鍵で §3 の `consume` を呼ぶだけ（表は同じ） |
-| 来なくなった鍵の古い行の掃除 | `wrangler.jsonc` に Cron の `triggers` を足し、`DELETE FROM rate_limit_counters WHERE window_start < ?` を 1 日 1 回 |
 | 使われないゲストの掃除 | Phase 2 の管理機能（最後に使った時刻の列を足し、期限を過ぎた `game_players` と `accounts` を消す） |
 | `Idempotency-Key` の保存 | §5 の表（Phase 2 の報酬・所持品） |
 | ゲームごとのスコアの確かめ | §6 の `ranking_boards` の上限と、ゲーム側の検証・リプレイの照合（ゲームの作者） |

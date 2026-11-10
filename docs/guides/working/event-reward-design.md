@@ -609,7 +609,7 @@ done();
 | 品目ごとの所持の上限・期限つきの品目 | `inventory_items` に列を持つ新しい表（`ALTER TABLE` でなく別の表）を足す |
 | プレイヤーごと・段階的なイベントの配信（一部の人だけに開く） | `event_targets(game_id, event_id, player_id)` を足し、一覧と受け取りの文に条件を足す |
 | 夏時間のある時差 | 区切りの時刻の表を持つ形（いまは固定の分） |
-| 古い受け取りの行・履歴の掃除・まとめ | Cron Triggers（`wrangler.jsonc` の `triggers.crons`）。§13 の分析 |
+| 古い受け取りの行・履歴のまとめ | 受け取りの行と履歴は消さない（`analytics-design.md` §6 の決定。消すと二重に受け取れる・増減の証拠が無くなる）。量が問題になったら `analytics-design.md` §16 の形で足す |
 | 付与の文の共通化 | `admin-design.md` §6 の決定（種類の名前と 1 品目の増減の文は `src/core/ledger.ts`、受け取りの 3 文は events に残す）。受け取りの 3 文を `src/core/ledger.ts` へ移すかは、クエスト（§13）を足すときに決める（§3） |
 | UE・Unity・ブラウザでの表示と時刻の扱い | Phase 3。`failure-case-test-plan.md` のケース 6 の `UEクライアントは端末の時刻がずれていても期間の判定にサーバーの時刻を使う`（K4） |
 

@@ -294,7 +294,7 @@ INSERT INTO inventory_balances (game_id, player_id, item_id, amount, updated_at)
     amount = inventory_balances.amount + excluded.amount, updated_at = excluded.updated_at;
 ```
 
-バインドの数（D1 の 1 つの文の上限 100 の内。§1 の**要確認**の前提）: 文 1 は名前つきで書いた値を `?` に直して 18 前後（`:g` が 5 回・`:p` が 4 回など）、文 2 は 6・文 3 は 5。報酬の行の数はバインドに関わらない（`quest_rewards` から SQL で読む）。共通の値を派生表で 1 回だけバインドする形（プレイヤーデータの U1 の形）に直さなくても上限から遠いので、イベントの文と同じ素直な形にする。
+バインドの数（D1 の 1 つの文の上限 100 の内。§1 の**要確認**の前提）: 文 1 は名前つきで書いた値を `?` に直して 16（`:g` が 5 回・`:p` が 4 回など。#43 で数えた）、文 2 は 6・文 3 は 5。報酬の行の数はバインドに関わらない（`quest_rewards` から SQL で読む）。共通の値を派生表で 1 回だけバインドする形（プレイヤーデータの U1 の形）に直さなくても上限から遠いので、イベントの文と同じ素直な形にする。
 
 `batch` の後に `SELECT claim_id, claimed_at FROM quest_claims WHERE game_id = :g AND player_id = :p AND quest_id = :q AND period_key = :pk` を引く:
 

@@ -36,7 +36,7 @@
 | エンドポイント | 入力 | 成功の応答 | 失敗の応答（状態・コード・message） |
 | --- | --- | --- | --- |
 | `GET /health` | なし | 200 `{"status":"ok","service":"rpg-online-backend"}` | — |
-| `GET /v1/announcements` | クエリ `gameId`（`^[a-zA-Z0-9_-]{1,64}$`・必須） | 200 `{"gameId","items":[{"id","title","body"}]}`。`items` は最大 50・`id` の昇順。データが無くても 200 と空の `items` | 400 `INVALID_ARGUMENT` `Invalid gameId` |
+| `GET /v1/announcements` | クエリ `gameId`（`^[a-zA-Z0-9_-]{1,64}$`・必須） | 200 `{"gameId","items":[{"id","title","body"}]}`。`items` は最大 50・`id` の昇順。登録があり `announcements` を使うゲームなら、データが無くても 200 と空の `items` | 400 `INVALID_ARGUMENT` `Invalid gameId`・404 `NOT_FOUND`（`Unknown game`・`Feature not enabled for this game`） |
 | `GET /v1/rankings/{boardId}` | パス `boardId`（`^[a-zA-Z0-9_-]{1,64}$`）・クエリ `gameId`（同じ形・必須）・`limit`（数字だけの 1〜50・既定 10） | 200 `{"gameId","boardId","items":[{"playerId","displayName","score"}]}`。`items` は最大 `limit`・`score DESC, updated_at ASC, player_id ASC` の順 | 400 `INVALID_ARGUMENT`（`Invalid gameId`・`limit must be 1..50`）。`boardId` の形が外れたらどのルートにも当たらず 404 `NOT_FOUND` |
 | `POST /v1/rankings/{boardId}` | パス `boardId`・本文 JSON `{"gameId","playerId","displayName","score"}`。`gameId`・`playerId` は ID の形、`displayName` は 1〜40 文字の文字列、`score` は 0〜1,000,000,000 の安全な整数。知らない欄は無視 | 200 `{"ok":true,"gameId","boardId","playerId"}` | 403 `NOT_READY_FOR_PRODUCTION` `Authentication not implemented`（`APP_ENV !== 'local'`。本文を読む前）・400 `INVALID_JSON` `Request body must be JSON`・400 `INVALID_ARGUMENT`（`Object required`・`Invalid ranking payload`） |
 | どれにも当たらない | — | — | 404 `NOT_FOUND` `Endpoint not found` |
@@ -54,7 +54,7 @@
 - OpenAPI 3.1 の `components.schemas` は JSON Schema（2020-12）そのものなので、要求・応答の形は JSON Schema で書く。YAML にしないのは、パッケージを足さずに読めるため（Vite が JSON をそのまま読み込める。YAML は読む道具が要る）。
 - **検証の関数はパッケージを足さずに自前で書く**（S1）。このスキーマが使う JSON Schema の語だけを見る小さな関数（`type`・`properties`・`required`・`additionalProperties`・`items`・`maxItems`・`pattern`・`minLength`・`maxLength`・`minimum`・`maximum`・`const`・`enum`・`$ref` の `#/components/schemas/…`）。置き場は試験の側の `test/support/schema-check.ts`（`src/` を変えない）。スキーマで使う語を増やすときは、この関数と S1 の自己試験を同じコミットで直す。
 - **契約の正**: 形（欄・型・範囲・状態コードとエラーコードの組）の正はスキーマ、挙動の説明（順位の付け方・最高スコアの保持・互換の決まり・書き込みの守り）の正は `docs/api-contract.md`。`docs/api-contract.md` の例はスキーマに合うことを S2 の試験で確かめる（どちらかだけ直すと落ちる）。`docs/api-contract.md` の書き換え（スキーマを指す 1 行を足す）は、S1 の実装の Issue で行う（この設計書ではしない）。
-- 試験は vitest で、いまの試験と同じく Workers のランタイムの中で回す。スキーマは `import spec from '../openapi/rpg-online.v1.json'` で読む。`docs/api-contract.md` は `?raw` の import で文字列として読む。いまの `tsconfig.json` には `?raw` の型が無いので、S2 で `test/` に `declare module '*?raw'` の型のファイルを足す（JSON の import は `resolveJsonModule` で型が通る）（読めなければ S2 の実装の Issue で、Node.js 側の `vitest.config.ts` で読んで `miniflare.bindings` に渡す形に切り替える。いまの `TEST_MIGRATIONS` と同じ渡し方）。
+- 試験は vitest で、いまの試験と同じく Workers のランタイムの中で回す。スキーマは `import spec from '../openapi/rpg-online.v1.json'` で読む。`docs/api-contract.md` は `?raw` の import で文字列として読む。いまの `tsconfig.json` には `?raw` の型が無いので、S2 で `test/` に `declare module '*?raw'` の型のファイルを足す（JSON の import は vitest の型で通る。`tsconfig.json` に `resolveJsonModule` は無い）（読めなければ S2 の実装の Issue で、Node.js 側の `vitest.config.ts` で読んで `miniflare.bindings` に渡す形に切り替える。いまの `TEST_MIGRATIONS` と同じ渡し方）。
 
 ## 3. スキーマの中身（いまの挙動を写す）
 

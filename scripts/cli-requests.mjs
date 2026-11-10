@@ -1,6 +1,6 @@
 // cli-requests.mjs — CLI モックが送る要求の本文（依存の無い ES モジュール。読み込むだけで HTTP を送らない）。
 //
-// scripts/cli-mock.mjs と test/failure-server.test.ts の両方がここを読み込む。本文と見出しの形を変えると
+// scripts/cli-flow.mjs・scripts/admin-requests.mjs と試験（test/failure-server.test.ts など）がここを読み込む（CLI モックの送信はブラウザの SDK）。本文と見出しの形を変えると
 // テスト「今のCLIモックと同じ形の要求を受け付ける」で API と合っているかが確かめられる。
 // 流れはゲストの発行（guestRequest）→ そのトークンでトークンの更新（TOKEN_REFRESH_PATH。本文無し・以後は新しいトークン。
 // client-integration-design.md §4 の 6）→ そのトークンを付けたスコアの投稿（authHeaders・scoreSubmission）→ 同じトークンで
