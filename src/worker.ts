@@ -1,4 +1,4 @@
-/** Local-only proof of concept. NOT production safe: no authentication or anti-cheat. */
+/** ローカル専用の PoC。認証はゲストのトークンだけで、書き込みは APP_ENV=local のときだけ通る（src/core/guards.ts）。 */
 // worker.ts — Worker の入口。モジュールの一覧をルーターに渡し、例外を 500 で受け止める。
 // scheduled は Cron Triggers（wrangler.jsonc の triggers.crons）の入口で、掃除（src/core/cleanup.ts の runScheduled）を
 // ctx.waitUntil で待ち合わせる。APP_ENV が local でなければ何も消さない。controller.cron は見ない（Cron は 1 つだけ）。

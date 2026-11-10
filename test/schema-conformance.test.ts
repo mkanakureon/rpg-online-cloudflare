@@ -250,7 +250,7 @@ describe('S1: スキーマのファイル', () => {
     }
     // additionalProperties: true は知らない欄を通す
     expect(validate({ a: 1, b: 2 }, { type: 'object', additionalProperties: true, properties: { a: {} } }, root)).toEqual([]);
-    // 長さは src/worker.ts に合わせて .length（UTF-16 の単位）で数える
+    // 長さは src/modules/rankings/validate.ts に合わせて .length（UTF-16 の単位）で数える
     expect(validate('😀', { type: 'string', maxLength: 1 }, root).length).toBeGreaterThan(0);
     // 見ない語・外を指す $ref は黙って通さない
     expect(() => validate('a', { type: 'string', format: 'email' }, root)).toThrow();

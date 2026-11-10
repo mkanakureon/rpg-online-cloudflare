@@ -3865,7 +3865,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 40,
-            "description": "1〜40。長さは src/worker.ts に合わせて JavaScript の .length（UTF-16 の単位）で数える（JSON Schema の文字数とは BMP の外の文字で食い違う）。"
+            "description": "1〜40。長さは src/modules/rankings/validate.ts に合わせて JavaScript の .length（UTF-16 の単位）で数える（JSON Schema の文字数とは BMP の外の文字で食い違う）。"
           },
           "score": {
             "type": "integer",
@@ -3919,7 +3919,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 40,
-            "description": "1〜40。長さは src/worker.ts に合わせて JavaScript の .length（UTF-16 の単位）で数える（JSON Schema の文字数とは BMP の外の文字で食い違う）。"
+            "description": "1〜40。長さは src/modules/rankings/validate.ts に合わせて JavaScript の .length（UTF-16 の単位）で数える（JSON Schema の文字数とは BMP の外の文字で食い違う）。"
           },
           "score": {
             "type": "integer",

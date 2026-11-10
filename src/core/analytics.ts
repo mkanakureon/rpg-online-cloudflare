@@ -4,8 +4,8 @@
 // 今日（サーバーの時刻の UTC）までを確かめる。fillDays は数の無い日を 0 で埋めて昇順に並べ、retentionCell は N 日目が今日より後なら null
 // （まだ決まらない）にする。集計は要求の時に表 player_activity_days を数え（まとめた表を持たない）、応答に playerId も行ごとの時刻も入れない。
 // 継続の文の '+N day' は定数 RETENTION_OFFSETS の整数から作る（要求の値は文に入れず、バインドは gameId・from・to の 3 つ）。
-// 継続率の割り算はクライアント（scripts/admin-cli.mjs の analytics）がする。ゲストのトークンは 30 日で切れて更新の口が無いので、
-// D30 は低く、newPlayers は高く出る（docs/api-contract.md の「管理の API」に書く）。
+// 継続率の割り算はクライアント（scripts/admin-cli.mjs の analytics）がする。ゲストのトークンは 30 日で切れ、更新しないまま越えた人は
+// 新しいプレイヤーで戻るので、D30 は低く、newPlayers は高く出る（docs/api-contract.md の「管理の API」に書く）。
 // 配った量の口は受領の履歴 inventory_ledger を日・種類・品目ごとに、受け取りの行 quest_claims を日・クエストごとにまとめる。日の範囲は
 // rangeSeconds で UNIX 秒にして比べ（バインドは gameId・始まりの秒・終わりの秒の 3 つ）、文の LIMIT は定数 MAX_ANALYTICS_ROWS より 1 多くして、
 // shapeGrants が日付の昇順で切って truncated を立てる。管理の口（src/core/admin/routes.ts）が読む。

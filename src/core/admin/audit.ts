@@ -11,7 +11,7 @@
 // 概要記述: Claude Opus 5.5 — 2026-10-31
 import { sha256Hex } from '../idempotency';
 
-/** 監査の行を残す日数（operations-security.md の 6。消す仕組みは分析の束で足し、それまでは残る）。 */
+/** 監査の行を残す日数（operations-security.md の 6。src/core/cleanup.ts の掃除が、この日数を過ぎた行を消す）。 */
 export const AUDIT_RETENTION_DAYS = 365;
 
 /** X-Admin-Actor の形（自己申告のラベル。そのまま監査の actor に残す）。 */

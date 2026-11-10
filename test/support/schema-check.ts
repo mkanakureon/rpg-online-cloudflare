@@ -43,7 +43,7 @@ function matchesType(value: unknown, type: string): boolean {
 
 /**
  * 値をスキーマに当て、外れを「場所: 理由」の文の配列で返す（合えば空）。
- * 文字列の長さは src/worker.ts に合わせて `.length`（UTF-16 の単位）で数える。
+ * 文字列の長さは src/modules/rankings/validate.ts に合わせて `.length`（UTF-16 の単位）で数える。
  */
 export function validate(value: unknown, schema: Schema, root: SchemaRoot, path = '$'): string[] {
   for (const key of Object.keys(schema)) {

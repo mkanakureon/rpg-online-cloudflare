@@ -8,7 +8,7 @@ import type { Env } from './env';
 import { error } from './http';
 
 export function requireLocalWrite(env: Env): Response | null {
-  // IMPORTANT: Block test-only unauthenticated writes outside local mode.
+  // local でない環境（既定の disabled を含む）では、トークンや鍵を確かめる前に断る。外すかどうかはユーザーが決める（distribution-design.md §3）。
   if (env.APP_ENV !== 'local') {
     return error('NOT_READY_FOR_PRODUCTION', 'Authentication not implemented', 403);
   }
