@@ -47,11 +47,11 @@ GitHub Issue に札を付けておくと、`scripts/issue-run/issue-run.mjs` が
 
 ## 準備（最初の1回）
 
-1. **Node.js 22.14.0・npm 11.4.2・GitHub CLI（`gh`）を入れる。**
+1. **Node.js 22.14.0・npm 11.6.2・GitHub CLI（`gh`）を入れる。**
    ```text
    Windows: winget install --id OpenJS.NodeJS.22 --version 22.14.0 -e ／ winget install --id GitHub.cli -e
    Mac:     Node.js 22.14.0 を公式の配布か版を選べる道具で ／ brew install gh
-   どちらも: npm install -g npm@11.4.2 ／ gh auth login
+   どちらも: npm install -g npm@11.6.2 ／ gh auth login
    ```
 2. git と GitHub のリポジトリ（`origin`）を用意する（`docs/guides/working/github-repo.md`）。
 3. 無人の `claude -p` は対話のログインと別に認証が切れることがある（元のリポジトリで `OAuth session expired` で落ちた）。`claude setup-token` で長期のトークンを作り、環境変数 `CLAUDE_CODE_OAUTH_TOKEN` に入れる（Windows はユーザーの環境変数、Mac は `~/.zshrc` などに `export`）。新しいターミナルを開いてから使う。

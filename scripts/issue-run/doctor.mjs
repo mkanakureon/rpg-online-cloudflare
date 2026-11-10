@@ -26,7 +26,7 @@ else if (Number(haveNode.split('.')[0]) >= 22) report('WARN', 'node', `${haveNod
 else report('NG', 'node', `${haveNode}。22 以上が要る（決めた版は ${wantNode}）`);
 
 const npmV = run('npm', ['--version']);
-if (npmV.code === 0) report(npmV.stdout.trim() === '11.4.2' ? 'OK' : 'WARN', 'npm', npmV.stdout.trim() === '11.4.2' ? npmV.stdout.trim() : `${npmV.stdout.trim()}。決めた版は 11.4.2 → npm install -g npm@11.4.2`);
+if (npmV.code === 0) report(npmV.stdout.trim() === '11.6.2' ? 'OK' : 'WARN', 'npm', npmV.stdout.trim() === '11.6.2' ? npmV.stdout.trim() : `${npmV.stdout.trim()}。決めた版は 11.6.2 → npm install -g npm@11.6.2`);
 else report('WARN', 'npm', 'npm が見つからない');
 
 const git = resolveCmd('git');
