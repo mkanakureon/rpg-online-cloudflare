@@ -10,9 +10,8 @@ import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
 import { RATE_LIMITS } from '../src/core/rate-limit-policy';
-import { sha256Hex } from '../clients/browser/rpg-online-client.mjs';
 import sampleHtml from '../clients/browser/sample/index.html?raw';
-import { fillRateLimit, resetRateLimits } from './support/rate-limits';
+import { fillRateLimit, ipKey, resetRateLimits } from './support/rate-limits';
 
 type TestEnv = { DB: D1Database; APP_ENV: string };
 const baseEnv = env as unknown as TestEnv;
@@ -69,7 +68,7 @@ describe('B4: ローカルだけの CORS', () => {
 
     // 429 の Retry-After もページから読める。
     const ip = '203.0.113.54';
-    await fillRateLimit(baseEnv.DB, RATE_LIMITS.guestIp, await sha256Hex(ip));
+    await fillRateLimit(baseEnv.DB, RATE_LIMITS.guestIp, await ipKey(ip));
     const limited = await send(new Request(`${base}/v1/accounts/guest`, {
       method: 'POST',
       headers: { Origin: pageOrigin, 'content-type': 'application/json', 'CF-Connecting-IP': ip },

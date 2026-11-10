@@ -4,7 +4,7 @@
 // 同じコミットで直す。上げるのは互換を壊さない（通っていた要求は通る）。下げると壊す。
 // scope は表 rate_limit_counters の scope の列に入る名前。guest-ip（IP ごと）と guest-game（ゲームごと）はゲストの発行
 // （src/core/accounts.ts）が、score はスコアの投稿（ランキングのモジュール）が、saves は R2 でセーブのモジュールが、rewards は E1 で所持品のモジュールが、
-// admin は O1 で管理の口（src/core/admin/common.ts の checkAdmin）が、playerData は U1 でプレイヤーデータのモジュールが、
+// admin（鍵の外れ）と adminKey（正しい鍵）は O1・G9 で管理の口（src/core/admin/common.ts の checkAdmin）が、playerData は U1 でプレイヤーデータのモジュールが、
 // quests は Q1 でクエストのモジュールが、tokenRefresh は B3 でトークンの更新（src/core/accounts.ts）が使う。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
@@ -23,8 +23,10 @@ export const RATE_LIMITS = {
   saves: { scope: 'saves', limit: 60, period: 60 },
   /** 報酬の操作（所持品・受領の履歴と E2 のイベントの一覧・受け取り）を合わせて・プレイヤーごと（E1）。 */
   rewards: { scope: 'rewards', limit: 60, period: 60 },
-  /** 管理の口（/v1/admin/...）を合わせて・IP（CF-Connecting-IP のハッシュ）ごと。鍵の確かめの前に数える（O1）。 */
+  /** 管理の口（/v1/admin/...）の鍵の外れだけを合わせて・IP（CF-Connecting-IP の鍵付きのハッシュ。見出しが無ければ no-ip）ごと。鍵を確かめた後に数える（O1・G9）。 */
   admin: { scope: 'admin-ip', limit: 60, period: 60 },
+  /** 管理の口（/v1/admin/...）の正しい鍵の要求を合わせて・管理の鍵ごと（Worker に 1 つ。IP を見ない）。鍵の外れの数とは別に数える（G9）。 */
+  adminKey: { scope: 'admin-key', limit: 60, period: 60 },
   /** プレイヤーデータの 2 つの操作（GET・POST /v1/player-data）を合わせて・プレイヤーごと（U1）。 */
   playerData: { scope: 'player-data', limit: 60, period: 60 },
   /** クエストの 2 つの操作（GET /v1/quests・POST /v1/quests/{questId}/claim）を合わせて・プレイヤーごと（Q1）。 */

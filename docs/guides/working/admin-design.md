@@ -101,9 +101,10 @@ Cloudflare の機能（2026-10-31。リポジトリに入っている wrangler 4
 
 ### 確かめの順（管理の口で全部同じ。`checkAdmin`）
 
-ルート → `requireLocalWrite`（403 `NOT_READY_FOR_PRODUCTION`）→ `adminSecret(env)` が無ければ投げる（入口の `try/catch` で 500 `INTERNAL_ERROR`）→ **管理の利用制限 `RATE_LIMITS.admin`（IP ごと。429 `RATE_LIMITED`・`Retry-After`）** → `requireAdmin`（`Authorization: Bearer <管理の鍵>`。外れは 401 `UNAUTHENTICATED`）→ `gameId` の形（400 `INVALID_ARGUMENT`）→ ゲームの登録（`loadGame`。無ければ 404 `NOT_FOUND` `Unknown game`。機能の設定は見ない）→ 書き込みの口は `X-Admin-Actor`・本文の `reason`（400）→ 口ごとの確かめ。
+ルート → `requireLocalWrite`（403 `NOT_READY_FOR_PRODUCTION`）→ `adminSecret(env)` が無ければ投げる（入口の `try/catch` で 500 `INTERNAL_ERROR`）→ 利用制限の IP の鍵（`ipSubject(req, env)`。トークンの署名の鍵 `tokenSecret(env)` が無ければ投げて 500 `INTERNAL_ERROR`）→ `requireAdmin`（`Authorization: Bearer <管理の鍵>`）→ **外れなら `RATE_LIMITS.admin`（単位 `admin-ip`・IP ごと）で外れだけを数え、上限を超えたら 429 `RATE_LIMITED`・`Retry-After`、ほかは 401 `UNAUTHENTICATED`。正しい鍵なら `RATE_LIMITS.adminKey`（単位 `admin-key`・管理の鍵ごとに 1 つ）で数え、上限を超えたら 429** → `gameId` の形（400 `INVALID_ARGUMENT`）→ ゲームの登録（`loadGame`。無ければ 404 `NOT_FOUND` `Unknown game`。機能の設定は見ない）→ 書き込みの口は `X-Admin-Actor`・本文の `reason`（400）→ 口ごとの確かめ。
 
-- 利用制限を鍵の確かめの前に置く: 鍵の当て推量を IP ごとの回数で抑えるため（ゲストの発行の `guestIp` と同じ考え）。正しい鍵でも数える。
+- 利用制限は鍵を確かめた後に置き、外れだけを IP ごと（見出しが無ければ `no-ip`）に数える: 鍵の当て推量は外れの数で抑え、鍵を持たない人が `no-ip` を埋めても正しい鍵の管理の人は塞がれない（`hardening-design.md` §5.1 の案 A）。正しい鍵の要求は外れとは別の単位（`admin-key`）で数える。鍵の比べ（ハッシュと `timingSafeEqual`）は数える前に毎回する。
+- **トークンの署名の鍵が無い環境では、管理の鍵が正しくても管理の口は 500 `INTERNAL_ERROR`**: 利用制限の IP の鍵付きのハッシュ（HMAC-SHA256）の鍵をトークンの署名の鍵から作るため（`abuse-protection-design.md` §3 の「鍵」・`hardening-design.md` §5.2 の案 A）。鍵の選び方は `tokenSecret` のまま（無ければ `local` だけ公開の鍵、ほかは無し）なので、`local` で `AUTH_TOKEN_SECRET` を入れていなければ管理の口は通り、`AUTH_TOKEN_SECRET` が 32 文字未満なら 500。
 - 管理の口はどのプレイヤーのトークンも読まない。プレイヤーのトークンを `Authorization` に入れて送っても、管理の鍵と合わないので 401。
 
 ## 3. 管理の鍵
@@ -356,7 +357,9 @@ DELETE FROM inventory_balances
 | O1 | `本番の設定では管理の鍵があっても管理の口にNOT_READY_FOR_PRODUCTIONの403を返す` | L2 | `APP_ENV: 'disabled'` と正しい鍵で管理の各口 | 403 `NOT_READY_FOR_PRODUCTION`。何も書かない |
 | O1 | `管理の鍵が無いか違う要求はUNAUTHENTICATEDの401を返す` | L2 | 見出し無し・違う鍵・`Bearer` でない | 401 `UNAUTHENTICATED` |
 | O1 | `プレイヤーのトークンでは管理の口を通れない` | L2 | ゲストのトークンを `Authorization` に入れて管理の口 | 401 `UNAUTHENTICATED` |
-| O1 | `管理の口を上限より多く呼ぶと鍵を確かめる前に429を返す` | L2 | `rate_limit_counters` の `admin-ip` を上限まで埋めて正しい鍵で 1 回 | 429 `RATE_LIMITED` と `Retry-After` |
+| O1・G9 | `管理の鍵の外れだけをIPごとに数え正しい鍵の要求は外れの上限で塞がれない` | L2 | `rate_limit_counters` の `admin-ip` を上限まで埋めて、外れた鍵・鍵無し・正しい鍵で 1 回ずつ | 外れは 429 `RATE_LIMITED` と `Retry-After`、正しい鍵は 200（`admin-ip` に数えず `admin-key` に数える） |
+| G9 | `IPの無い要求の管理の鍵の外れが上限でも正しい鍵の管理の口は通る` | L2 | 見出し `CF-Connecting-IP` の無い外れで `no-ip` の `admin-ip` を上限まで数え、正しい鍵で 1 回 | 外れは 429、正しい鍵は 200 |
+| G9 | `トークンの鍵が無い環境では管理の鍵が正しくても管理の口がINTERNAL_ERRORの500を返す` | L2 | `AUTH_TOKEN_SECRET` が 32 文字未満の `env` で正しい管理の鍵 | 500 `INTERNAL_ERROR`（数の表に行を作らない） |
 | O1 | `管理の鍵を取り替えると前の鍵は401になる` | L2 | `ADMIN_API_KEY` を変えた `env` で前の鍵 | 401。新しい鍵は 200 |
 | O1 | `管理の読み取りはプレイヤーの所持品と履歴とセーブの一覧とスコアを返しセーブの中身は返さない` | L2 | 所持品・セーブ・スコアのあるプレイヤーを読む | §5 の形。`data`・`checksum` の欄が無い |
 | O1 | `知らないプレイヤーの管理の読み取りはNOT_FOUNDの404を返す` | L2 | `game_players` に無い ID | 404 `NOT_FOUND` |
@@ -517,7 +520,7 @@ requireTests([
   '本番の設定では管理の鍵があっても管理の口にNOT_READY_FOR_PRODUCTIONの403を返す',
   '管理の鍵が無いか違う要求はUNAUTHENTICATEDの401を返す',
   'プレイヤーのトークンでは管理の口を通れない',
-  '管理の口を上限より多く呼ぶと鍵を確かめる前に429を返す',
+  '管理の鍵の外れだけをIPごとに数え正しい鍵の要求は外れの上限で塞がれない',
   '管理の鍵を取り替えると前の鍵は401になる',
   '管理の読み取りはプレイヤーの所持品と履歴とセーブの一覧とスコアを返しセーブの中身は返さない',
   '知らないプレイヤーの管理の読み取りはNOT_FOUNDの404を返す',

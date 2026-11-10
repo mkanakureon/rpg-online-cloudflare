@@ -19,6 +19,7 @@
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/worker';
+import { ADMIN_KEY_SUBJECT } from '../src/core/admin/common';
 import { adminSecret, requireAdmin } from '../src/core/admin/key';
 import { parseAdjustment, parseEventDefinition } from '../src/core/admin/parse';
 import { adminRoutes } from '../src/core/admin/routes';
@@ -38,7 +39,7 @@ import {
   authHeaders, claimPath, eventsPath, guestRequest, inventoryPath, playerDataHeaders, playerDataPath, playerDataWrite, questClaimPath, questsPath,
 } from '../scripts/cli-requests.mjs';
 import { registerGame } from './support/games';
-import { countRateLimitRows, fillRateLimit, resetRateLimits } from './support/rate-limits';
+import { countRateLimitRows, fillRateLimit, ipKey, resetRateLimits } from './support/rate-limits';
 import { validate, type Schema, type SchemaRoot } from './support/schema-check';
 
 type TestEnv = { DB: D1Database; APP_ENV: string; ADMIN_API_KEY?: string };
@@ -204,24 +205,39 @@ describe('O1 管理の口の守りと鍵', () => {
     }
   });
 
-  it('管理の口を上限より多く呼ぶと鍵を確かめる前に429を返す', async () => {
-    // 正しい鍵の要求も数える
-    expect((await adminGet(auditPath())).status).toBe(200);
-    const counted = await baseEnv.DB.prepare('SELECT SUM(count) AS n FROM rate_limit_counters WHERE scope = ? AND subject = ?')
-      .bind(RATE_LIMITS.admin.scope, NO_IP_SUBJECT).first<{ n: number }>();
-    expect(counted?.n).toBe(1);
-    await fillRateLimit(baseEnv.DB, RATE_LIMITS.admin, NO_IP_SUBJECT);
-    for (const authorization of [`Bearer ${adminKey}`, `Bearer ${'b'.repeat(32)}`, null]) {
-      const res = await adminGet(auditPath(), { authorization });
+  it('管理の鍵の外れだけをIPごとに数え正しい鍵の要求は外れの上限で塞がれない', async () => {
+    const ip = '203.0.113.7';
+    const sendFrom = (authorization: string | null) => worker.fetch(new Request(`${base}${auditPath()}`, {
+      headers: { 'CF-Connecting-IP': ip, ...(authorization === null ? {} : { authorization }) },
+    }), adminEnv as never);
+    const sumOf = async (scope: string, subject: string) => (await baseEnv.DB.prepare(
+      'SELECT SUM(count) AS n FROM rate_limit_counters WHERE scope = ? AND subject = ?',
+    ).bind(scope, subject).first<{ n: number | null }>())?.n ?? 0;
+    // 正しい鍵の要求は IP の外れの数に入れず、管理の鍵ごとの単位で数える
+    expect((await sendFrom(`Bearer ${adminKey}`)).status).toBe(200);
+    expect(await sumOf(RATE_LIMITS.admin.scope, await ipKey(ip))).toBe(0);
+    expect(await sumOf(RATE_LIMITS.adminKey.scope, ADMIN_KEY_SUBJECT)).toBe(1);
+    // 外れ（違う鍵）は上限までは 401 で、IP ごとに数える
+    await expectError(await sendFrom(`Bearer ${'b'.repeat(32)}`), 401, 'UNAUTHENTICATED');
+    expect(await sumOf(RATE_LIMITS.admin.scope, await ipKey(ip))).toBe(1);
+    // 外れの上限まで数えた IP からの外れ（違う鍵・鍵無し）は 429
+    await fillRateLimit(baseEnv.DB, RATE_LIMITS.admin, await ipKey(ip));
+    for (const authorization of [`Bearer ${'b'.repeat(32)}`, null]) {
+      const res = await sendFrom(authorization);
       await expectError(res, 429, 'RATE_LIMITED');
       expect(res.headers.get('Retry-After')).toMatch(/^[1-9][0-9]*$/);
       expect(Number(res.headers.get('Retry-After'))).toBeLessThanOrEqual(RATE_LIMITS.admin.period);
     }
-    // 別の IP は数えが別
+    // 同じ IP でも正しい鍵の要求は外れの上限で塞がれない
+    expect((await sendFrom(`Bearer ${adminKey}`)).status).toBe(200);
+    // 別の IP の外れは数えが別（401）
     const other = await worker.fetch(new Request(`${base}${auditPath()}`, {
-      headers: { authorization: `Bearer ${adminKey}`, 'CF-Connecting-IP': '203.0.113.9' },
+      headers: { authorization: `Bearer ${'b'.repeat(32)}`, 'CF-Connecting-IP': '203.0.113.9' },
     }), adminEnv as never);
-    expect(other.status).toBe(200);
+    await expectError(other, 401, 'UNAUTHENTICATED');
+    // 正しい鍵の単位が上限なら、正しい鍵の要求も 429
+    await fillRateLimit(baseEnv.DB, RATE_LIMITS.adminKey, ADMIN_KEY_SUBJECT);
+    await expectError(await sendFrom(`Bearer ${adminKey}`), 429, 'RATE_LIMITED');
   });
 
   it('管理の鍵を取り替えると前の鍵は401になる', async () => {
@@ -366,8 +382,10 @@ describe('O1 管理のスキーマ', () => {
     await expectConforms(await adminGet(playerPath('nobody')), playerSpec);
     await expectConforms(await adminGet(auditPath('', 'no-such-game')), auditSpec);
     await expectConforms(await adminGet(playerPath('p1'), { e: { ...localEnv, ADMIN_API_KEY: undefined } }), playerSpec);
+    // 429: 鍵の外れの上限（IP の無い要求は no-ip）と、正しい鍵の上限
     await fillRateLimit(baseEnv.DB, RATE_LIMITS.admin, NO_IP_SUBJECT);
-    await expectConforms(await adminGet(auditPath()), auditSpec);
+    await expectConforms(await adminGet(auditPath(), { authorization: `Bearer ${'b'.repeat(32)}` }), auditSpec);
+    await fillRateLimit(baseEnv.DB, RATE_LIMITS.adminKey, ADMIN_KEY_SUBJECT);
     await expectConforms(await adminGet(playerPath('p1')), playerSpec);
   });
 

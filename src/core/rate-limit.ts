@@ -9,10 +9,11 @@
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
 import type { Database, Statement } from './env';
-import { sha256Hex } from './hash';
+import { hmacSha256Hex } from './hash';
 import { error } from './http';
 import type { RateLimitRule } from './rate-limit-policy';
 import { serverNow } from './clock';
+import { tokenSecret } from './token';
 
 /** CF-Connecting-IP の見出しが無いときの鍵（全員で 1 つ。見出しが無いことを理由に数えずに通さない）。 */
 export const NO_IP_SUBJECT = 'no-ip';
@@ -32,11 +33,28 @@ export function decide(count: number, limit: number): boolean {
   return count <= limit;
 }
 
-/** 利用制限の鍵にする IP: CF-Connecting-IP の値の SHA-256（小文字の 16 進）。見出しが無ければ NO_IP_SUBJECT。 */
-export async function ipSubject(req: Request): Promise<string> {
+/** IP の鍵付きのハッシュの鍵を、トークンの署名の鍵から作るときに混ぜる用途の名前（ほかの用途の HMAC と同じ値にしない）。 */
+export const IP_HASH_PURPOSE = 'rpg-online/rate-limit-ip/v1';
+
+/**
+ * 利用制限の鍵にする IP の、入出力の無い計算: トークンの署名の鍵と用途の名前の HMAC-SHA256 を鍵にした、IP の HMAC-SHA256（小文字の 16 進）。
+ * 素の SHA-256 にしない（IPv4 は総当たりで戻せるため。docs/guides/working/abuse-protection-design.md §3）。
+ */
+export async function ipHash(ip: string, signingSecret: string): Promise<string> {
+  return hmacSha256Hex(await hmacSha256Hex(signingSecret, IP_HASH_PURPOSE), ip);
+}
+
+/**
+ * 利用制限の鍵にする IP: CF-Connecting-IP の値の ipHash。見出しが無ければ NO_IP_SUBJECT。
+ * トークンの鍵（tokenSecret）が無い環境では、見出しの有無にかかわらず投げる（入口の try/catch が 500 INTERNAL_ERROR にする）。
+ */
+export async function ipSubject(req: Request, env: { APP_ENV: string; AUTH_TOKEN_SECRET?: string }): Promise<string> {
+  const secret = tokenSecret(env);
+  // 鍵の値はメッセージに入れない
+  if (!secret) throw new Error('Token signing secret is not configured');
   const ip = req.headers.get('CF-Connecting-IP');
   if (!ip) return NO_IP_SUBJECT;
-  return sha256Hex(ip);
+  return ipHash(ip, secret);
 }
 
 /** 数える 2 文（いまの窓に足して数を返す・同じ鍵の古い窓を消す）。consume と src/core/activity.ts の consumeForPlayer が同じ batch の頭に置く。 */

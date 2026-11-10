@@ -1,7 +1,8 @@
 // common.ts — 管理の口に共通の確かめ（checkAdmin・checkAdminWrite）と、口のファイルどうしで使う時刻・SQL・応答。
 //
-// 確かめの順: APP_ENV=local の門（403）→ 管理の鍵の有無（無ければ投げて入口の try/catch で 500）→ 管理の利用制限
-// （RATE_LIMITS.admin・IP ごと。正しい鍵でも数え、鍵を確かめる前に 429）→ 管理の鍵（401）→ gameId の形（400）→
+// 確かめの順: APP_ENV=local の門（403）→ 管理の鍵の有無とトークンの鍵の有無（IP の鍵付きのハッシュに要る。無ければ投げて入口の
+// try/catch で 500）→ 管理の鍵 → 外れなら IP ごとに外れを数え（RATE_LIMITS.admin。上限を超えたら 429・ほかは 401）、正しければ
+// 管理の鍵ごとに数える（RATE_LIMITS.adminKey。上限を超えたら 429）→ gameId の形（400）→
 // ゲームの登録（404 Unknown game。機能の設定は見ない）→ 書き込みの口は X-Admin-Actor・本文の大きさ（413。src/core/body.ts）・本文の JSON・reason（400）。
 // 読み直しても断る理由の無い競合は、どの口も conflicted の 1 つの文（400）。
 // 口のファイル（routes-*.ts）が読み、一覧は routes.ts が組み立てる。正は docs/guides/working/admin-design.md §2・§3。
@@ -18,6 +19,9 @@ import { RATE_LIMITS } from '../rate-limit-policy';
 import { parseActor, parseReason } from './audit';
 import { adminSecret, requireAdmin } from './key';
 
+/** 正しい鍵の要求を数える単位（RATE_LIMITS.adminKey）の subject。管理の鍵は Worker に 1 つなので 1 つの値。 */
+export const ADMIN_KEY_SUBJECT = 'admin-key';
+
 type Checked = { ok: true; gameId: string } | { ok: false; response: Response };
 
 /** どの管理の口でも同じ確かめ。通ればゲームの ID。 */
@@ -27,11 +31,17 @@ export async function checkAdmin(req: Request, env: Env, url: URL, known: readon
   const secret = adminSecret(env);
   // 鍵の名前・値はメッセージに入れない。入口の try/catch が 500 INTERNAL_ERROR にする
   if (!secret) throw new Error('Admin key is not configured');
-  // 鍵の当て推量を IP ごとの回数で抑える（鍵の確かめの前。正しい鍵でも数える）
-  const limited = await consume(env.DB, RATE_LIMITS.admin, await ipSubject(req));
-  if (limited) return { ok: false, response: limited };
+  // IP の鍵付きのハッシュはトークンの鍵から作るので、鍵の正否より先に作る（トークンの鍵が無ければ正しい鍵でも 500）
+  const ip = await ipSubject(req, env);
   const denied = await requireAdmin(req, secret);
-  if (denied) return { ok: false, response: denied };
+  if (denied) {
+    // 鍵の当て推量は、外れだけを IP ごと（見出しが無ければ no-ip）に数えて抑える。正しい鍵の要求はこの数に入れない
+    const limited = await consume(env.DB, RATE_LIMITS.admin, ip);
+    return { ok: false, response: limited ?? denied };
+  }
+  // 正しい鍵の要求は、外れとは別の単位（管理の鍵ごとに 1 つ）で数える。鍵の無い人の外れで塞がれない
+  const limited = await consume(env.DB, RATE_LIMITS.adminKey, ADMIN_KEY_SUBJECT);
+  if (limited) return { ok: false, response: limited };
   const gameId = url.searchParams.get('gameId');
   if (!validId(gameId)) return { ok: false, response: error('INVALID_ARGUMENT', 'Invalid gameId', 400) };
   if (!await loadGame(env.DB, gameId, known)) return { ok: false, response: error('NOT_FOUND', 'Unknown game', 404) };

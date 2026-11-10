@@ -6,7 +6,8 @@
 // docs/guides/working/analytics-design.md §4）に 1 行ずつ（batch で全部か無し）→ トークン。応答・トークン・ログに account_id を出さない。
 // トークンの更新（POST /v1/accounts/token。refreshRoute）も同じファイルに置く。確かめの順はほかのトークンの口と同じ:
 // APP_ENV=local の門 → トークン（requireAuth。期限切れは 401 TOKEN_EXPIRED・壊れたものは 401 UNAUTHENTICATED）→ プレイヤーごとの
-// 利用制限（RATE_LIMITS.tokenRefresh）→ 止めた印（403 PLAYER_BANNED）→ 同じ g・p で期限を更新した時刻から 30 日先にした新しいトークン。
+// 利用制限（RATE_LIMITS.tokenRefresh）→ 止めた印（403 PLAYER_BANNED）→ 同じ g・p で期限を更新した時刻から 30 日先にした新しいトークン
+// （署名はいまの鍵だけ。前の鍵で確かめたトークンも、ここでいまの鍵のトークンになる）。
 // 本文は読まない。表は足さず（トークンは自己完結のまま）、遊んだ記録にも数えない。設計の正は client-integration-design.md §2.7。
 // モジュールでなく core に置き、src/core/router.ts が /health の次に当てる。
 //
@@ -46,7 +47,7 @@ export const guestRoute: Route = {
   async handle(req, env, _match, _url, known) {
     const blocked = requireLocalWrite(env);
     if (blocked) return blocked;
-    const ipLimited = await consume(env.DB, RATE_LIMITS.guestIp, await ipSubject(req));
+    const ipLimited = await consume(env.DB, RATE_LIMITS.guestIp, await ipSubject(req, env));
     if (ipLimited) return ipLimited;
     const body = await readJson(req, MAX_JSON_BODY_BYTES);
     if (!body.ok) return body.response;

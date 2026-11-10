@@ -4,6 +4,8 @@
 // docs/guides/working/account-design.md §4。本文は {"g","p","exp"} の JSON を base64url にしたもので、
 // account_id は入れない（本文はクライアントが読める）。時刻は引数で受け取る（試験で動かすため）。
 // 発行は src/core/accounts.ts、書き込みの確かめは src/core/auth.ts（A2）が使う。
+// 鍵の取り替えの重なり: 署名はいまの鍵（tokenSecret）だけ、確かめはいまの鍵と前の鍵（AUTH_TOKEN_SECRET_PREVIOUS。無くてよい）の
+// 両方を試す（verificationSecrets・verifyTokenWithSecrets）。kid は付けない（hardening-design.md §4 の案 A）。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
 import { validId } from './ids';
@@ -67,6 +69,16 @@ export async function verifyToken(token: string, secret: string, nowSeconds: num
   return { ok: true, claims };
 }
 
+/** いまの鍵で確かめ、署名が外れたときだけ次の鍵（前の鍵）で確かめ直す。どの鍵でも署名が外れたら bad_signature。 */
+export async function verifyTokenWithSecrets(token: string, secrets: readonly string[], nowSeconds: number): Promise<VerifyResult> {
+  let result: VerifyResult = { ok: false, reason: 'bad_signature' };
+  for (const secret of secrets) {
+    result = await verifyToken(token, secret, nowSeconds);
+    if (result.ok || result.reason !== 'bad_signature') return result;
+  }
+  return result;
+}
+
 function readClaims(body: string): TokenClaims | null {
   const bytes = fromBase64url(body);
   if (!bytes) return null;
@@ -94,4 +106,21 @@ export function tokenSecret(env: { APP_ENV: string; AUTH_TOKEN_SECRET?: string }
   const secret = env.AUTH_TOKEN_SECRET;
   if (secret !== undefined) return typeof secret === 'string' && secret.length >= MIN_SECRET_LENGTH ? secret : null;
   return env.APP_ENV === 'local' ? LOCAL_DEV_TOKEN_SECRET : null;
+}
+
+/**
+ * 前の鍵を選ぶ。AUTH_TOKEN_SECRET_PREVIOUS が 32 文字以上ならそれ、ほか（無い・短い）は null（前の鍵を試さない）。
+ * 署名には使わない。取り替えの重なりの間だけ入れておき、30 日（TOKEN_TTL_SECONDS）たったら消す（docs/guides/manuals/deploy.md）。
+ */
+export function previousTokenSecret(env: { AUTH_TOKEN_SECRET_PREVIOUS?: string }): string | null {
+  const secret = env.AUTH_TOKEN_SECRET_PREVIOUS;
+  return typeof secret === 'string' && secret.length >= MIN_SECRET_LENGTH ? secret : null;
+}
+
+/** 確かめで試す鍵の並び（いまの鍵 → 前の鍵）。いまの鍵が無ければ null（使う側は 500。前の鍵だけでは通さない）。 */
+export function verificationSecrets(env: { APP_ENV: string; AUTH_TOKEN_SECRET?: string; AUTH_TOKEN_SECRET_PREVIOUS?: string }): string[] | null {
+  const current = tokenSecret(env);
+  if (!current) return null;
+  const previous = previousTokenSecret(env);
+  return previous && previous !== current ? [current, previous] : [current];
 }

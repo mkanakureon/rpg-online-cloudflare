@@ -14,7 +14,7 @@ import worker from '../src/worker';
 import { decide, retryAfterSeconds, windowStart } from '../src/core/rate-limit';
 import { RATE_LIMITS } from '../src/core/rate-limit-policy';
 import { bearer } from './support/auth';
-import { countRateLimitRows, fillRateLimit, resetRateLimits } from './support/rate-limits';
+import { countRateLimitRows, fillRateLimit, ipKey, resetRateLimits } from './support/rate-limits';
 
 type TestEnv = { DB: D1Database; APP_ENV: string };
 const baseEnv = env as unknown as TestEnv;
@@ -51,10 +51,6 @@ async function expectRateLimited(res: Response): Promise<void> {
   expect(Number(retryAfter)).toBeGreaterThanOrEqual(1);
   expect(Number(retryAfter)).toBeLessThanOrEqual(60);
 }
-async function sha256Hex(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
 
 beforeEach(async () => {
   await resetRateLimits(baseEnv.DB);
@@ -81,6 +77,7 @@ describe('R1: 数え方（L1）', () => {
       saves: { scope: 'saves', limit: 60, period: 60 },
       rewards: { scope: 'rewards', limit: 60, period: 60 },
       admin: { scope: 'admin-ip', limit: 60, period: 60 },
+      adminKey: { scope: 'admin-key', limit: 60, period: 60 },
       playerData: { scope: 'player-data', limit: 60, period: 60 },
       quests: { scope: 'quests', limit: 60, period: 60 },
       tokenRefresh: { scope: 'token-refresh', limit: 10, period: 60 },
@@ -90,7 +87,7 @@ describe('R1: 数え方（L1）', () => {
 
 describe('R1: ゲストの発行', () => {
   it('同じIPからゲストを上限より多く発行すると429とRetry-Afterを返し行を作らない', async () => {
-    await fillRateLimit(baseEnv.DB, RATE_LIMITS.guestIp, await sha256Hex('203.0.113.1'));
+    await fillRateLimit(baseEnv.DB, RATE_LIMITS.guestIp, await ipKey('203.0.113.1'));
     const accounts = await count('accounts');
     const players = await count('game_players');
     await expectRateLimited(await postGuest('203.0.113.1'));
@@ -99,7 +96,7 @@ describe('R1: ゲストの発行', () => {
   });
 
   it('ゲストの発行の利用制限はIPごとに別に数える', async () => {
-    await fillRateLimit(baseEnv.DB, RATE_LIMITS.guestIp, await sha256Hex('203.0.113.1'));
+    await fillRateLimit(baseEnv.DB, RATE_LIMITS.guestIp, await ipKey('203.0.113.1'));
     expect((await postGuest('203.0.113.1')).status).toBe(429);
     const res = await postGuest('203.0.113.2');
     expect(res.status).toBe(200);

@@ -74,7 +74,8 @@ Cloudflare の機能（**公式の文書と、リポジトリに入っている 
 | `POST /v1/rankings/{boardId}` | プレイヤー（トークンの `g`・`p`） | 60 秒に 30 回 | D1 | R1 |
 | `/v1/saves` の 4 つの操作（`PUT`・`GET`・一覧・`DELETE`） | プレイヤー（トークンの `g`・`p`） | 60 秒に 60 回（4 つで合わせて） | D1 | R2 |
 | `GET /v1/inventory`・`GET /v1/inventory/history`（E2 でイベントの一覧・受け取りも合わせる） | プレイヤー（トークンの `g`・`p`） | 60 秒に 60 回（報酬の操作で合わせて。`RATE_LIMITS.rewards`） | D1 | E1（`event-reward-design.md`） |
-| 管理の API（`/v1/admin/...` の全部の口） | IP（`CF-Connecting-IP` のハッシュ。正しい管理の鍵でも数え、鍵を確かめる前に数える） | 60 秒に 60 回（管理の口で合わせて。`RATE_LIMITS.admin`・単位の名前 `admin-ip`） | D1 | O1（`admin-design.md`） |
+| 管理の API（`/v1/admin/...` の全部の口）の鍵の外れ | IP（`CF-Connecting-IP` の鍵付きのハッシュ。見出しが無ければ `no-ip`。鍵を確かめた後に、外れた要求だけを数える） | 60 秒に 60 回（管理の口で合わせて。`RATE_LIMITS.admin`・単位の名前 `admin-ip`） | D1 | O1・G9（`admin-design.md`） |
+| 管理の API（`/v1/admin/...` の全部の口）の正しい鍵 | 管理の鍵（Worker に 1 つ。鍵の外れとは別に数える） | 60 秒に 60 回（管理の口で合わせて。`RATE_LIMITS.adminKey`・単位の名前 `admin-key`） | D1 | G9（`hardening-design.md` §5.1） |
 | `GET`・`POST /v1/player-data` | プレイヤー（トークンの `g`・`p`） | 60 秒に 60 回（2 つの口で合わせて。`RATE_LIMITS.playerData`・単位の名前 `player-data`） | D1 | U1（`player-data-design.md`） |
 | `GET /v1/quests`・`POST /v1/quests/{questId}/claim` | プレイヤー（トークンの `g`・`p`） | 60 秒に 60 回（2 つの口で合わせて。`RATE_LIMITS.quests`・単位の名前 `quests`） | D1 | Q1（`quest-design.md`） |
 | `POST /v1/accounts/token`（トークンの更新） | プレイヤー（トークンの `g`・`p`） | 60 秒に 10 回（`RATE_LIMITS.tokenRefresh`・単位の名前 `token-refresh`。ほかの操作とは別に数える） | D1 | B3（`client-integration-design.md` §2.7） |
@@ -102,7 +103,7 @@ Cloudflare の機能（**公式の文書と、リポジトリに入っている 
 
 ```sql
 CREATE TABLE IF NOT EXISTS rate_limit_counters (
-  scope TEXT NOT NULL,          -- 'guest-ip'・'guest-game'・'score'・'saves'・'rewards'・'admin-ip'・'player-data'・'quests'・'token-refresh'（定数のモジュールの名前。rewards は E1、admin-ip は O1、player-data は U1、quests は Q1、token-refresh は B3 で足した）
+  scope TEXT NOT NULL,          -- 'guest-ip'・'guest-game'・'score'・'saves'・'rewards'・'admin-ip'・'admin-key'・'player-data'・'quests'・'token-refresh'（定数のモジュールの名前。rewards は E1、admin-ip は O1、player-data は U1、quests は Q1、token-refresh は B3、admin-key は G9 で足した）
   subject TEXT NOT NULL,        -- IP のハッシュ・gameId・'<gameId>:<playerId>'
   window_start INTEGER NOT NULL, -- 窓の始まり（UNIX 秒）
   count INTEGER NOT NULL CHECK (count >= 1),
@@ -126,7 +127,7 @@ DELETE FROM rate_limit_counters WHERE scope = ? AND subject = ? AND window_start
 
 ### 鍵
 
-- IP: `CF-Connecting-IP` の値の SHA-256（16 進）を `subject` にする。IP をそのまま残さない（`operations-security.md` の 6）。見出しが無いとき（vitest・`wrangler dev` で付かないとき。§1 の要確認）は `'no-ip'` の 1 つの鍵で数える（**見出しが無いことを理由に数えずに通さない**。本番で付かない事故があっても、通し放題にならず、全員が 1 つの鍵で止まる側に倒れる）。ローカルで見出しが付かないなら、`npm run cli:smoke` を 1 分に 10 回より多く回すと 429 になる（ふつうの使い方では掛からない。掛かったら `Retry-After` の秒だけ待つ）。
+- IP: `CF-Connecting-IP` の値の鍵付きのハッシュ（HMAC-SHA256 の 16 進。`src/core/rate-limit.ts` の `ipSubject`・`ipHash`）を `subject` にする。IP をそのまま残さない（`operations-security.md` の 6）。素の SHA-256 にしないのは、IPv4 が 2^32 通りで、表を読める人が総当たりで IP に戻せるため（`hardening-design.md` §5.2 の案 A）。HMAC の鍵は、トークンの署名の鍵（`tokenSecret(env)`。選び方は `account-design.md` §4 のまま）と用途の名前 `IP_HASH_PURPOSE` の HMAC-SHA256 で作り、新しい秘密を足さない。トークンの署名の鍵が無い環境では、見出しの有無にかかわらず `ipSubject` が投げて 500 `INTERNAL_ERROR`（ゲストの発行と管理の口。管理の口は管理の鍵が正しくても 500）。トークンの鍵を取り替えると数え直しになる（窓は最長 60 秒）。見出しが無いとき（vitest・`wrangler dev` で付かないとき。§1 の要確認）は `'no-ip'` の 1 つの鍵で数える（**見出しが無いことを理由に数えずに通さない**。本番で付かない事故があっても、通し放題にならず、全員が 1 つの鍵で止まる側に倒れる）。ローカルで見出しが付かないなら、`npm run cli:smoke` を 1 分に 10 回より多く回すと 429 になる（ふつうの使い方では掛からない。掛かったら `Retry-After` の秒だけ待つ）。
 - プレイヤー: トークンの `g` と `p`（`requireAuth` の後）。本文の `playerId` は使わない。
 - ゲーム: ゲストの発行の本文の `gameId`（形を確かめ、ゲームの登録を確かめた後）。
 
@@ -152,6 +153,7 @@ content-type: application/json; charset=utf-8
 | スコアの投稿 | ルート → `requireLocalWrite`（403）→ `requireAuth`（401）→ JSON（400）→ 形（400）→ **プレイヤーの制限（429）** → なりすまし（403）→ ゲームの登録 → 書き込み（R1 の実装で、制限を JSON の前から形の後へ移した。既存の試験 `形の正しくないgameIdはゲームの登録を引く前にINVALID_ARGUMENTの400を返す` は壊れた DB を渡して 400 を待つので、形の外れた要求で DB を引けないため。鍵はトークンの `g`・`p` なので、本文を読んだ後でも偽れない） |
 | セーブ（R2） | ルート → `requireLocalWrite`（403）→ `requireAuth`（401）→ **プレイヤーの制限（429）** → `gameId` → トークンのゲーム → …（`save-design.md` §3 の順のまま） |
 | トークンの更新（B3） | ルート → `requireLocalWrite`（403）→ `requireAuth`（401）→ **プレイヤーの制限（429）** → 止めた印（403 `PLAYER_BANNED`）→ 新しいトークン（本文は読まない。`client-integration-design.md` §2.7） |
+| 管理の口（O1・G9） | ルート → `requireLocalWrite`（403）→ 管理の鍵の有無・IP の鍵（トークンの鍵が無ければ 500）→ 管理の鍵 → **外れなら IP の外れの制限（429。ほかは 401）・正しい鍵なら管理の鍵の制限（429）** → `gameId` → ゲームの登録 → …（`admin-design.md` §2 の順） |
 
 - `APP_ENV` の守りが一番先（本番の設定では数の表にも書かない）。トークンの無い・正しくない要求は数えない（401 が先。他人のプレイヤーの数を減らさせない）。
 - IP の制限は本文を読む前（本文を読まずに断る）。ゲームの制限は `gameId` が要るので登録の後。
@@ -216,11 +218,12 @@ content-type: application/json; charset=utf-8
 | --- | --- | --- | --- | --- |
 | R1 | `利用制限の窓の始まりと残りの秒は時刻と長さから決まる` | L1 | `windowStart(125, 60)`・`retryAfterSeconds(125, 60)`・`retryAfterSeconds(120, 60)` | 120・55・60 |
 | R1 | `足した後の数が上限までなら通し上限を超えたら断る` | L1 | `decide(30, 30)`・`decide(31, 30)` | 通す・断る |
-| R1 | `利用制限の回数と窓は定数のモジュールにある` | L1 | `src/core/rate-limit-policy.ts` の書き出し | `guest-ip` 10／60・`guest-game` 300／60・`score` 30／60・`saves` 60／60・`rewards` 60／60・`admin-ip` 60／60・`player-data` 60／60・`quests` 60／60・`token-refresh` 10／60（§2 の表と同じ。`token-refresh` は B3 で足した） |
+| R1 | `利用制限の回数と窓は定数のモジュールにある` | L1 | `src/core/rate-limit-policy.ts` の書き出し | `guest-ip` 10／60・`guest-game` 300／60・`score` 30／60・`saves` 60／60・`rewards` 60／60・`admin-ip` 60／60・`admin-key` 60／60・`player-data` 60／60・`quests` 60／60・`token-refresh` 10／60（§2 の表と同じ。`token-refresh` は B3、`admin-key` は G9 で足した） |
 | R1 | `同じIPからゲストを上限より多く発行すると429とRetry-Afterを返し行を作らない` | L2 | `CF-Connecting-IP: 203.0.113.1` の鍵に `count = 10` を入れてゲストを発行 | 429・`RATE_LIMITED`・`Retry-After` が 1〜60 の整数。`accounts` と `game_players` の行は増えない |
 | R1 | `ゲストの発行の利用制限はIPごとに別に数える` | L2 | `203.0.113.1` を上限まで埋め、`203.0.113.2` で発行 | 200 で発行できる |
 | R1 | `ゲームごとのゲストの発行の上限を超えると429を返す` | L2 | `guest-game`・`demo-rpg` に `count = 300` を入れ、新しい IP で発行 | 429・`RATE_LIMITED`。行は増えない |
 | R1 | `利用制限の表にIPをそのまま残さない` | L2 | `CF-Connecting-IP: 203.0.113.9` でゲストを 1 回発行 | `rate_limit_counters` のどの行の `subject` にも `203.0.113.9` が無い（64 文字の 16 進がある） |
+| G9 | `利用制限のIPの鍵はトークンの鍵から作った鍵付きのハッシュで素のSHA-256と違う` | L1 | `ipSubject` に `CF-Connecting-IP` のある要求と鍵の違う 2 つの `env`・見出しの無い要求 | 64 文字の 16 進で、素の SHA-256 と違い、トークンの鍵と用途の名前から作った HMAC と同じ。鍵が違えば違う値。見出しが無ければ `no-ip` |
 | R1 | `スコアの投稿の利用制限はプレイヤーごとに別に数える` | L2 | `score`・`demo-rpg:p1` に `count = 30` を入れ、`p2` のトークンで投稿 | `p2` は 200。`p1` の投稿は 429 |
 | R1 | `トークンの無い書き込みは利用制限を数えず401を返す` | L2 | `Authorization` 無しでスコアを 1 回投稿 | 401・`UNAUTHENTICATED`。`rate_limit_counters` に行が無い |
 | R1 | `本番の設定では利用制限より先にNOT_READY_FOR_PRODUCTIONの403を返す` | L2 | `APP_ENV=disabled` でゲストの発行とスコアの投稿 | どちらも 403・`NOT_READY_FOR_PRODUCTION`。`rate_limit_counters` に行が無い |

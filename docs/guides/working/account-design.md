@@ -165,6 +165,13 @@ CREATE TABLE IF NOT EXISTS game_players (
 
 通れば `{ ok: true, claims: { gameId, playerId, exp } }`。署名を本文の読み取りより先に見るので、署名の正しくない本文は JSON として読まない。
 
+### 鍵の取り替えの重なり（G9。`hardening-design.md` §4 の案 A）
+
+- **署名はいまの鍵（`tokenSecret(env)`）だけ。確かめはいまの鍵と前の鍵の両方を試す**（`verificationSecrets(env)` が `[いまの鍵, 前の鍵]` を返し、`verifyTokenWithSecrets` がいまの鍵 → 前の鍵の順に `verifyToken` を呼ぶ。署名が外れた〔`bad_signature`〕ときだけ次の鍵を試し、形や期限の外れはその鍵の答えを返す）。`requireAuth`（`src/core/auth.ts`）がこれを使う。
+- 前の鍵は秘密 `AUTH_TOKEN_SECRET_PREVIOUS`（`previousTokenSecret(env)`）。無くてよい。32 文字未満なら使わない（前の鍵を試さず、いまの鍵だけで確かめる）。いまの鍵が無ければ前の鍵があっても 500（前の鍵だけでは通さない）。
+- 前の鍵で確かめたトークンは、更新の口（`POST /v1/accounts/token`。`refreshRoute`）でいまの鍵で署名した新しいトークンになる。トークンの形・応答・クライアントは変えない。`kid` は付けない（試す鍵が 2 つなので、どの鍵かを本文に書く得が無い）。
+- 取り替えの手順（新しい鍵を `AUTH_TOKEN_SECRET`、いままでの鍵を `AUTH_TOKEN_SECRET_PREVIOUS` に入れ、30 日〔`TOKEN_TTL_SECONDS`〕たったら前の鍵を消す）は `docs/guides/manuals/deploy.md` の手順 2。前の鍵を消し忘れると、漏れた鍵が生き続ける。
+
 `parseBearer(value)`: `Authorization` の値が `Bearer <トークン>`（`Bearer` は大文字小文字を区別しない・間は空白 1 つ以上）ならトークン、そうでなければ `null`。
 
 ### 鍵の置き場（§8 の決めること 4）
@@ -181,7 +188,7 @@ CREATE TABLE IF NOT EXISTS game_players (
 - 本番（将来）は `wrangler secret put AUTH_TOKEN_SECRET` で渡す。**鍵の値をファイル（`wrangler.jsonc`・`.dev.vars`・ソース）に書かない**（`docs/guides/decisions/operations-security.md` の 7）。
 - ローカル（`npm run dev`）は `APP_ENV=local` なので、何も足さずに `LOCAL_DEV_TOKEN_SECRET` で動く。`.dev.vars` は編集しない・`package.json` の `dev` も変えない。人が自分の鍵で試したいときは、自分で `.dev.vars` に `AUTH_TOKEN_SECRET` を書けば、それが勝つ。
 - 試験は `fetch(要求, env)` に渡す `env` に `AUTH_TOKEN_SECRET` を入れて渡せる（鍵の取り替えの試験）。入れなければ `localEnv`（`APP_ENV: 'local'`）で既定の鍵になる。試験の手伝い `test/support/auth.ts`（A2）は `src/core/token.ts` の `signToken` と `LOCAL_DEV_TOKEN_SECRET` でトークンを作る。
-- 鍵を変えると、それまでのトークンは全部 401 になる（取り消しの手段はこれだけ。§8 の決めること 2 のトレードオフ）。
+- 鍵を変えるときに前の鍵（`AUTH_TOKEN_SECRET_PREVIOUS`）を入れなければ、それまでのトークンは全部 401 になる（全員を取り消す手段はこれだけ。§8 の決めること 2 のトレードオフ）。前の鍵を入れれば、重なりの間（30 日）に更新したトークンは新しい鍵へ移る（上の「鍵の取り替えの重なり」）。
 
 ## 5. スコアの投稿への当て方（A2）
 
@@ -254,6 +261,8 @@ API を変えたら CLI モックも合わせる決まり（CLAUDE.md）なの�
 | A2 | `認証の失敗は本文を読む前に返す` | トークン無しで本文 `{"gameId":`（切れた JSON） | 401・`UNAUTHENTICATED`（400 `INVALID_JSON` でない） | L2 |
 | A2 | `BearerでないAuthorizationは401を返す` | `Authorization: Basic …`・`Bearer`（トークン無し） | どちらも 401・`UNAUTHENTICATED`・行が増えない | L2 |
 | A2 | `AUTH_TOKEN_SECRETを変えると前の鍵のトークンは401になる` | 既定の鍵のトークンで、`AUTH_TOKEN_SECRET`（32 文字以上）を入れた env に POST | 401・`UNAUTHENTICATED`。同じ env の鍵で作ったトークンなら 200 | L2 |
+| G9 | `前の鍵で署名したトークンも確かめに通り更新すると新しい鍵のトークンになる` | 前の鍵で作ったトークンを、`AUTH_TOKEN_SECRET` が新しい鍵で `AUTH_TOKEN_SECRET_PREVIOUS` が前の鍵の env で書き込み・更新に送る | 書き込みは 200。更新の応答のトークンは新しい鍵だけで確かめに通り、前の鍵では `bad_signature` | L2 |
+| G9 | `前の鍵の秘密が無い環境ではいまの鍵だけで確かめる` | `verificationSecrets` に前の鍵の無い・短い env、`verifyTokenWithSecrets` に別の鍵のトークン | 前の鍵の無い・短い env はいまの鍵 1 つだけ。別の鍵のトークンは `bad_signature` | L1 |
 | A2 | `発行したゲストのトークンで送ったスコアがそのプレイヤーとして載る` | ゲストを発行し、その `playerId` と `token` で POST のあと GET | 200・GET の `playerId` が発行された ID | L2 |
 | A2 | `認証のエラーの応答はスキーマに合う` | `UNAUTHENTICATED`・`TOKEN_EXPIRED`・`PERMISSION_DENIED` を起こす | 本文が `submitScore` のスキーマに合い、`x-error-codes` にコードがある | L2 |
 | A2 | `スキーマのErrorCodeの列挙は8つのエラーコードと一致する` | `openapi/rpg-online.v1.json` の `ErrorCode` | いまの 5 つと `UNAUTHENTICATED`・`TOKEN_EXPIRED`・`PERMISSION_DENIED`（§7 で置き換える試験の後を継ぐ） | L1 |

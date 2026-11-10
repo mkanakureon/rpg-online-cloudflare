@@ -66,7 +66,7 @@
 | `src/core/ids.ts` | `idPattern`・`validId()` | — |
 | `src/core/guards.ts` | `requireLocalWrite(env)`: `APP_ENV !== 'local'` なら 403 `NOT_READY_FOR_PRODUCTION` の応答、通るなら `null` | `src/core/http.ts` |
 | `src/core/access.ts` | `checkPlayerAccess(req, env, url, rule, feature?)`: プレイヤーのトークンで呼ぶ口が本文を読む前に通る確かめ（門 → トークン → プレイヤーの利用制限 → 止めた印 → `gameId` → トークンのゲーム → 渡されたときだけゲームの登録と機能の設定）。セーブ・所持品・イベント・プレイヤーデータ・クエストが呼ぶ（Issue #69 で 5 つの写しを 1 つにした） | `src/core/` だけ |
-| `src/core/hash.ts`・`src/core/query.ts` | `sha256Hex`（SHA-256 の 16 進。セーブのチェックサム・設定の ETag・二重の止めのハッシュ・IP の鍵）・`positiveInteger`（問い合わせの数）。入出力の無い関数（Issue #69） | — |
+| `src/core/hash.ts`・`src/core/query.ts` | `sha256Hex`（SHA-256 の 16 進。セーブのチェックサム・設定の ETag・二重の止めのハッシュ）・`hmacSha256Hex`（HMAC-SHA256 の 16 進。利用制限の IP の鍵。G9）・`positiveInteger`（問い合わせの数）。入出力の無い関数（Issue #69） | — |
 | `src/core/module.ts` | モジュールの型（下）。`Route` と `GameModule` | `src/core/env.ts` |
 | `src/core/router.ts` | `createRouter(modules)`: `GET /health` と、モジュールのルートを上から順に当て、どれにも当たらなければ 404 `NOT_FOUND` `Endpoint not found` | `src/core/` だけ |
 | `src/modules/index.ts` | モジュールの一覧 `modules = [announcements, rankings]`。**機能の名前の正はここ 1 か所**（M3 で使う） | `src/modules/*` |

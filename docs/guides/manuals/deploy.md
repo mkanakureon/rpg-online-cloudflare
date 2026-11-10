@@ -82,12 +82,13 @@
 
 ### 2. 秘密を入れる（`AUTH_TOKEN_SECRET`・`ADMIN_API_KEY`）
 
-Worker が使う秘密は 2 つです（`src/core/env.ts` の `Env` の型）。
+Worker が使う秘密は 3 つです（`src/core/env.ts` の `Env` の型）。はじめに入れるのは `AUTH_TOKEN_SECRET` と `ADMIN_API_KEY` の 2 つで、`AUTH_TOKEN_SECRET_PREVIOUS` はトークンの鍵を取り替えるときだけ入れます（下の「取り替えたとき」）。
 
 | 名前 | 何の鍵か | 無いとき |
 | --- | --- | --- |
 | `AUTH_TOKEN_SECRET` | プレイヤーのトークンの署名（`src/core/token.ts`） | P6 の後、`local` でない環境の書き込みが 500 `INTERNAL_ERROR`（P6 の前は先に 403） |
-| `ADMIN_API_KEY` | 管理の口の鍵（`src/core/admin/key.ts`） | 管理の口が 500 `INTERNAL_ERROR`（P6 の前は管理の口が全部先に 403） |
+| `AUTH_TOKEN_SECRET_PREVIOUS` | 取り替える前のトークンの鍵（確かめだけに使い、署名には使わない。`src/core/token.ts` の `previousTokenSecret`） | ふつうは無い。無ければいまの鍵だけで確かめる |
+| `ADMIN_API_KEY` | 管理の口の鍵（`src/core/admin/key.ts`） | 管理の口が 500 `INTERNAL_ERROR`（P6 の前は管理の口が全部先に 403）。`AUTH_TOKEN_SECRET` が無い環境でも、管理の口は 500（利用制限の IP の鍵付きのハッシュをトークンの鍵から作るため） |
 
 1. 値を作ります。どちらも **32 文字以上の乱数**にします（短いと使われません）。1 つの値ごとに 1 回流します。
 
@@ -107,7 +108,25 @@ Worker が使う秘密は 2 つです（`src/core/env.ts` の `Env` の型）。
 - **staging と production には別の値**を入れます（staging の鍵が漏れても production のトークンを作れないように）。4 つとも別の値です。
 - 値をファイル（`wrangler.jsonc`・ソース・`.dev.vars` を git に入れること）・チャット・Issue に書かないでください。手元に残すならパスワードの管理の道具に入れます。
 - **取り替えたとき**（P6 の後。P6 の前は、トークンや管理の鍵を見る前に 403 になる）:
-  - `AUTH_TOKEN_SECRET` を入れ直すと、前の鍵で作ったトークンは全部 **401 `UNAUTHENTICATED`** になります。遊ぶ人のクライアントはゲストを発行し直すことになります。
+  - `AUTH_TOKEN_SECRET` は、前の鍵を `AUTH_TOKEN_SECRET_PREVIOUS` に移してから入れ直します（重なりの期間）。Worker は確かめで新しい鍵と前の鍵の両方を試し、署名は新しい鍵だけでします。遊ぶ人のトークンは、更新の口（`POST /v1/accounts/token`）を通ると新しい鍵のトークンになります。
+    1. いまの `AUTH_TOKEN_SECRET` の値（パスワードの管理の道具に残したもの）を、前の鍵として入れます。
+
+       ```bash
+       npx wrangler secret put AUTH_TOKEN_SECRET_PREVIOUS --env staging
+       npx wrangler secret put AUTH_TOKEN_SECRET_PREVIOUS --env production
+       ```
+
+    2. 新しい 32 文字以上の乱数を作り（手順 2 の 1）、`npx wrangler secret put AUTH_TOKEN_SECRET --env <環境>` で入れ直します。
+    3. **30 日（トークンの期限）たったら、前の鍵を消します。** 消し忘れると、漏れた前の鍵で作ったトークンが通り続けます。
+
+       ```bash
+       npx wrangler secret delete AUTH_TOKEN_SECRET_PREVIOUS --env staging
+       npx wrangler secret delete AUTH_TOKEN_SECRET_PREVIOUS --env production
+       ```
+
+    - 前の鍵を入れずに `AUTH_TOKEN_SECRET` を入れ直すと（鍵が漏れて全員を止めたいとき）、前の鍵で作ったトークンは全部 **401 `UNAUTHENTICATED`** になり、遊ぶ人のクライアントはゲストを発行し直すことになります。
+    - 30 日の間に更新しなかった人のトークンは、前の鍵を消した後は 401 になります。
+    - トークンの鍵を替えると、利用制限の IP の数えがいったん 0 に戻ります（窓は最長 60 秒）。
   - `ADMIN_API_KEY` を入れ直すと、管理コマンド（`node scripts/admin-cli.mjs`）に渡す鍵（環境変数 `ADMIN_API_KEY`。行き先の Worker の URL は環境変数 `RPG_API_BASE`、既定は `http://127.0.0.1:8787`）も同時に新しい値に変えます。前の鍵では管理の口が 401 になります。
 
 ### 3. リモートの D1 を作り、マイグレーションを流す
@@ -162,7 +181,7 @@ staging で手順の「確かめ方」が済んでから、`npx wrangler deploy 
 | --- | --- |
 | 書き込みが全部 403 `NOT_READY_FOR_PRODUCTION` | いまの版の正しい結果です（冒頭）。P6 の後まで待ちます。`APP_ENV` を `local` にして回避しないでください |
 | 書き込みや管理の口が 500 `INTERNAL_ERROR`（P6 の後） | その環境に `AUTH_TOKEN_SECRET`・`ADMIN_API_KEY` が入っていない、または 32 文字より短い。手順 2 を `--env` を付けて流し直す |
-| 前は通ったトークンが 401 `UNAUTHENTICATED` | `AUTH_TOKEN_SECRET` を取り替えた後です。ゲストを発行し直します |
+| 前は通ったトークンが 401 `UNAUTHENTICATED` | `AUTH_TOKEN_SECRET` を取り替えた後で、前の鍵が `AUTH_TOKEN_SECRET_PREVIOUS` に入っていないか、もう消した後です。重なりの間なら手順 2 の「取り替えたとき」のとおり前の鍵を入れます。消した後ならゲストを発行し直します |
 | マイグレーションが別の D1 に流れた・見つからない | `--env staging`（か `--env production`）と `--remote` を付けたか、`database_id` をダミーのままにしていないかを見る |
 | `env.staging` に D1 や `APP_ENV` が無いと言われる | `vars`・`d1_databases` は上の階から引き継がれません。手順 1 の手本のとおり環境ごとに書く |
 | Cron が動かない | `triggers.crons` を見る。手本のとおり環境の中にも同じ値を書く |
