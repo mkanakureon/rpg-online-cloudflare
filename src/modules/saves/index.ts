@@ -4,7 +4,8 @@
 // トークンのゲームとの突き合わせの順に確かめる（本文を読む前。制限の順の正は docs/guides/working/abuse-protection-design.md §3）。
 // PUT はその後に本文の大きさ（src/core/body.ts）→ JSON → 形（validate.ts）→ data の大きさ → チェックサム（checksum.ts）→ ゲームの登録と
 // 機能の設定 → 書き込み（リビジョンを比べて書く 1 つの文。合わなければ 409 SAVE_CONFLICT、新しいスロットで MAX_SLOTS を
-// 超えれば 409 SLOT_LIMIT_EXCEEDED）。GET・一覧は登録と設定の後に読む。DELETE は baseRevision の形の後に、行を消さず
+// 超えれば 409 SLOT_LIMIT_EXCEEDED。新しい名前の行で墓石も数えた行が MAX_SAVE_ROWS に届いていれば、同じ batch で一番古い墓石を
+// 1 つ消してから書く）。GET・一覧は登録と設定の後に読む。DELETE は baseRevision の形の後に、行を消さず
 // 墓石（deleted = 1）にしてリビジョンを進める（消して書き直しても古い端末のリビジョンが合わないように）。
 // プレイヤーはトークンの p だけで決める。data は解釈せず、ログにも出さない。順と SQL の正は docs/guides/working/save-design.md §3。
 //
@@ -17,7 +18,7 @@ import { error, json } from '../../core/http';
 import type { GameModule } from '../../core/module';
 import { RATE_LIMITS } from '../../core/rate-limit-policy';
 import { sha256Hex } from './checksum';
-import { MAX_REQUEST_BYTES, MAX_SAVE_BYTES, MAX_SLOTS } from './limits';
+import { MAX_REQUEST_BYTES, MAX_SAVE_BYTES, MAX_SAVE_ROWS, MAX_SLOTS } from './limits';
 import { parseRevision, parseSaveWrite, utf8Size } from './validate';
 
 type SaveRow = {
@@ -43,6 +44,15 @@ const insertFirst = `INSERT INTO saves (game_id, player_id, slot_id, revision, f
     checksum = excluded.checksum, size = excluded.size, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
   WHERE saves.deleted = 1
   RETURNING revision, updated_at AS updatedAt`;
+// baseRevision = 0 の書き込みの前に同じ batch で流す（墓石の使い回し。docs/guides/working/save-design.md §2）。
+// 新しい行が入るとき（その名前の行が無く、消していないスロットが MAX_SLOTS 未満）で、墓石も数えた行が MAX_SAVE_ROWS 以上なら、
+// そのプレイヤーの一番古い墓石（updated_at、同じなら slot_id の昇順）を 1 つ消す。生きているスロットは消さない。
+// ?1 gameId・?2 playerId・?3 slotId・?4 MAX_SAVE_ROWS・?5 MAX_SLOTS
+const reuseTombstone = `DELETE FROM saves WHERE game_id = ?1 AND player_id = ?2 AND slot_id = (
+    SELECT slot_id FROM saves WHERE game_id = ?1 AND player_id = ?2 AND deleted = 1 ORDER BY updated_at, slot_id LIMIT 1)
+  AND NOT EXISTS (SELECT 1 FROM saves WHERE game_id = ?1 AND player_id = ?2 AND slot_id = ?3)
+  AND (SELECT COUNT(*) FROM saves WHERE game_id = ?1 AND player_id = ?2) >= ?4
+  AND (SELECT COUNT(*) FROM saves WHERE game_id = ?1 AND player_id = ?2 AND deleted = 0) < ?5`;
 // baseRevision >= 1（いまのリビジョンと同じときだけ進める）
 const updateAt = `UPDATE saves SET revision = revision + 1, format_version = ?, data = ?, checksum = ?, size = ?,
     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -84,9 +94,11 @@ export const saves: GameModule = {
         const unknown = await requireGame(env, gameId, saves.name, known);
         if (unknown) return unknown;
         const rows = baseRevision === 0
-          ? await env.DB.prepare(insertFirst)
-            .bind(gameId, claims.playerId, slotId, formatVersion, data, checksum, size, gameId, claims.playerId, MAX_SLOTS)
-            .all<Written>()
+          ? (await env.DB.batch([
+            env.DB.prepare(reuseTombstone).bind(gameId, claims.playerId, slotId, MAX_SAVE_ROWS, MAX_SLOTS),
+            env.DB.prepare(insertFirst)
+              .bind(gameId, claims.playerId, slotId, formatVersion, data, checksum, size, gameId, claims.playerId, MAX_SLOTS),
+          ]))[1] as { results: Written[] }
           : await env.DB.prepare(updateAt)
             .bind(formatVersion, data, checksum, size, gameId, claims.playerId, slotId, baseRevision).all<Written>();
         const written = rows.results[0];

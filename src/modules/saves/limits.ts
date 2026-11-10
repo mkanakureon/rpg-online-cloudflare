@@ -2,6 +2,7 @@
 //
 // 値と理由の正は docs/guides/working/save-design.md §2 の「定数」と §10 の決めること 2・5。
 // MAX_SLOTS は src/modules/saves/index.ts の新しいスロットへの書き込み（V2）で使う。上限を上げるのは互換を壊さないが、下げると壊す。
+// MAX_SAVE_ROWS は墓石も数えた行の上限（G6。docs/guides/working/hardening-design.md §2.2）。届いたら新しい名前の書き込みが一番古い墓石を使い回す。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
 
@@ -11,3 +12,5 @@ export const MAX_SAVE_BYTES = 65_536;
 export const MAX_REQUEST_BYTES = MAX_SAVE_BYTES * 6 + 1024;
 /** 1 プレイヤー・1 ゲームあたりのスロットの数（消したスロットは数えない）。 */
 export const MAX_SLOTS = 10;
+/** 1 プレイヤー・1 ゲームあたりの、墓石（消したスロットの印）も数えた行の数の上限。届いていたら新しい名前の書き込みが一番古い墓石を 1 つ消してから書く。 */
+export const MAX_SAVE_ROWS = 100;
