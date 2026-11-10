@@ -3781,7 +3781,7 @@
           },
           "rankings": {
             "type": "array",
-            "description": "ボードごとのスコア（ボードの ID の昇順）。",
+            "description": "ボードごとのスコア（ボードの ID の昇順。最大 20 件。1 プレイヤー・1 ゲームが行を持てるボードの数の上限で、ゲームのクライアントの口のスコアの投稿は 21 個目の新しいボードを RANKING_LIMIT_EXCEEDED で断る）。",
             "items": {
               "$ref": "#/components/schemas/AdminRanking"
             }

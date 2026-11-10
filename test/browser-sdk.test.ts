@@ -240,7 +240,7 @@ describe('B2 ブラウザの SDK の決まり（L1）', () => {
 
   it('SDKはエラーのcodeを画面の文の種類に分け知らないコードはunknownにする', async () => {
     const catalog = (spec['x-client-policy'] as { errorCatalog: Record<string, { category: string }> }).errorCatalog;
-    expect(Object.keys(catalog)).toHaveLength(19);
+    expect(Object.keys(catalog)).toHaveLength(20);
     const statusOf = (code: string) => (code === 'INTERNAL_ERROR' ? 500 : code === 'RATE_LIMITED' ? 429 : 400);
     for (const [code, { category }] of Object.entries(catalog)) {
       const f = fake(() => json(statusOf(code), errorBody(code)));

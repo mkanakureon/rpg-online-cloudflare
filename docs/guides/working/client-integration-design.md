@@ -42,8 +42,8 @@ Phase 1 の残り「エラーコード、タイムアウト、ページングを
 | ADR 0002（`docs/adr/0002-engine-agnostic-game-backend.md`） | クライアントは Unreal・Unity・ブラウザ（TypeScript）の 3 つ。どれも同じ HTTP/JSON の API を呼ぶ。サーバーにエンジンのクラスや UI を持ち込まない |
 | `roadmap.md` | Phase 1 の「エラーコード、タイムアウト、ページングを確定」が未チェック。Phase 3 の 5 項目（ブラウザの SDK とサンプル・Unreal の C++ 層とイベントコマンドの橋渡し・Unity の C# 層・通信エラーとリトライと非同期の確かめ・Steam 等のアダプター）。作業機は Mac・UE 専用 PC・Unity 専用 PC |
 | `architecture.md` §5（`docs/guides/working/architecture.md`） | イベントコマンド `online.ranking.submit` の構想（`params` の `scoreVariable`・`responseVariable`）。「安全な GET は再試行可能。POST には冪等キー」「スキーマ違反はエラー変数に落とす」「オフラインでもゲーム進行を妨げない」「クライアントに保存した長期の秘密鍵を安全とみなさない」 |
-| `api-schema-design.md`（`docs/guides/working/api-schema-design.md`） | 形の正は `openapi/rpg-online.v1.json`（OpenAPI 3.1 の JSON・パッケージを足さない自前の検証関数 `test/support/schema-check.ts`）。各応答に返りうるコードの `x-error-codes` がある（103 か所）。操作は 19 個・`ErrorCode` の列挙は 19 個 |
-| `docs/api-contract.md` のエラー | 形は `{"error":{"code","message"}}`。ゲームのクライアントの口のコードは 19 個（`INVALID_ARGUMENT`・`NOT_FOUND`・`NOT_READY_FOR_PRODUCTION`・`INVALID_JSON`・`INTERNAL_ERROR`・`UNAUTHENTICATED`・`TOKEN_EXPIRED`・`PERMISSION_DENIED`・`SAVE_CONFLICT`・`PAYLOAD_TOO_LARGE`・`SLOT_LIMIT_EXCEEDED`・`RATE_LIMITED`・`EVENT_NOT_ACTIVE`・`INVENTORY_LIMIT_EXCEEDED`・`PLAYER_BANNED`・`PLAYER_DATA_LIMIT_EXCEEDED`・`IDEMPOTENCY_KEY_REUSED`・`QUEST_NOT_COMPLETED`・`QUEST_NOT_ACTIVE`）。DB の失敗は中身を返さず 500 `INTERNAL_ERROR`。`message` の文は決めない（クライアントは `code` で分ける） |
+| `api-schema-design.md`（`docs/guides/working/api-schema-design.md`） | 形の正は `openapi/rpg-online.v1.json`（OpenAPI 3.1 の JSON・パッケージを足さない自前の検証関数 `test/support/schema-check.ts`）。各応答に返りうるコードの `x-error-codes` がある。操作は 19 個・`ErrorCode` の列挙は 20 個（G5 で `RANKING_LIMIT_EXCEEDED` を足した） |
+| `docs/api-contract.md` のエラー | 形は `{"error":{"code","message"}}`。ゲームのクライアントの口のコードは 20 個（`INVALID_ARGUMENT`・`NOT_FOUND`・`NOT_READY_FOR_PRODUCTION`・`INVALID_JSON`・`INTERNAL_ERROR`・`UNAUTHENTICATED`・`TOKEN_EXPIRED`・`PERMISSION_DENIED`・`SAVE_CONFLICT`・`PAYLOAD_TOO_LARGE`・`SLOT_LIMIT_EXCEEDED`・`RATE_LIMITED`・`EVENT_NOT_ACTIVE`・`INVENTORY_LIMIT_EXCEEDED`・`PLAYER_BANNED`・`PLAYER_DATA_LIMIT_EXCEEDED`・`IDEMPOTENCY_KEY_REUSED`・`QUEST_NOT_COMPLETED`・`QUEST_NOT_ACTIVE`・`RANKING_LIMIT_EXCEEDED`）。DB の失敗は中身を返さず 500 `INTERNAL_ERROR`。`message` の文は決めない（クライアントは `code` で分ける） |
 | `abuse-protection-design.md`（`docs/guides/working/abuse-protection-design.md`） | 429 `RATE_LIMITED` と `Retry-After`（窓の終わりまでの秒。1〜60 の整数。`src/core/rate-limit.ts` の `retryAfterSeconds`）。断った要求も数える。CLI モックは 429 で再試行せず止まる（§11）。`Idempotency-Key` の後から足す形の期限は「**要確認**: クライアントの再試行の長さ。Phase 3」と残っている |
 | `account-design.md`（`docs/guides/working/account-design.md`） | トークンは `v1.<本文>.<HMAC-SHA256>`、期限 30 日（`src/core/token.ts` の `TOKEN_TTL_SECONDS`）、更新の口は作らない（§8 の決めること 3 の A。そこでの B は「1 時間の短いトークン＋D1 に持つ長い更新用の秘密」で、引き継ぎと一緒に設計するとした。C の「期限無し」は漏れたトークンが永久に使えるので退けた）。期限切れは 401 `TOKEN_EXPIRED`、壊れた・無いトークンは 401 `UNAUTHENTICATED`。外部の認証（Steam など）は `account_identities(provider, subject, account_id)` を足す形（§11） |
 | `event-reward-design.md`（`docs/guides/working/event-reward-design.md`）・`quest-design.md` | 報酬の受け取りは一意の鍵（プレイヤー・イベントかクエスト・区切り）で、同じ区切りの 2 回目は 200 で 1 回目と同じ本文。区切りをまたいだ送り直しは 409 になりうるので、受領の履歴で確かめる |
@@ -125,7 +125,7 @@ Phase 1 の残り「エラーコード、タイムアウト、ページングを
 
 ### 2.5 エラーコードの表（§11 の決めること 5）
 
-19 個のコードと、コードの無い失敗。**画面の文の種類**はゲームが文を選ぶ分類で、文そのものはゲームが持つ（多言語のため。サーバーの `message` は人が読むためで画面に出さない）。
+20 個のコードと、コードの無い失敗。**画面の文の種類**はゲームが文を選ぶ分類で、文そのものはゲームが持つ（多言語のため。サーバーの `message` は人が読むためで画面に出さない）。
 
 | コード | 状態 | 画面の文の種類 | 自動の再試行 | ゲームの次の一手 |
 | --- | --- | --- | --- | --- |
@@ -145,6 +145,7 @@ Phase 1 の残り「エラーコード、タイムアウト、ページングを
 | `SLOT_LIMIT_EXCEEDED` | 409 | `limit`（上限） | しない | スロットを消してもらう |
 | `INVENTORY_LIMIT_EXCEEDED` | 409 | `limit` | しない | 受け取れない |
 | `PLAYER_DATA_LIMIT_EXCEEDED` | 409 | `limit` | しない | 値が上限 |
+| `RANKING_LIMIT_EXCEEDED` | 409 | `limit` | しない | 新しいボードに送れない（1 人 20 ボードまで）。既に行のあるボードには送れる |
 | `EVENT_NOT_ACTIVE` | 409 | `expired`（期間の外） | しない | 一覧を読み直す |
 | `QUEST_NOT_ACTIVE` | 409 | `expired` | しない | 一覧を読み直す |
 | `QUEST_NOT_COMPLETED` | 409 | `not-ready`（条件を満たしていない） | しない | 一覧を読み直す |
@@ -152,7 +153,7 @@ Phase 1 の残り「エラーコード、タイムアウト、ページングを
 | （コード無し）JSON でない 4xx・表に無いコード | — | `unknown` | しない | ログに残す。新しいサーバーが足したコードは `unknown` に落ちる（互換） |
 
 - 種類は 11（`client-bug`・`not-found`・`unavailable`・`network`・`busy`・`session`・`banned`・`conflict`・`limit`・`expired`・`not-ready`）と `unknown`。
-- コードを足すとき（サーバーの束）は、この表（§3 の置き場）にも同じコミットで行を足す。B1 の試験 `スキーマのエラーコードの表はErrorCodeの列挙と同じコードを持つ` が、列挙と表の数と中身が揃っていることを見張る（いまの列挙の数は既存の試験 `スキーマのErrorCodeの列挙は19個のエラーコードと一致する` が見張る）。
+- コードを足すとき（サーバーの束）は、この表（§3 の置き場）にも同じコミットで行を足す。B1 の試験 `スキーマのエラーコードの表はErrorCodeの列挙と同じコードを持つ` が、列挙と表の数と中身が揃っていることを見張る（いまの列挙の数は既存の試験 `スキーマのErrorCodeの列挙は20個のエラーコードと一致する` が見張る）。
 
 ### 2.6 ページング（§11 の決めること 6。Phase 1 の残りの確定）
 
@@ -208,7 +209,7 @@ Phase 1 の残り「エラーコード、タイムアウト、ページングを
 }
 ```
 
-（`errorCatalog` は 19 行全部。上は 2 行だけ写した。）
+（`errorCatalog` は 20 行全部。上は 2 行だけ写した。）
 
 3 つのクライアントが同じ値を使うことの確かめ方:
 

@@ -72,6 +72,7 @@ namespace RpgOnlineClientPolicy
 		{ TEXT("SLOT_LIMIT_EXCEEDED"), TEXT("limit"), false },
 		{ TEXT("INVENTORY_LIMIT_EXCEEDED"), TEXT("limit"), false },
 		{ TEXT("PLAYER_DATA_LIMIT_EXCEEDED"), TEXT("limit"), false },
+		{ TEXT("RANKING_LIMIT_EXCEEDED"), TEXT("limit"), false },
 		{ TEXT("EVENT_NOT_ACTIVE"), TEXT("expired"), false },
 		{ TEXT("QUEST_NOT_ACTIVE"), TEXT("expired"), false },
 		{ TEXT("QUEST_NOT_COMPLETED"), TEXT("not-ready"), false },

@@ -84,6 +84,7 @@ namespace RpgOnline
             new ErrorRule("SLOT_LIMIT_EXCEEDED", "limit", false),
             new ErrorRule("INVENTORY_LIMIT_EXCEEDED", "limit", false),
             new ErrorRule("PLAYER_DATA_LIMIT_EXCEEDED", "limit", false),
+            new ErrorRule("RANKING_LIMIT_EXCEEDED", "limit", false),
             new ErrorRule("EVENT_NOT_ACTIVE", "expired", false),
             new ErrorRule("QUEST_NOT_ACTIVE", "expired", false),
             new ErrorRule("QUEST_NOT_COMPLETED", "not-ready", false),

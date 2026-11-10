@@ -100,9 +100,10 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 - PoCでは同一プレイヤーについて**最高スコアだけを保持**。
 - 同点は、先にそのスコアに届いた人が上（並びはスコアの高い順 → そのスコアに届いた時刻の早い順 → `playerId`の昇順）。低いスコアや同じスコアを出し直しても届いた時刻は進まない（表示名だけは毎回書き換わる）。
 - `score`は0～1,000,000,000の整数。
+- 1 プレイヤー・1 ゲームが行を持てるボードは**20 個まで**。まだ行の無いボードへの投稿で、そのプレイヤーの行が既に 20 個あれば**409 `RANKING_LIMIT_EXCEEDED`**で書かない（既に行のあるボードへの投稿は上限に届いていても通る）。上限の判定は書き込みと同じ 1 つの文で行う。
 - `npm run dev`でローカル実行し`APP_ENV=local`を与えた時だけ・トークンがある時だけ書込み可能。`APP_ENV`が`local`でなければ、トークンがあっても無くても本文を読む前に**403 `NOT_READY_FOR_PRODUCTION`**。
 - 同じプレイヤー（トークンのゲームとプレイヤー）は 60 秒の窓に 30 回まで。超えると**429 `RATE_LIMITED`**と`Retry-After`で、記録を変えない（下の「利用制限」）。トークンの無い・正しくない要求と、本文の形の外れた要求は数えない（401・400 が先）。
-- 確かめの順: `APP_ENV`の守り（403）→ トークン（本文を読む前）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ 欄の形（400 `INVALID_ARGUMENT`。ここまで DB を引かない）→ プレイヤーの利用制限（429）→ 止めた印（403 `PLAYER_BANNED`）→ トークンと本文の突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録（404 `NOT_FOUND`）→ 書き込み。
+- 確かめの順: `APP_ENV`の守り（403）→ トークン（本文を読む前）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ 欄の形（400 `INVALID_ARGUMENT`。ここまで DB を引かない）→ プレイヤーの利用制限（429）→ 止めた印（403 `PLAYER_BANNED`）→ トークンと本文の突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録（404 `NOT_FOUND`）→ 書き込み（409 `RANKING_LIMIT_EXCEEDED`）。
 - `Authorization`が無い・`Bearer`でない・トークンの形か署名が正しくなければ**401 `UNAUTHENTICATED`**（`message`は`Missing or malformed Authorization`か`Invalid token`。どちらが外れたかの詳しい理由は返さない）。期限が切れていれば**401 `TOKEN_EXPIRED`**（ゲストを発行し直す）。
 - 本文の`gameId`・`playerId`がトークンのゲームとプレイヤーと違えば**403 `PERMISSION_DENIED`**（`message`は`Token does not match player`）。本文の形は変わらない（`playerId`も送る）。
 
@@ -399,7 +400,7 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 
 - `createdAt`はプレイヤーを作った時刻（ISO 8601・UTC・秒まで）。
 - `ban`は止めた印（`reason`・`bannedAt`・`expiresAt`。時刻は ISO 8601・UTC・秒まで、`expiresAt`は期限が無ければ`null`）。**止めていなければ（印が無い・期限が過ぎた）欄ごと載らない**。
-- `balances`は残高のある品目（品目の ID の昇順。`kind`は`currency`か`item`）。`history`は受領の履歴の新しい順に 20 行まで（`GET /v1/inventory/history`の行と同じ欄）。`saves`はスロットの ID の昇順で、消した印のある行も`deleted: true`で載る（`updatedAt`はセーブの API と同じ値）。`rankings`はボードの ID の昇順。
+- `balances`は残高のある品目（品目の ID の昇順。`kind`は`currency`か`item`）。`history`は受領の履歴の新しい順に 20 行まで（`GET /v1/inventory/history`の行と同じ欄）。`saves`はスロットの ID の昇順で、消した印のある行も`deleted: true`で載る（`updatedAt`はセーブの API と同じ値）。`rankings`はボードの ID の昇順で、最大 20 件（1 プレイヤー・1 ゲームが行を持てるボードの数の上限。スコアの投稿の`RANKING_LIMIT_EXCEEDED`）。
 - `playerData`はいつも載る。`values`はプレイヤーが書いたことのあるキーの値（キーの昇順。`mode`はキーの宣言の書き方、`updatedAt`は最後に変わった時刻）、`achievements`は解いた実績（実績の ID の昇順。`writeId`は解いた書き込みの`writeId`〔`POST /v1/player-data`の応答と同じ値〕）。無ければどちらも空の配列。プレイヤーデータの機能の設定は見ない。
 - `questClaims`はいつも載る。クエストの受け取り（`questId`・区切りの鍵`periodKey`〔一度きりは`once`、デイリーは時差の日付、週間は時差の月曜の日付〕・`claimId`〔受領の履歴の`sourceId`と同じ値〕・`claimedAt`）の新しい順に 20 行まで。無ければ空の配列。クエストの機能の設定は見ない。受け取りを直す口・消す口は無い（間違った付与は増減の口で取り消し、進捗は値を置く口で戻す）。
 - **セーブの本文（`data`）とチェックサムは返さない**。
@@ -724,7 +725,7 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 {"error":{"code":"INVALID_ARGUMENT","message":"Invalid parameters"}}
 ```
 
-ゲームのクライアントの口が返すコードは次の 19 個で全部（列挙の正はスキーマの`ErrorCode`。コードごとの画面の文の種類と自動の再試行の可否は下の「クライアントの決まり」）: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）、`UNAUTHENTICATED`（401）、`TOKEN_EXPIRED`（401）、`PERMISSION_DENIED`（403）、`SAVE_CONFLICT`（409）、`PAYLOAD_TOO_LARGE`（413）、`SLOT_LIMIT_EXCEEDED`（409）、`RATE_LIMITED`（429）、`EVENT_NOT_ACTIVE`（409）、`INVENTORY_LIMIT_EXCEEDED`（409）、`PLAYER_BANNED`（403）、`PLAYER_DATA_LIMIT_EXCEEDED`（409）、`IDEMPOTENCY_KEY_REUSED`（422）、`QUEST_NOT_COMPLETED`（409）、`QUEST_NOT_ACTIVE`（409）。
+ゲームのクライアントの口が返すコードは次の 20 個で全部（列挙の正はスキーマの`ErrorCode`。コードごとの画面の文の種類と自動の再試行の可否は下の「クライアントの決まり」）: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）、`UNAUTHENTICATED`（401）、`TOKEN_EXPIRED`（401）、`PERMISSION_DENIED`（403）、`SAVE_CONFLICT`（409）、`PAYLOAD_TOO_LARGE`（413）、`SLOT_LIMIT_EXCEEDED`（409）、`RATE_LIMITED`（429）、`EVENT_NOT_ACTIVE`（409）、`INVENTORY_LIMIT_EXCEEDED`（409）、`PLAYER_BANNED`（403）、`PLAYER_DATA_LIMIT_EXCEEDED`（409）、`IDEMPOTENCY_KEY_REUSED`（422）、`QUEST_NOT_COMPLETED`（409）、`QUEST_NOT_ACTIVE`（409）、`RANKING_LIMIT_EXCEEDED`（409）。
 
 管理の口だけのコード（ゲームのクライアントの口は返さない。形の正は`openapi/rpg-online-admin.v1.json`）: `INSUFFICIENT_BALANCE`（409）。管理の書き込みの口は、ゲームのクライアントの口と同じ`PAYLOAD_TOO_LARGE`（413）も返す。
 
@@ -732,6 +733,7 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 - **`PLAYER_BANNED`（403）**: トークンの要る口（トークンの更新・スコアの投稿・セーブの 4 つ・所持品・受領の履歴・イベントの一覧と受け取り・プレイヤーデータの読み書き・クエストの一覧と受け取り）で、トークンのプレイヤーが管理の口（`PUT /v1/admin/players/{playerId}/ban`）で止められているとき。`message`は`Player is banned`で、止めた理由・期限は返さない。トークンは正しいので、ゲストを発行し直しても同じプレイヤーには戻らない（別の`playerId`の新しいゲストになる）。確かめるのはプレイヤーの利用制限の後（止めた人の要求も数える）で、トークンの無い要求（401）・本文の形の外れ（400）はそれより先に断る。止めた人の要求は何も書かない。トークンを読まない口（お知らせ・ランキングの`GET`・設定）は止めない。
 - **`INSUFFICIENT_BALANCE`（409。管理の口だけ）**: 管理の所持品と通貨の増減で、取り消すと残高が 0 未満になるとき。何も書かない。
 - **`PLAYER_DATA_LIMIT_EXCEEDED`（409）**: プレイヤーデータの書き込み（`POST /v1/player-data`）で、`add`のキーの書いた後の値がキーの値の上限を超えるとき。その書き込みを全部断り、何も書かない。
+- **`RANKING_LIMIT_EXCEEDED`（409）**: スコアの投稿（`POST /v1/rankings/{boardId}`）で、まだ行の無いボードに送ったとき、トークンのプレイヤーが行を持つボードがそのゲームで既に 20 個あるとき。何も書かない。既に行のあるボードへの投稿は上限に届いていても通る。
 - **`IDEMPOTENCY_KEY_REUSED`（422）**: 同じ`Idempotency-Key`を違う中身に使ったとき。プレイヤーデータの書き込み（同じプレイヤーの鍵）と、管理の所持品と通貨の増減（同じゲームの鍵）が返す。何も書かない。
 - **`QUEST_NOT_COMPLETED`（409）**: クエストの受け取り（`POST /v1/quests/{questId}/claim`）で、トークンのプレイヤーの進捗（プレイヤーデータの値）がクエストの閾値に届いていないとき。何も書かない。
 - **`QUEST_NOT_ACTIVE`（409）**: クエストの受け取りで、サーバーの時刻でクエストの期間の外（終わった・まだ始まらない）のとき。何も書かない。イベントの`EVENT_NOT_ACTIVE`とは別のコード（クライアントがコードだけで画面を出し分けられる）。

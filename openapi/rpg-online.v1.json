@@ -98,6 +98,10 @@
         "category": "limit",
         "retry": false
       },
+      "RANKING_LIMIT_EXCEEDED": {
+        "category": "limit",
+        "retry": false
+      },
       "EVENT_NOT_ACTIVE": {
         "category": "expired",
         "retry": false
@@ -851,6 +855,29 @@
             },
             "x-error-codes": [
               "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "新しいボードへの投稿で、そのプレイヤー（トークンのゲームとプレイヤー）が行を持つボードが既に 20 個ある（RANKING_LIMIT_EXCEEDED）。書かない。既に行のあるボードへの投稿は上限に届いていても通る。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RANKING_LIMIT_EXCEEDED"
             ],
             "content": {
               "application/json": {
@@ -5029,7 +5056,8 @@
           "PLAYER_DATA_LIMIT_EXCEEDED",
           "IDEMPOTENCY_KEY_REUSED",
           "QUEST_NOT_COMPLETED",
-          "QUEST_NOT_ACTIVE"
+          "QUEST_NOT_ACTIVE",
+          "RANKING_LIMIT_EXCEEDED"
         ]
       }
     },

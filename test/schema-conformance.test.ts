@@ -8,7 +8,8 @@
  * エラーコードの数の試験は管理の O2 でも置き換え、`エラーの応答はスキーマに書いた状態とエラーコードの組で返る` に BAN したプレイヤーの行を足した。
  * docs/guides/working/admin-design.md §9。操作の数とエラーコードの数の試験はプレイヤーデータの U1 でも置き換え、エラーの組の試験に
  * プレイヤーデータの書き込みの 409・422 の行を足した。docs/guides/working/player-data-design.md §10・§11。クエストの Q1 でも操作の数と
- * エラーコードの数の試験を置き換え、エラーの組の試験にクエストの受け取りの 2 つの 409 の行を足した。docs/guides/working/quest-design.md §10・§11。操作の数の試験はトークンの更新の B3 でも置き換えた。docs/guides/working/client-integration-design.md §10）。挙動（状態コード・データ）は
+ * エラーコードの数の試験を置き換え、エラーの組の試験にクエストの受け取りの 2 つの 409 の行を足した。docs/guides/working/quest-design.md §10・§11。操作の数の試験はトークンの更新の B3 でも置き換えた。docs/guides/working/client-integration-design.md §10。
+ * 堅めの G5 でもエラーコードの数の試験を置き換え、エラーの組の試験にランキングの投稿の 409 RANKING_LIMIT_EXCEEDED の行を足した。docs/guides/working/hardening-design.md §2.1）。挙動（状態コード・データ）は
  * test/failure-*.test.ts が見る。ここはスキーマの側から見る。
  * L2 の試験は src/worker.ts の default.fetch を直に呼ぶ（docs/guides/working/failure-case-test-plan.md §2）。
  *
@@ -20,6 +21,7 @@ import worker from '../src/worker';
 import { bearer, bearerForBody } from './support/auth';
 import { sha256Hex } from '../src/modules/saves/checksum';
 import { MAX_SAVE_BYTES, MAX_SLOTS } from '../src/modules/saves/limits';
+import { MAX_BOARDS_PER_PLAYER } from '../src/modules/rankings/limits';
 import specJson from '../openapi/rpg-online.v1.json';
 import { resolveRef, validate, type Schema, type SchemaRoot } from './support/schema-check';
 import { registerGame } from './support/games';
@@ -48,7 +50,7 @@ const methods = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'tr
 const errorCodes = ['INVALID_ARGUMENT', 'NOT_FOUND', 'NOT_READY_FOR_PRODUCTION', 'INVALID_JSON', 'INTERNAL_ERROR',
   'UNAUTHENTICATED', 'TOKEN_EXPIRED', 'PERMISSION_DENIED', 'SAVE_CONFLICT', 'PAYLOAD_TOO_LARGE', 'SLOT_LIMIT_EXCEEDED', 'RATE_LIMITED',
   'EVENT_NOT_ACTIVE', 'INVENTORY_LIMIT_EXCEEDED', 'PLAYER_BANNED', 'PLAYER_DATA_LIMIT_EXCEEDED', 'IDEMPOTENCY_KEY_REUSED',
-  'QUEST_NOT_COMPLETED', 'QUEST_NOT_ACTIVE'];
+  'QUEST_NOT_COMPLETED', 'QUEST_NOT_ACTIVE', 'RANKING_LIMIT_EXCEEDED'];
 
 // prepare が D1 のエラーに似た例外を投げる偽の DB（本物の D1 を壊さない）
 const brokenDB = {
@@ -140,6 +142,14 @@ async function fillSlots(player: string): Promise<string> {
     expect(res.status).toBe(200);
   }
   return authorization;
+}
+/** player が行を持つボードを MAX_BOARDS_PER_PLAYER 個まで埋める（RANKING_LIMIT_EXCEEDED を起こすため。利用制限を使わないよう直に入れる）。 */
+async function fillBoards(player: string): Promise<string> {
+  await baseEnv.DB.prepare("DELETE FROM ranking_entries WHERE game_id = 'demo-rpg' AND player_id = ?").bind(player).run();
+  await baseEnv.DB.batch(Array.from({ length: MAX_BOARDS_PER_PLAYER }, (_, i) => baseEnv.DB.prepare(
+    "INSERT INTO ranking_entries (game_id, board_id, player_id, display_name, score) VALUES ('demo-rpg', ?, ?, 'Filler', 1)",
+  ).bind(`schema-board-${i}`, player)));
+  return bearer('demo-rpg', player);
 }
 /** data の正しいチェックサムを付けたセーブの書き込みの本文。 */
 async function saveBody(data: string, baseRevision: number): Promise<Record<string, unknown>> {
@@ -302,7 +312,7 @@ describe('S1: スキーマのファイル', () => {
     expect(validate({ changes: [{ key: 'slimes-defeated', value: 1 }] }, playerDataWrite, spec)).toEqual([]);
   });
 
-  it('スキーマのErrorCodeの列挙は19個のエラーコードと一致する', () => {
+  it('スキーマのErrorCodeの列挙は20個のエラーコードと一致する', () => {
     const codes = spec.components.schemas.ErrorCode.enum as string[];
     expect([...codes].sort()).toEqual([...errorCodes].sort());
   });
@@ -436,6 +446,8 @@ describe('S1: 応答がスキーマに合う', () => {
       ['SLOT_LIMIT_EXCEEDED', 'putSave', async () => putSave('one-more', await saveBody('x', 0), { authorization: await fillSlots('schema-slots') })],
       ['EVENT_NOT_ACTIVE', 'claimEventReward', async () => claimEvent('schema-ended')],
       ['INVENTORY_LIMIT_EXCEEDED', 'claimEventReward', async () => claimEvent('schema-big')],
+      ['RANKING_LIMIT_EXCEEDED', 'submitScore', async () => postWith('schema-board-new',
+        { ...valid, playerId: 'schema-boards' }, await fillBoards('schema-boards'))],
       // demo-rpg の手本の first-hunt（slimes-defeated が 1 以上）を、値を書いていないプレイヤーで受け取る
       ['QUEST_NOT_COMPLETED', 'claimQuest', async () => claimQuest('first-hunt', 'schema-quest')],
       // demo-rpg に終わった一度きりのクエストを入れて受け取る

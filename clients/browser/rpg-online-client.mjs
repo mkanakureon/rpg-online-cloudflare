@@ -36,6 +36,7 @@ export const CLIENT_POLICY = Object.freeze({
     SLOT_LIMIT_EXCEEDED: { category: 'limit', retry: false },
     INVENTORY_LIMIT_EXCEEDED: { category: 'limit', retry: false },
     PLAYER_DATA_LIMIT_EXCEEDED: { category: 'limit', retry: false },
+    RANKING_LIMIT_EXCEEDED: { category: 'limit', retry: false },
     EVENT_NOT_ACTIVE: { category: 'expired', retry: false },
     QUEST_NOT_ACTIVE: { category: 'expired', retry: false },
     QUEST_NOT_COMPLETED: { category: 'not-ready', retry: false },
