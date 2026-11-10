@@ -1440,20 +1440,89 @@ describe('Q3 クエストの管理', () => {
     expect(listed.find((q) => q.questId === 'weekly-hunt')).toMatchObject({ kind: 'weekly', progress: 2, completed: false });
   });
 
-  it('時差の違う区切りを同じキーに宣言するクエストの定義は400を返す', async () => {
+  it('受け取りの無いクエストは区切りの時差を変えると宣言を付け替え区切りの値を消す', async () => {
+    await baseEnv.DB.prepare("INSERT INTO player_data_keys (game_id, key, mode, max_value, max_delta) VALUES (?, 'steps', 'add', 1000, 100)")
+      .bind(game).run();
+    const { token, playerId } = await questGuest();
+    expect((await putQuest('daily-hunt', questDefinition({ kind: 'daily', resetOffsetMinutes: 0 }))).status).toBe(200);
+    expect((await putQuest('daily-steps', questDefinition({ kind: 'daily', key: 'steps' }))).status).toBe(200);
+    expect((await writeData(token, 'kills', 2)).status).toBe(200);
+    expect((await writeData(token, 'steps', 4)).status).toBe(200);
+    await putPeriodValue(playerId, 'kills', 'daily', '2000-01-01', 1);
+    expect((await periodValues()).filter((v) => (v as { key: string }).key === 'kills')).toHaveLength(2);
+    // 自分だけが参照し受け取りの無いクエストは、時差を変えると宣言を新しい時差に置き換え、そのキー・区切りの値を全部消す
+    const res = await putQuest('daily-hunt', questDefinition({ kind: 'daily', resetOffsetMinutes: 540 }));
+    await expectAdminConforms(res.clone(), questSpec, 'put');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ kind: 'daily', resetOffsetMinutes: 540, key: 'kills' });
+    expect(await keyPeriods()).toEqual([{ key: 'kills', kind: 'daily', offsetMinutes: 540 }, { key: 'steps', kind: 'daily', offsetMinutes: 0 }]);
+    // ほかのキーの区切りの値は残る
+    expect(await periodValues()).toEqual([
+      { playerId, key: 'steps', kind: 'daily', periodKey: periodKey('daily', nowSeconds(), 0), value: 4 },
+    ]);
+    // 付け替えた後の書き込みは新しい時差の区切りで 0 から数える
+    expect((await listQuests(token)).find((q) => q.questId === 'daily-hunt')).toMatchObject({ progress: 0, completed: false,
+      periodKey: periodKey('daily', nowSeconds(), 540) });
+    expect((await writeData(token, 'kills', 3)).status).toBe(200);
+    expect((await listQuests(token)).find((q) => q.questId === 'daily-hunt')).toMatchObject({ progress: 3, completed: true });
+    // 同じ時差の入れ直しは区切りの値を消さない
+    expect((await putQuest('daily-hunt', questDefinition({ kind: 'daily', resetOffsetMinutes: 540, threshold: 2 }))).status).toBe(200);
+    expect((await listQuests(token)).find((q) => q.questId === 'daily-hunt')).toMatchObject({ progress: 3, threshold: 2 });
+    // 監査には前と後の時差が残る
+    const audit = await adminSend(auditOp(game));
+    const items = (await audit.json<{ items: Array<{ action: string; before: { resetOffsetMinutes: number } | null;
+      after: { resetOffsetMinutes: number } }> }>()).items;
+    expect(items.filter((i) => i.action === 'quest.put').map((i) => [i.before?.resetOffsetMinutes ?? null, i.after.resetOffsetMinutes]))
+      .toEqual([[540, 540], [0, 540], [null, 0], [null, 0]]);
+  });
+
+  it('ほかのクエストが同じキーの区切りを使っていれば時差の付け替えは400', async () => {
     expect((await putQuest('daily-a', questDefinition({ kind: 'daily', resetOffsetMinutes: 0 }))).status).toBe(200);
+    expect((await putQuest('daily-c', questDefinition({ kind: 'daily', resetOffsetMinutes: 0 }))).status).toBe(200);
+    await addPlayer('p1');
+    await putPeriodValue('p1', 'kills', 'daily', periodKey('daily', nowSeconds(), 0), 2);
     const before = await questSnapshot();
-    // 新しいクエストも、受け取りの無いクエストの時差の入れ直しも
+    // 新しいクエストも、ほかのクエストが同じキーの区切りを使う受け取りの無いクエストの時差の入れ直しも
     for (const questId of ['daily-b', 'daily-a']) {
       const res = await putQuest(questId, questDefinition({ kind: 'daily', resetOffsetMinutes: 540 }));
       await expectAdminConforms(res.clone(), questSpec, 'put');
-      await expectError(res, 400, 'INVALID_ARGUMENT');
+      expect((await expectError(res, 400, 'INVALID_ARGUMENT')).error.message).toContain('another quest');
     }
     expect(await questSnapshot()).toEqual(before);
+    expect(await periodValues()).toEqual([{ playerId: 'p1', key: 'kills', kind: 'daily', periodKey: periodKey('daily', nowSeconds(), 0), value: 2 }]);
     // 同じ時差のデイリー・別の区切りの種類（週間）は通る
     expect((await putQuest('daily-b', questDefinition({ kind: 'daily', resetOffsetMinutes: 0 }))).status).toBe(200);
     expect((await putQuest('weekly-a', questDefinition({ kind: 'weekly', resetOffsetMinutes: 540 }))).status).toBe(200);
     expect(await keyPeriods()).toEqual([{ key: 'kills', kind: 'daily', offsetMinutes: 0 }, { key: 'kills', kind: 'weekly', offsetMinutes: 540 }]);
+  });
+
+  it('クエストのキーを変えると参照の無くなった区切りの宣言を消す', async () => {
+    await baseEnv.DB.prepare("INSERT INTO player_data_keys (game_id, key, mode, max_value, max_delta) VALUES (?, 'steps', 'add', 1000, 100)")
+      .bind(game).run();
+    await addPlayer('p1');
+    const today = periodKey('daily', nowSeconds(), 0);
+    expect((await putQuest('daily-hunt', questDefinition({ kind: 'daily' }))).status).toBe(200);
+    expect((await putQuest('weekly-hunt', questDefinition({ kind: 'weekly' }))).status).toBe(200);
+    expect((await putQuest('weekly-hunt-2', questDefinition({ kind: 'weekly' }))).status).toBe(200);
+    await putPeriodValue('p1', 'kills', 'daily', today, 2);
+    // キーを変えると、前のキーの区切りの宣言と値が消え、新しいキーの宣言が入る
+    expect((await putQuest('daily-hunt', questDefinition({ kind: 'daily', key: 'steps' }))).status).toBe(200);
+    expect(await keyPeriods()).toEqual([{ key: 'kills', kind: 'weekly', offsetMinutes: 0 }, { key: 'steps', kind: 'daily', offsetMinutes: 0 }]);
+    expect(await periodValues()).toEqual([]);
+    // ほかのクエストがまだ参照している宣言は残る（weekly-hunt-2 が kills の週間を見る）
+    expect((await putQuest('weekly-hunt', questDefinition({ kind: 'weekly', key: 'steps' }))).status).toBe(200);
+    expect(await keyPeriods()).toEqual([{ key: 'kills', kind: 'weekly', offsetMinutes: 0 }, { key: 'steps', kind: 'daily', offsetMinutes: 0 },
+      { key: 'steps', kind: 'weekly', offsetMinutes: 0 }]);
+    // 一度きりにすると、区切りの宣言を参照しなくなるので消す
+    await putPeriodValue('p1', 'kills', 'weekly', periodKey('weekly', nowSeconds(), 0), 1);
+    expect((await putQuest('weekly-hunt-2', questDefinition())).status).toBe(200);
+    expect(await keyPeriods()).toEqual([{ key: 'steps', kind: 'daily', offsetMinutes: 0 }, { key: 'steps', kind: 'weekly', offsetMinutes: 0 }]);
+    expect(await periodValues()).toEqual([]);
+    // 断られた定義は何も消さない（受け取りのあるクエストのキーは変えられない）
+    await putClaim('p1', 'daily-hunt', today, nowSeconds());
+    const before = await questSnapshot();
+    await expectError(await putQuest('daily-hunt', questDefinition({ kind: 'daily', key: 'kills' })), 400, 'INVALID_ARGUMENT');
+    expect(await questSnapshot()).toEqual(before);
   });
 
   it('管理で値を下げるとデイリーのクエストの区切りの値も新しい値で頭打ちになる', async () => {

@@ -2938,7 +2938,7 @@
     "/v1/admin/quests/{questId}": {
       "put": {
         "operationId": "adminPutQuest",
-        "summary": "クエストの定義（区切り・期間・時差・見るキーと閾値・報酬）を入れる・置き換える。監査の行（quest.put。前と後の定義）・区切りの宣言（デイリー・週間のクエストで、キーに同じ区切りの宣言が無いときだけ player_data_key_periods に入れる）・クエスト・報酬の行は 1 つの batch。受け取りのあるクエストは kind・startsAt・resetOffsetMinutes・key を変えられない。クエストを消す口・受け取りを直す口は無い",
+        "summary": "クエストの定義（区切り・期間・時差・見るキーと閾値・報酬）を入れる・置き換える。監査の行（quest.put。前と後の定義）・区切りの宣言（デイリー・週間のクエストで、キーに同じ区切りの宣言が無ければ player_data_key_periods に入れ、時差が違えばほかのクエストが参照しないときだけ新しい時差に置き換えてそのキー・区切りの区切りの値を消す。定義を変えて参照の無くなった前の宣言と値も消す）・クエスト・報酬の行は 1 つの batch。受け取りのあるクエストは kind・startsAt・resetOffsetMinutes・key を変えられない。クエストを消す口・受け取りを直す口は無い",
         "security": [
           {
             "adminKey": []
@@ -3006,7 +3006,7 @@
             }
           },
           "400": {
-            "description": "gameId・X-Admin-Actor・reason・定義の本文（kind・startsAt < endsAt・resetOffsetMinutes・key の形・threshold が 1〜1000000000・rewards の行の数と重なり・amount）の外れか、threshold が見るキーの maxValue を超える・デイリー・週間のクエストのキーが add でない・キーに同じ区切りの宣言が違う時差である・受け取りのあるクエストの kind・startsAt・resetOffsetMinutes・key を変えようとした・新しいクエストで宣言の数が 200（MAX_QUESTS）を超える（INVALID_ARGUMENT）か、読み直しても断る理由の無い同時の変更との競合（INVALID_ARGUMENT。message は Conflicted with a concurrent change; send the request again）か、本文が JSON でない（INVALID_JSON）。何も書かない。",
+            "description": "gameId・X-Admin-Actor・reason・定義の本文（kind・startsAt < endsAt・resetOffsetMinutes・key の形・threshold が 1〜1000000000・rewards の行の数と重なり・amount）の外れか、threshold が見るキーの maxValue を超える・デイリー・週間のクエストのキーが add でない・キーに同じ区切りの宣言が違う時差でほかのクエストも参照している・受け取りのあるクエストの kind・startsAt・resetOffsetMinutes・key を変えようとした・新しいクエストで宣言の数が 200（MAX_QUESTS）を超える（INVALID_ARGUMENT）か、読み直しても断る理由の無い同時の変更との競合（INVALID_ARGUMENT。message は Conflicted with a concurrent change; send the request again）か、本文が JSON でない（INVALID_JSON）。何も書かない。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -4619,7 +4619,7 @@
             "minimum": -720,
             "maximum": 840,
             "default": 0,
-            "description": "区切りの時差（分。0 は UTC）。デイリー・週間のクエストは、キーの同じ区切りの宣言と同じ時差であること。"
+            "description": "区切りの時差（分。0 は UTC）。デイリー・週間のクエストは、キーの同じ区切りの宣言をほかのクエストも参照していれば、その宣言と同じ時差であること（参照するのが自分だけなら宣言を新しい時差に付け替える）。"
           },
           "key": {
             "$ref": "#/components/schemas/Id",

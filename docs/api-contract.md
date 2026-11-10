@@ -620,12 +620,12 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 - `kind`・`startsAt`・`endsAt`・`resetOffsetMinutes`・`rewards`の決まりはイベントの定義と同じ。`key`は ID の形、`threshold`は 1〜1,000,000,000 の整数。外れは**400 `INVALID_ARGUMENT`**。
 - 見るキーの宣言がそのゲームに無ければ**404 `NOT_FOUND`**（`Unknown key`）、報酬の品目が無ければ**404 `NOT_FOUND`**（`Unknown item`）。どちらも何も書かない。
 - `threshold`は見るキーの`maxValue`以下（超えると達成できないので**400 `INVALID_ARGUMENT`**。何も書かない）。
-- `daily`・`weekly`のクエストは`add`のキーだけ（ほかは**400 `INVALID_ARGUMENT`**）。キーに同じ区切りの数え方の宣言（`player_data_key_periods`）が無ければ同じ`batch`で入れ（その後の書き込みから区切りの値を数える。前の書き込みはさかのぼらない）、あって時差が違えば**400 `INVALID_ARGUMENT`**（区切りの値はキーと区切りの種類ごとに 1 つ）。`once`のクエストはどの書き方のキーも見られ、区切りの宣言を入れない。
+- `daily`・`weekly`のクエストは`add`のキーだけ（ほかは**400 `INVALID_ARGUMENT`**）。キーに同じ区切りの数え方の宣言（`player_data_key_periods`）が無ければ同じ`batch`で入れる（その後の書き込みから区切りの値を数える。前の書き込みはさかのぼらない）。区切りの値と時差はキーと区切りの種類ごとに 1 つ。宣言があって時差が違うとき、そのキー・区切りを**ほかのクエストも参照していれば400 `INVALID_ARGUMENT`**（何も書かない）。参照するのがこのクエストだけなら（受け取りがあれば下の守りで 400）、同じ`batch`で宣言を新しい時差に置き換え、そのキー・区切りの区切りの値を全部のプレイヤーの分消す（時差が変わると区切りの鍵がずれ、前の値が当たらなくなるため。進捗は付け替えた後の書き込みから数える）。定義を変えて（`key`・`kind`）どのクエストも参照しなくなった前のキー・区切りの宣言と区切りの値も、同じ`batch`で消す。`once`のクエストはどの書き方のキーも見られ、区切りの宣言を入れない。
 - 無ければ作り、あれば置き換える（報酬の行は送った中身だけになる）。**受け取りが 1 つでもあるクエストは`kind`・`startsAt`・`resetOffsetMinutes`・`key`を変えられない**（**400 `INVALID_ARGUMENT`**。区切りの鍵と進捗の意味が変わるため）。`endsAt`・`threshold`・`rewards`は変えられ、変えた後の受け取りから効く。
 - 1 ゲームの宣言は 200 個まで（`MAX_QUESTS`）。超える新しいクエストは**400 `INVALID_ARGUMENT`**（あるクエストの置き換えは通る）。
 - 応答の`startsAt`・`endsAt`は秒まで、`rewards`は品目の ID の昇順。`Idempotency-Key`は要らない（何度送っても同じ定義）。
-- 監査のログに`quest.put`の 1 行（`before`は前の定義`{"kind","startsAt","endsAt","resetOffsetMinutes","key","threshold","rewards"}`か`null`、`after`は入れた定義）。監査の行・区切りの宣言・クエスト・報酬の行は 1 つの`batch`で書く。
-- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・定義の本文（400）→ キーの宣言（404）→ 報酬の品目（404）→ `threshold`とキーの`maxValue`（400）→ 区切りのあるクエストのキーの書き方と区切りの時差（400）→ 受け取りのあるクエストの守り（400）→ クエストの数（400）→ 書く。
+- 監査のログに`quest.put`の 1 行（`before`は前の定義`{"kind","startsAt","endsAt","resetOffsetMinutes","key","threshold","rewards"}`か`null`、`after`は入れた定義）。監査の行・区切りの宣言と区切りの値（入れる・付け替える・消す）・クエスト・報酬の行は 1 つの`batch`で書く。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・定義の本文（400）→ キーの宣言（404）→ 報酬の品目（404）→ `threshold`とキーの`maxValue`（400）→ 区切りのあるクエストのキーの書き方と、ほかのクエストも参照する区切りの時差（400）→ 受け取りのあるクエストの守り（400）→ クエストの数（400）→ 書く。
 
 ### PUT /v1/admin/player-data/keys/{key}?gameId=demo-rpg
 

@@ -333,13 +333,13 @@ INSERT INTO player_data_period_values (game_id, player_id, key, kind, period_key
 - 同じ `Idempotency-Key` の送り直しは文 1 で止まり、区切りの値も増えない（二重に数えない）。409 `PLAYER_DATA_LIMIT_EXCEEDED` の書き込みも区切りの値を書かない。
 - 書き込みの応答（`result_json`）と `GET /v1/player-data` の形は変えない（区切りの値はクエストの一覧の `progress` で見せる）。
 - `max`・`set`・`flag` のキーは区切りで数えない（区切りの中の「増えた分」の意味が無い。§16）。
-- 宣言は `batch` の外で読むので、管理が宣言を足した瞬間の書き込みは数えないことがある（読んだ後・`batch` の前に宣言が入った 1 回だけ。窓は数ミリ秒。区切りの値を `batch` の中で宣言と JOIN して足す案は、文が重くなる割に窓が小さいので取らない。`hardening-design.md` §3.6）。
+- 宣言は `batch` の外で読むので、管理が宣言を足した瞬間の書き込みは数えないことがある（読んだ後・`batch` の前に宣言が入った 1 回だけ。窓は数ミリ秒。区切りの値を `batch` の中で宣言と JOIN して足す案は、文が重くなる割に窓が小さいので取らない。`hardening-design.md` §3.6）。宣言の付け替え（§8）の直後の書き込みも同じ窓を持つ（前の時差で読んだ 1 回分が、前の時差の区切りの鍵で残ることがある）。
 
 ## 7. デイリー・週間・期間つきのクエスト（Q2）
 
 - **区切りの決め方はイベントと同じ**（`event-reward-design.md` §4。サーバーの時刻と、クエストごとの時差の 0 時。週間は時差の月曜 0 時）。関数は Q2 で `src/modules/events/period.ts` から `src/core/period.ts` へ移し、イベント・クエスト・プレイヤーデータで同じものを使う（中身を変えないので、イベントの区切りの試験はそのまま通る）。
 - **期間つき**は `starts_at`・`ends_at`（どの区切りのクエストにもある。一度きりのクエストも期間の外では一覧に出ず、受け取れない）。
-- **区切りごとの値は、キーの側（`player_data_key_periods`）に区切りの種類と時差を持つ**（§13 の決めること 4）。同じキーを見るデイリーのクエストが 2 つあっても値は 1 つで、時差はキーごとに 1 つ（違う時差のデイリーを同じキーに入れる定義は 400。§8）。
+- **区切りごとの値は、キーの側（`player_data_key_periods`）に区切りの種類と時差を持つ**（§13 の決めること 4）。同じキーを見るデイリーのクエストが 2 つあっても値は 1 つで、時差はキーごとに 1 つ（ほかのクエストが同じキー・区切りを見ていれば、違う時差の定義は 400。見るのが自分だけなら宣言を付け替え、区切りの値を消す。§8）。
 - 区切りが変わると、新しい区切りの行はまだ無いので進捗は 0 から数え直す。前の区切りの行は残る（受け取っていなくても、前の区切りの分は受け取れない。区切りの鍵が今の区切りで決まるため）。
 - クエストの「受ける」操作は作らない（§13 の決めること 3）。デイリーの進捗は、区切りの宣言があればプレイヤーが受けたかに関わらず数える。
 - Cron Triggers で日替わりの処理を流さない（区切りは要求の時に計算する）。
@@ -350,10 +350,10 @@ INSERT INTO player_data_period_values (game_id, player_id, key, kind, period_key
 
 | 口 | 本文 | 応答・決まり | 監査の `action`（前 → 後） |
 | --- | --- | --- | --- |
-| `PUT /v1/admin/quests/{questId}?gameId=…` | `{"kind":"daily","startsAt":"…","endsAt":"…","resetOffsetMinutes":0,"key":"slimes-defeated","threshold":3,"rewards":[{"itemId":"potion","amount":1}],"reason":"…"}` | 無ければ作る。本文の確かめ（`parseQuestDefinition`。400）はイベントの `parseEventDefinition` と同じ決まりに、`key` の形・`threshold` が 1〜`MAX_PLAYER_DATA_VALUE` の整数を足す。宣言の無いキーは 404 `Unknown key`、無い品目は 404 `Unknown item`。`threshold` が見るキーの `maxValue` を超えれば 400（達成できないクエストを作らない。hardening-design.md §3.2）。`daily`・`weekly` は `add` のキーだけ（ほかは 400）で、キーに同じ区切りの宣言が無ければ `player_data_key_periods` に同じ `batch` で入れ、あって時差が違えば 400。**受け取りの行があるクエストは `kind`・`startsAt`・`resetOffsetMinutes`・`key` を変えられない**（400。区切りの鍵と進捗の意味が変わるため）。`endsAt`・`threshold`・`rewards` は変えられる（変えた後の受け取りから）。新しいクエストで宣言が `MAX_QUESTS` を超えるなら 400 | `quest.put`（前の定義 → 後の定義） |
+| `PUT /v1/admin/quests/{questId}?gameId=…` | `{"kind":"daily","startsAt":"…","endsAt":"…","resetOffsetMinutes":0,"key":"slimes-defeated","threshold":3,"rewards":[{"itemId":"potion","amount":1}],"reason":"…"}` | 無ければ作る。本文の確かめ（`parseQuestDefinition`。400）はイベントの `parseEventDefinition` と同じ決まりに、`key` の形・`threshold` が 1〜`MAX_PLAYER_DATA_VALUE` の整数を足す。宣言の無いキーは 404 `Unknown key`、無い品目は 404 `Unknown item`。`threshold` が見るキーの `maxValue` を超えれば 400（達成できないクエストを作らない。hardening-design.md §3.2）。`daily`・`weekly` は `add` のキーだけ（ほかは 400）で、キーに同じ区切りの宣言が無ければ `player_data_key_periods` に同じ `batch` で入れる。あって時差が違うとき、そのキー・区切りをほかのクエストも参照していれば 400、自分だけなら同じ `batch` で宣言を新しい時差に置き換え、そのキー・区切りの区切りの値（`player_data_period_values`）を消す（時差が変わると区切りの鍵〔`src/core/period.ts` の `periodKey`〕がずれ、前の値が当たらなくなるため。hardening-design.md §3.3）。定義を変えて（`key`・`kind`）どのクエストも参照しなくなった前の宣言と区切りの値も同じ `batch` で消す。**受け取りの行があるクエストは `kind`・`startsAt`・`resetOffsetMinutes`・`key` を変えられない**（400。区切りの鍵と進捗の意味が変わるため）。`endsAt`・`threshold`・`rewards` は変えられる（変えた後の受け取りから）。新しいクエストで宣言が `MAX_QUESTS` を超えるなら 400 | `quest.put`（前の定義 → 後の定義） |
 | `GET /v1/admin/players/{playerId}` に欄を足す | — | `"questClaims":[{"questId","periodKey","claimId","claimedAt"}]`（新しい順に 20 件。いつも載せる。無ければ空の配列） | 残さない（読み取り） |
 
-- `batch`: 監査の行（前の定義と後の定義）→ 区切りの宣言（要るときだけ）→ `quests` を `INSERT … ON CONFLICT (game_id, quest_id) DO UPDATE` → `DELETE FROM quest_rewards WHERE game_id = ? AND quest_id = ?` → 報酬の行を `INSERT`（行の数だけ）。どの文も「この要求の `audit_ref` の行が入ったとき」だけ（イベントの定義と同じ）。
+- `batch`: 監査の行（前の定義と後の定義）→ 参照の無くなる前の区切りの値と宣言を消す（値が宣言を外部キーで指すので値から）→ 時差を付け替えるキー・区切りの区切りの値を消す → 区切りの宣言を入れる・付け替える（区切りのあるクエストだけ）→ `quests` を `INSERT … ON CONFLICT (game_id, quest_id) DO UPDATE` → `DELETE FROM quest_rewards WHERE game_id = ? AND quest_id = ?` → 報酬の行を `INSERT`（行の数だけ）。どの文も「この要求の `audit_ref` の行が入ったとき」だけ（イベントの定義と同じ）。
 - 受け取りを直す口は作らない（§13 の決めること 9）。間違って受け取られた報酬は管理の増減（`revoke`）で戻し、進捗は値の直し（`set-data`）で戻す。どちらも今ある口で、監査に前と後が残る。
 - **値の直し（`PUT /v1/admin/players/{playerId}/player-data/{key}`）は、Q3 で区切りの値も同じ `batch` で頭打ちにする**: 監査の行の後に `UPDATE player_data_period_values SET value = MIN(value, :new), updated_at = :now WHERE game_id = :g AND player_id = :p AND key = :k AND EXISTS (この要求の audit_ref)` を足す（バインドは 6）。これがないと、合計を下げても区切りの値が前のまま残り、デイリー・週間のクエストの進捗が直らず、その後の `add` で区切りの値が合計を超えうる。監査の前と後は合計の値のまま（区切りの値は合計から決まる写しとして扱う）。直しで区切りの値を上げることはしない（上げた分がどの区切りの分か決まらない）。
 - 区切りで数えるキーは、キーの宣言の口でも `add` 以外にできず、`maxValue` を見るクエスト・実績の一番高い `threshold` より下げられない（400。`player-data-design.md` §8）。読み直しても断る理由が無い競合は、ほかの管理の口と同じ 400 の文（`docs/api-contract.md` の管理の API）。
