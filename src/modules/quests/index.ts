@@ -20,6 +20,7 @@ import type { GameModule } from '../../core/module';
 import { isoSeconds, nextResetAt, periodKey, type QuestKind } from '../../core/period';
 import { RATE_LIMITS } from '../../core/rate-limit-policy';
 import { questItem, questStatus, type Grant } from './shape';
+import { serverNow } from '../../core/clock';
 
 type OpenRow = { questId: string; kind: QuestKind; startsAt: number; endsAt: number; offsetMinutes: number; key: string; threshold: number;
   total: number };
@@ -80,11 +81,6 @@ const upsertBalance = `INSERT INTO inventory_balances (game_id, player_id, item_
   WHERE r.game_id = ? AND r.quest_id = ? AND EXISTS (SELECT 1 FROM quest_claims c WHERE c.claim_id = ?)
   ON CONFLICT (game_id, player_id, item_id) DO UPDATE SET
     amount = inventory_balances.amount + excluded.amount, updated_at = excluded.updated_at`;
-
-/** サーバーの時刻（UNIX 秒）。期間の判定はこれだけを使う。 */
-function serverNow(): number {
-  return Math.floor(Date.now() / 1000);
-}
 
 /** 報酬の行を品目と数に直す。MAX_REWARD_LINES を超えるのは入れ間違いなので投げる（500）。 */
 function grantsFrom(rows: readonly RewardRow[], questId: string): Grant[] {

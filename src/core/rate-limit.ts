@@ -12,6 +12,7 @@ import type { Database, Statement } from './env';
 import { sha256Hex } from './hash';
 import { error } from './http';
 import type { RateLimitRule } from './rate-limit-policy';
+import { serverNow } from './clock';
 
 /** CF-Connecting-IP の見出しが無いときの鍵（全員で 1 つ。見出しが無いことを理由に数えずに通さない）。 */
 export const NO_IP_SUBJECT = 'no-ip';
@@ -62,7 +63,7 @@ export function limitedResponse(counted: unknown, rule: RateLimitRule, nowSecond
 
 /** 1 回数える。上限までなら null、超えたら 429 RATE_LIMITED（見出し Retry-After）の応答。 */
 export async function consume(
-  db: Database, rule: RateLimitRule, subject: string, nowSeconds = Math.floor(Date.now() / 1000),
+  db: Database, rule: RateLimitRule, subject: string, nowSeconds = serverNow(),
 ): Promise<Response | null> {
   const [counted] = await db.batch(counterStatements(db, rule, subject, nowSeconds));
   return limitedResponse(counted, rule, nowSeconds);

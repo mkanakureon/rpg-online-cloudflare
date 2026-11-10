@@ -56,10 +56,8 @@ export async function checkAdminWrite(req: Request, env: Env, url: URL, known: r
   return { ok: true, gameId: access.gameId, actor, reason, body };
 }
 
-/** サーバーの時刻（UNIX 秒）。 */
-export function serverNow(): number {
-  return Math.floor(Date.now() / 1000);
-}
+/** サーバーの時刻（UNIX 秒）。管理の口のファイルはここから読む（正は src/core/clock.ts）。 */
+export { serverNow } from '../clock';
 
 /** プレイヤーの登録（無ければ 404 Unknown player。プレイヤーを読む口・BAN・値を置く口が使う）。 */
 export const playerSql = `SELECT strftime('%Y-%m-%dT%H:%M:%SZ', created_at) AS createdAt FROM game_players WHERE game_id = ? AND player_id = ?`;

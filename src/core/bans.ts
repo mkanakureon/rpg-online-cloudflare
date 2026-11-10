@@ -10,6 +10,7 @@
 import type { Env } from './env';
 import { error } from './http';
 import type { TokenClaims } from './token';
+import { serverNow } from './clock';
 
 export const banSql = 'SELECT expires_at AS expiresAt FROM player_bans WHERE game_id = ? AND player_id = ?';
 
@@ -19,7 +20,7 @@ export function isBanActive(row: { expiresAt: number | null }, now: number): boo
 }
 
 /** トークンのプレイヤーが止められていれば 403 PLAYER_BANNED、ほかは null。 */
-export async function requireNotBanned(env: Env, claims: TokenClaims, now = Math.floor(Date.now() / 1000)): Promise<Response | null> {
+export async function requireNotBanned(env: Env, claims: TokenClaims, now = serverNow()): Promise<Response | null> {
   const rows = await env.DB.prepare(banSql).bind(claims.gameId, claims.playerId).all<{ expiresAt: number | null }>();
   const row = rows.results[0];
   if (row && isBanActive(row, now)) return error('PLAYER_BANNED', 'Player is banned', 403);

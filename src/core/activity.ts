@@ -14,6 +14,7 @@ import { periodKey } from './period';
 import { counterStatements, limitedResponse } from './rate-limit';
 import type { RateLimitRule } from './rate-limit-policy';
 import type { TokenClaims } from './token';
+import { serverNow } from './clock';
 
 /** その時刻（UNIX 秒）の遊んだ日の鍵。UTC の 'YYYY-MM-DD'（時差を入れない）。 */
 export function activityDay(nowSeconds: number): string {
@@ -29,7 +30,7 @@ export const recordActivitySql = `INSERT OR IGNORE INTO player_activity_days (ga
 
 /** トークンのプレイヤーで 1 回数え、その日の遊んだ行を残す。上限までなら null、超えたら 429 RATE_LIMITED（consume と同じ）。 */
 export async function consumeForPlayer(
-  db: Database, rule: RateLimitRule, claims: TokenClaims, nowSeconds = Math.floor(Date.now() / 1000),
+  db: Database, rule: RateLimitRule, claims: TokenClaims, nowSeconds = serverNow(),
 ): Promise<Response | null> {
   const [counted] = await db.batch([
     ...counterStatements(db, rule, `${claims.gameId}:${claims.playerId}`, nowSeconds),

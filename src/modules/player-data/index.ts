@@ -22,6 +22,7 @@ import { isoSeconds, periodKey } from '../../core/period';
 import { checkChange, type PlayerDataKey, type PlayerDataMode } from '../../core/player-data';
 import { RATE_LIMITS } from '../../core/rate-limit-policy';
 import { parseChanges, writeRequestHash, type Change } from './parse';
+import { serverNow } from '../../core/clock';
 
 type ValueRow = { key: string; mode: PlayerDataMode; value: number; updatedAt: number };
 type WriteRow = { writeRef: string; requestHash: string; resultJson: string | null };
@@ -82,11 +83,6 @@ function saveResultSql(keyCount: number): string {
     'unlocked', json((SELECT json_group_array(json_object('achievementId', achievement_id, 'unlockedAt', unlocked_at)) FROM
       (SELECT achievement_id, unlocked_at FROM player_achievements WHERE write_ref = ? ORDER BY achievement_id))))
   WHERE write_ref = ?`;
-}
-
-/** サーバーの時刻（UNIX 秒）。本文・見出しの時刻は読まない。 */
-function serverNow(): number {
-  return Math.floor(Date.now() / 1000);
 }
 
 /** 送ったキーの宣言を読む。 */

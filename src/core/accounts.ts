@@ -22,6 +22,7 @@ import type { Route } from './module';
 import { consume, ipSubject } from './rate-limit';
 import { RATE_LIMITS } from './rate-limit-policy';
 import { signToken, tokenSecret, TOKEN_TTL_SECONDS } from './token';
+import { serverNow } from './clock';
 
 /** トークンの本文（g・p）と発行の時刻から、応答の本文（ゲストの発行と同じ形）を作る。期限は now から TOKEN_TTL_SECONDS 先。 */
 async function issueToken(gameId: string, playerId: string, now: number, secret: string) {
@@ -60,7 +61,7 @@ export const guestRoute: Route = {
     if (!secret) throw new Error('Token signing secret is not configured');
     const accountId = crypto.randomUUID();
     const playerId = crypto.randomUUID();
-    const now = Math.floor(Date.now() / 1000);
+    const now = serverNow();
     await env.DB.batch([
       env.DB.prepare('INSERT INTO accounts (account_id) VALUES (?)').bind(accountId),
       env.DB.prepare('INSERT INTO game_players (game_id, player_id, account_id) VALUES (?, ?, ?)').bind(gameId, playerId, accountId),
@@ -78,7 +79,7 @@ export const refreshRoute: Route = {
   async handle(req, env) {
     const blocked = requireLocalWrite(env);
     if (blocked) return blocked;
-    const now = Math.floor(Date.now() / 1000);
+    const now = serverNow();
     const auth = await requireAuth(req, env, now);
     if (!auth.ok) return auth.response;
     const { gameId, playerId } = auth.claims;

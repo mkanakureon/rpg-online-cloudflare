@@ -242,7 +242,7 @@ INSERT OR IGNORE INTO event_rewards (game_id, event_id, item_id, amount) VALUES 
 
 ### 期間と区切り（`src/core/period.ts`。サーバーの時刻だけを入力にする）
 
-`now` は Worker の `Math.floor(Date.now() / 1000)`。**クライアントの時刻（本文・クエリ・`Date` の見出し）を受け取らない**。試験は関数に `now` を渡して確かめ、L2 はイベントの期間をいまの時刻の前後に置いて確かめる（§8）。
+`now` は Worker のサーバーの時刻（`src/core/clock.ts` の `serverNow`。UNIX 秒。時刻を取る所は src/ でここ 1 か所）。**クライアントの時刻（本文・クエリ・`Date` の見出し）を受け取らない**。試験は関数に `now` を渡して確かめ、L2 はイベントの期間をいまの時刻の前後に置いて確かめる（§8）。
 
 | 関数 | 入力 | 出力 |
 | --- | --- | --- |

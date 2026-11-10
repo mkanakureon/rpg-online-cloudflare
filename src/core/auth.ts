@@ -8,11 +8,12 @@
 import type { Env } from './env';
 import { error } from './http';
 import { parseBearer, tokenSecret, verifyToken, type TokenClaims } from './token';
+import { serverNow } from './clock';
 
 export type AuthResult = { ok: true; claims: TokenClaims } | { ok: false; response: Response };
 
 /** Authorization のトークンを確かめる。通ればトークンの中身、通らなければ 401（鍵が無ければ投げて 500）。 */
-export async function requireAuth(req: Request, env: Env, nowSeconds = Math.floor(Date.now() / 1000)): Promise<AuthResult> {
+export async function requireAuth(req: Request, env: Env, nowSeconds = serverNow()): Promise<AuthResult> {
   const token = parseBearer(req.headers.get('Authorization'));
   if (token === null) return { ok: false, response: error('UNAUTHENTICATED', 'Missing or malformed Authorization', 401) };
   const secret = tokenSecret(env);
