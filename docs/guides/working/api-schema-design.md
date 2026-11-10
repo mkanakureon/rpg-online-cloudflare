@@ -52,7 +52,7 @@
 
 - **スキーマは OpenAPI 3.1 の JSON で 1 ファイル**。置き場はリポジトリ直下の `openapi/` のフォルダー（`openapi/rpg-online.v1.json`）。`/v1/` の中では欄を足すだけ（`docs/api-contract.md` の「互換の決まり」）なので、`/v2/` を足すときだけ別のファイルにする。
 - OpenAPI 3.1 の `components.schemas` は JSON Schema（2020-12）そのものなので、要求・応答の形は JSON Schema で書く。YAML にしないのは、パッケージを足さずに読めるため（Vite が JSON をそのまま読み込める。YAML は読む道具が要る）。
-- **検証の関数はパッケージを足さずに自前で書く**（S1）。このスキーマが使う JSON Schema の語だけを見る小さな関数（`type`・`properties`・`required`・`additionalProperties`・`items`・`maxItems`・`pattern`・`minLength`・`maxLength`・`minimum`・`maximum`・`const`・`enum`・`$ref` の `#/components/schemas/…`）。置き場は試験の側の `test/support/schema-check.ts`（`src/` を変えない）。スキーマで使う語を増やすときは、この関数と S1 の自己試験を同じコミットで直す。
+- **検証の関数はパッケージを足さずに自前で書く**（S1）。このスキーマが使う JSON Schema の語だけを見る小さな関数（`type`〔名前 1 つか名前の配列〕・`properties`・`required`・`additionalProperties`・`items`・`minItems`・`maxItems`・`pattern`・`minLength`・`maxLength`・`minimum`・`maximum`・`const`・`enum`・`$ref` の `#/components/schemas/…`）。置き場は試験の側の `test/support/schema-check.ts`（`src/` を変えない）。スキーマで使う語を増やすときは、この関数と S1 の自己試験を同じコミットで直す。
 - **契約の正**: 形（欄・型・範囲・状態コードとエラーコードの組）の正はスキーマ、挙動の説明（順位の付け方・最高スコアの保持・互換の決まり・書き込みの守り）の正は `docs/api-contract.md`。`docs/api-contract.md` の例はスキーマに合うことを S2 の試験で確かめる（どちらかだけ直すと落ちる）。`docs/api-contract.md` の書き換え（スキーマを指す 1 行を足す）は、S1 の実装の Issue で行う（この設計書ではしない）。
 - 試験は vitest で、いまの試験と同じく Workers のランタイムの中で回す。スキーマは `import spec from '../openapi/rpg-online.v1.json'` で読む。`docs/api-contract.md` は `?raw` の import で文字列として読む。いまの `tsconfig.json` には `?raw` の型が無いので、S2 で `test/` に `declare module '*?raw'` の型のファイルを足す（JSON の import は vitest の型で通る。`tsconfig.json` に `resolveJsonModule` は無い）（読めなければ S2 の実装の Issue で、Node.js 側の `vitest.config.ts` で読んで `miniflare.bindings` に渡す形に切り替える。いまの `TEST_MIGRATIONS` と同じ渡し方）。
 

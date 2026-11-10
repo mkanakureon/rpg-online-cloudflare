@@ -3,9 +3,8 @@
  * 名前と見ることの正は docs/guides/working/hardening-design.md §11 の G2 の行（§7 の #12・#18・#19・#29・#36・#47・#53 と §8）。
  * G2 の残りの 2 本（`スキーマの突き合わせの試験は前の試験の行に左右されない`・`試験のスキーマの確かめはtypeの配列とminItemsを見る`）は
  * test/schema-conformance.test.ts の中にある。いまの挙動を確かめるだけで、src/ は変えない。
- * §11 の `ヘルスチェックはDBの失敗でINTERNAL_ERRORの500を返す` は、いまの GET /health が DB を引かず（src/core/router.ts）DB が壊れていても
- * 200 を返すので、ここに置いていない（src/ を変えない束のため。Issue #72 の報告に実測を残し、直し方はユーザーが決める）。
- * → 2026-11-10 にユーザーがいまの挙動を正にすると決め（§7 の #12）、§11 の名前 `ヘルスチェックはDBが壊れていても読まずに200を返す` でここに置いた。
+ * GET /health は DB を引かない（src/core/router.ts）。2026-11-10 にユーザーがいまの挙動を正にすると決め（§7 の #12。Issue #72）、
+ * `ヘルスチェックはDBが壊れていても読まずに200を返す` でそれを確かめる。
  * L2 は src/worker.ts の default.fetch を直に呼ぶ。管理の鍵は試験の中で作る秘密でない値（'a'.repeat(32)）。試験のゲームは専用の hard-game で、
  * プレイヤーは game_players・accounts に行を直に入れ、トークンは test/support/auth.ts で作る。
  *
