@@ -9,17 +9,12 @@
 // プレイヤーはトークンの p だけで決める。data は解釈せず、ログにも出さない。順と SQL の正は docs/guides/working/save-design.md §3。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
-import { consumeForPlayer } from '../../core/activity';
-import { requireAuth } from '../../core/auth';
-import { requireNotBanned } from '../../core/bans';
+import { checkPlayerAccess } from '../../core/access';
 import type { Env } from '../../core/env';
 import { requireGame } from '../../core/games';
-import { requireLocalWrite } from '../../core/guards';
 import { error, json } from '../../core/http';
-import { validId } from '../../core/ids';
 import type { GameModule } from '../../core/module';
 import { RATE_LIMITS } from '../../core/rate-limit-policy';
-import type { TokenClaims } from '../../core/token';
 import { sha256Hex } from './checksum';
 import { MAX_REQUEST_BYTES, MAX_SAVE_BYTES, MAX_SLOTS } from './limits';
 import { parseRevision, parseSaveWrite, utf8Size } from './validate';
@@ -59,28 +54,6 @@ const tombstoneAt = `UPDATE saves SET deleted = 1, data = '', checksum = '', siz
   RETURNING slot_id AS slotId`;
 const liveSlot = 'SELECT 1 AS live FROM saves WHERE game_id = ? AND player_id = ? AND slot_id = ? AND deleted = 0';
 
-type Checked = { ok: true; claims: TokenClaims; gameId: string } | { ok: false; response: Response };
-
-/** 本文を読む前の確かめ（門 → トークン → プレイヤーの利用制限 → gameId → トークンのゲーム）。どのルートでも同じ。 */
-async function checkAccess(req: Request, env: Env, url: URL): Promise<Checked> {
-  const blocked = requireLocalWrite(env);
-  if (blocked) return { ok: false, response: blocked };
-  const auth = await requireAuth(req, env);
-  if (!auth.ok) return auth;
-  // 4 つの操作を合わせて、トークンのプレイヤーで数える（偽れない鍵。断った要求は書かない・消さない）
-  const limited = await consumeForPlayer(env.DB, RATE_LIMITS.saves, auth.claims);
-  if (limited) return { ok: false, response: limited };
-  // 止めたプレイヤーは利用制限で数えた後に断る（トークンの g・p で引く。理由・期限は返さない）
-  const banned = await requireNotBanned(env, auth.claims);
-  if (banned) return { ok: false, response: banned };
-  const gameId = url.searchParams.get('gameId');
-  if (!validId(gameId)) return { ok: false, response: error('INVALID_ARGUMENT', 'Invalid gameId', 400) };
-  if (auth.claims.gameId !== gameId) {
-    return { ok: false, response: error('PERMISSION_DENIED', 'Token does not match game', 403) };
-  }
-  return { ok: true, claims: auth.claims, gameId };
-}
-
 /** 本文を MAX_REQUEST_BYTES まで読む。超えれば null（Content-Length があれば読まずに断る）。 */
 async function readBody(req: Request): Promise<string | null> {
   const length = req.headers.get('Content-Length');
@@ -104,7 +77,7 @@ export const saves: GameModule = {
       pattern: slotPath,
       async handle(req, env, match, url, known) {
         const slotId = match[1];
-        const access = await checkAccess(req, env, url);
+        const access = await checkPlayerAccess(req, env, url, RATE_LIMITS.saves);
         if (!access.ok) return access.response;
         const { gameId, claims } = access;
         const text = await readBody(req);
@@ -142,7 +115,7 @@ export const saves: GameModule = {
       pattern: slotPath,
       async handle(req, env, match, url, known) {
         const slotId = match[1];
-        const access = await checkAccess(req, env, url);
+        const access = await checkPlayerAccess(req, env, url, RATE_LIMITS.saves);
         if (!access.ok) return access.response;
         const { gameId, claims } = access;
         const unknown = await requireGame(env, gameId, saves.name, known);
@@ -164,7 +137,7 @@ export const saves: GameModule = {
       pattern: slotPath,
       async handle(req, env, match, url, known) {
         const slotId = match[1];
-        const access = await checkAccess(req, env, url);
+        const access = await checkPlayerAccess(req, env, url, RATE_LIMITS.saves);
         if (!access.ok) return access.response;
         const { gameId, claims } = access;
         const baseRevision = parseRevision(url.searchParams.get('baseRevision'));
@@ -186,7 +159,7 @@ export const saves: GameModule = {
       method: 'GET',
       pattern: listPath,
       async handle(req, env, _match, url, known) {
-        const access = await checkAccess(req, env, url);
+        const access = await checkPlayerAccess(req, env, url, RATE_LIMITS.saves);
         if (!access.ok) return access.response;
         const { gameId, claims } = access;
         const unknown = await requireGame(env, gameId, saves.name, known);

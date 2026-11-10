@@ -2,7 +2,7 @@
 //
 // どちらも APP_ENV=local の門 → トークン → プレイヤーの利用制限（2 つの口を合わせて RATE_LIMITS.playerData。429）→
 // 止めた印（403 PLAYER_BANNED）→ gameId の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定 → 口ごとの確かめ の順
-// （イベントの checkAccess と同じ形）。プレイヤーはトークンの p だけで決まる（本文・問い合わせの playerId を読まない）。
+// （src/core/access.ts の checkPlayerAccess）。プレイヤーはトークンの p だけで決まる（本文・問い合わせの playerId を読まない）。
 // 書き込みは Idempotency-Key が必須（形は src/core/idempotency.ts。管理の口のコードは読み込まない）。宣言の無いキーは 404、
 // 書き方の範囲の外は 400（src/core/player-data.ts の checkChange）で、どちらも何も書かない。書き込みの記録・値・応答の写しを
 // 1 つの batch で書き、記録の一意の鍵（ゲーム・プレイヤー・鍵）で二重を止める。2 回目は 200 で 1 回目と同じ本文。時刻はサーバーの時刻だけ。
@@ -13,20 +13,14 @@
 // 順と SQL の正は docs/guides/working/player-data-design.md §4〜§7 と docs/guides/working/quest-design.md §6（区切りごとの値）。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
-import { consumeForPlayer } from '../../core/activity';
-import { requireAuth } from '../../core/auth';
-import { requireNotBanned } from '../../core/bans';
+import { checkPlayerAccess } from '../../core/access';
 import type { Database, Env } from '../../core/env';
-import { requireGame } from '../../core/games';
-import { requireLocalWrite } from '../../core/guards';
 import { error, json } from '../../core/http';
 import { parseIdempotencyKey } from '../../core/idempotency';
-import { validId } from '../../core/ids';
 import type { GameModule } from '../../core/module';
 import { isoSeconds, periodKey } from '../../core/period';
 import { checkChange, type PlayerDataKey, type PlayerDataMode } from '../../core/player-data';
 import { RATE_LIMITS } from '../../core/rate-limit-policy';
-import type { TokenClaims } from '../../core/token';
 import { parseChanges, writeRequestHash, type Change } from './parse';
 
 type ValueRow = { key: string; mode: PlayerDataMode; value: number; updatedAt: number };
@@ -90,30 +84,6 @@ function saveResultSql(keyCount: number): string {
   WHERE write_ref = ?`;
 }
 
-type Checked = { ok: true; claims: TokenClaims; gameId: string } | { ok: false; response: Response };
-
-/** 2 つの口で同じ確かめ（門 → トークン → プレイヤーの利用制限 → 止めた印 → gameId → トークンのゲーム → ゲームの登録と機能の設定）。 */
-async function checkAccess(req: Request, env: Env, url: URL, known: readonly string[]): Promise<Checked> {
-  const blocked = requireLocalWrite(env);
-  if (blocked) return { ok: false, response: blocked };
-  const auth = await requireAuth(req, env);
-  if (!auth.ok) return auth;
-  // 読み書きを合わせて、トークンのプレイヤーで数える（偽れない鍵）
-  const limited = await consumeForPlayer(env.DB, RATE_LIMITS.playerData, auth.claims);
-  if (limited) return { ok: false, response: limited };
-  // 止めたプレイヤーは利用制限で数えた後に断る（理由・期限は返さない）
-  const banned = await requireNotBanned(env, auth.claims);
-  if (banned) return { ok: false, response: banned };
-  const gameId = url.searchParams.get('gameId');
-  if (!validId(gameId)) return { ok: false, response: error('INVALID_ARGUMENT', 'Invalid gameId', 400) };
-  if (auth.claims.gameId !== gameId) {
-    return { ok: false, response: error('PERMISSION_DENIED', 'Token does not match game', 403) };
-  }
-  const unknown = await requireGame(env, gameId, playerData.name, known);
-  if (unknown) return { ok: false, response: unknown };
-  return { ok: true, claims: auth.claims, gameId };
-}
-
 /** サーバーの時刻（UNIX 秒）。本文・見出しの時刻は読まない。 */
 function serverNow(): number {
   return Math.floor(Date.now() / 1000);
@@ -164,7 +134,7 @@ export const playerData: GameModule = {
       method: 'GET',
       pattern: path,
       async handle(req, env, _match, url, known) {
-        const access = await checkAccess(req, env, url, known);
+        const access = await checkPlayerAccess(req, env, url, RATE_LIMITS.playerData, { name: playerData.name, known });
         if (!access.ok) return access.response;
         const { gameId, claims } = access;
         const rows = (await env.DB.prepare(valuesOf).bind(gameId, claims.playerId).all<ValueRow>()).results;
@@ -177,7 +147,7 @@ export const playerData: GameModule = {
       method: 'POST',
       pattern: path,
       async handle(req, env, _match, url, known) {
-        const access = await checkAccess(req, env, url, known);
+        const access = await checkPlayerAccess(req, env, url, RATE_LIMITS.playerData, { name: playerData.name, known });
         if (!access.ok) return access.response;
         const { gameId, claims } = access;
         const playerId = claims.playerId;

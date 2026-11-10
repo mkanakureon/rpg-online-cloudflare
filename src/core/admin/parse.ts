@@ -12,6 +12,7 @@
 import { validId } from '../ids';
 import { ITEM_KINDS, MAX_ITEM_AMOUNT, MAX_REWARD_LINES, type ItemKind } from '../inventory';
 import { EVENT_KINDS, type EventKind, type QuestKind } from '../period';
+import { positiveInteger } from '../query';
 import { MAX_PLAYER_DATA_VALUE, PLAYER_DATA_MODES, type PlayerDataKey, type PlayerDataMode } from '../player-data';
 
 /** 監査を読む口の limit の既定と上限。 */
@@ -22,13 +23,6 @@ export const PLAYER_HISTORY_ROWS = 20;
 
 export type PageQuery = { limit: number; before: number | null };
 export type PageQueryResult = { ok: true; value: PageQuery } | { ok: false; message: string };
-
-/** 数字だけの文字列を 1 以上の安全な整数に直す。外れは null。 */
-function positiveInteger(raw: string): number | null {
-  if (!/^[0-9]{1,16}$/.test(raw)) return null;
-  const n = Number(raw);
-  return Number.isSafeInteger(n) && n >= 1 ? n : null;
-}
 
 /** 監査を読む口の問い合わせを読む。limit は 1〜AUDIT_LIMIT_MAX（無ければ AUDIT_LIMIT_DEFAULT）、before は 1 以上の整数か無し。 */
 export function parseAuditQuery(url: URL): PageQueryResult {

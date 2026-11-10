@@ -8,7 +8,7 @@
 // 新しいプレイヤーで戻るので、D30 は低く、newPlayers は高く出る（docs/api-contract.md の「管理の API」に書く）。
 // 配った量の口は受領の履歴 inventory_ledger を日・種類・品目ごとに、受け取りの行 quest_claims を日・クエストごとにまとめる。日の範囲は
 // rangeSeconds で UNIX 秒にして比べ（バインドは gameId・始まりの秒・終わりの秒の 3 つ）、文の LIMIT は定数 MAX_ANALYTICS_ROWS より 1 多くして、
-// shapeGrants が日付の昇順で切って truncated を立てる。管理の口（src/core/admin/routes.ts）が読む。
+// shapeGrants が日付の昇順で切って truncated を立てる。管理の集計の口（src/core/admin/routes-reports.ts）が読む。
 // core はモジュールを読み込まない。設計の正は docs/guides/working/analytics-design.md §3・§5。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31

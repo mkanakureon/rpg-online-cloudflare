@@ -2,7 +2,7 @@
 //
 // どちらも APP_ENV=local の門 → トークン → プレイヤーの利用制限（2 つの口を合わせて RATE_LIMITS.quests。429）→
 // 止めた印（403 PLAYER_BANNED）→ gameId の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定 → 口ごとの確かめ の順
-// （イベントの checkAccess と同じ形）。進捗はプレイヤーデータの値を読むだけで（一度きりはキーのいまの値 player_data、デイリー・週間は
+// （src/core/access.ts の checkPlayerAccess）。進捗はプレイヤーデータの値を読むだけで（一度きりはキーのいまの値 player_data、デイリー・週間は
 // いまの区切りの値 player_data_period_values。区切りは src/core/period.ts にサーバーの時刻を渡して決める）、達成は受け取りの時に
 // batch の文 1 の条件で判定する（「達成した」の申告・送られた時刻は読まない）。受け取りは、受け取りの行・受領の履歴・残高の 3 文を
 // 1 つの batch で書き、一意の鍵（プレイヤー・クエスト・区切り）で二重を止める。2 回目は 200 で 1 回目と同じ本文。受け取りには
@@ -11,20 +11,14 @@
 // 順と SQL の正は docs/guides/working/quest-design.md §4〜§7。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
-import { consumeForPlayer } from '../../core/activity';
-import { requireAuth } from '../../core/auth';
-import { requireNotBanned } from '../../core/bans';
+import { checkPlayerAccess } from '../../core/access';
 import type { Env } from '../../core/env';
-import { requireGame } from '../../core/games';
-import { requireLocalWrite } from '../../core/guards';
 import { error, json } from '../../core/http';
-import { validId } from '../../core/ids';
 import { MAX_ITEM_AMOUNT, MAX_REWARD_LINES } from '../../core/inventory';
 import { LEDGER_SOURCES } from '../../core/ledger';
 import type { GameModule } from '../../core/module';
 import { isoSeconds, nextResetAt, periodKey, type QuestKind } from '../../core/period';
 import { RATE_LIMITS } from '../../core/rate-limit-policy';
-import type { TokenClaims } from '../../core/token';
 import { questItem, questStatus, type Grant } from './shape';
 
 type OpenRow = { questId: string; kind: QuestKind; startsAt: number; endsAt: number; offsetMinutes: number; key: string; threshold: number;
@@ -87,30 +81,6 @@ const upsertBalance = `INSERT INTO inventory_balances (game_id, player_id, item_
   ON CONFLICT (game_id, player_id, item_id) DO UPDATE SET
     amount = inventory_balances.amount + excluded.amount, updated_at = excluded.updated_at`;
 
-type Checked = { ok: true; claims: TokenClaims; gameId: string } | { ok: false; response: Response };
-
-/** 2 つの口で同じ確かめ（門 → トークン → プレイヤーの利用制限 → 止めた印 → gameId → トークンのゲーム → ゲームの登録と機能の設定）。 */
-async function checkAccess(req: Request, env: Env, url: URL, known: readonly string[]): Promise<Checked> {
-  const blocked = requireLocalWrite(env);
-  if (blocked) return { ok: false, response: blocked };
-  const auth = await requireAuth(req, env);
-  if (!auth.ok) return auth;
-  // クエストの 2 つの口を合わせて、トークンのプレイヤーで数える（偽れない鍵）
-  const limited = await consumeForPlayer(env.DB, RATE_LIMITS.quests, auth.claims);
-  if (limited) return { ok: false, response: limited };
-  // 止めたプレイヤーは利用制限で数えた後に断る（トークンの g・p で引く。理由・期限は返さない）
-  const banned = await requireNotBanned(env, auth.claims);
-  if (banned) return { ok: false, response: banned };
-  const gameId = url.searchParams.get('gameId');
-  if (!validId(gameId)) return { ok: false, response: error('INVALID_ARGUMENT', 'Invalid gameId', 400) };
-  if (auth.claims.gameId !== gameId) {
-    return { ok: false, response: error('PERMISSION_DENIED', 'Token does not match game', 403) };
-  }
-  const unknown = await requireGame(env, gameId, quests.name, known);
-  if (unknown) return { ok: false, response: unknown };
-  return { ok: true, claims: auth.claims, gameId };
-}
-
 /** サーバーの時刻（UNIX 秒）。期間の判定はこれだけを使う。 */
 function serverNow(): number {
   return Math.floor(Date.now() / 1000);
@@ -130,7 +100,7 @@ export const quests: GameModule = {
       method: 'GET',
       pattern: listPath,
       async handle(req, env, _match, url, known) {
-        const access = await checkAccess(req, env, url, known);
+        const access = await checkPlayerAccess(req, env, url, RATE_LIMITS.quests, { name: quests.name, known });
         if (!access.ok) return access.response;
         const { gameId, claims } = access;
         const playerId = claims.playerId;
@@ -163,7 +133,7 @@ export const quests: GameModule = {
       pattern: claimPath,
       async handle(req, env, match, url, known) {
         // 本文は読まない（送られても無視。達成の申告・時刻の欄・送り直しの見出しも見ない）
-        const access = await checkAccess(req, env, url, known);
+        const access = await checkPlayerAccess(req, env, url, RATE_LIMITS.quests, { name: quests.name, known });
         if (!access.ok) return access.response;
         const { gameId, claims } = access;
         const playerId = claims.playerId;

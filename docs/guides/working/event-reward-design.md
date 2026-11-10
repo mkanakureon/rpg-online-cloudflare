@@ -195,7 +195,7 @@ INSERT OR IGNORE INTO event_rewards (game_id, event_id, item_id, amount) VALUES 
 
 4 つの口はどれもトークンが要る。プレイヤーはトークンの `p` だけで決まる（本文・クエリの `playerId` を受け取らない）。読み取りも、セーブの `GET` と同じく `APP_ENV` の守りを通す（§7）。
 
-### 確かめの順（4 つの口で同じ。セーブの `checkAccess` と同じ形）
+### 確かめの順（4 つの口で同じ。`src/core/access.ts` の `checkPlayerAccess`）
 
 ルート → `requireLocalWrite`（403 `NOT_READY_FOR_PRODUCTION`）→ `requireAuth`（401）→ **プレイヤーの利用制限 `RATE_LIMITS.rewards`（429 `RATE_LIMITED`・`Retry-After`。4 つの口を合わせて、鍵は `<トークンの g>:<トークンの p>`）** → `gameId` の形（400 `INVALID_ARGUMENT`）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録と機能の設定 `requireGame(env, gameId, 'inventory' | 'events', known)`（404）→ 口ごとの確かめ。
 

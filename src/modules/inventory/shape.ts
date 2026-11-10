@@ -5,6 +5,7 @@
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
 import type { ItemKind } from '../../core/inventory';
+import { positiveInteger } from '../../core/query';
 import { HISTORY_LIMIT_DEFAULT, HISTORY_LIMIT_MAX } from './limits';
 
 export type BalanceRow = { itemId: string; kind: ItemKind; amount: number };
@@ -22,13 +23,6 @@ export function shapeInventory(rows: readonly BalanceRow[]): { currencies: Inven
   return { currencies: currencies.sort(byItemId), items: items.sort(byItemId) };
 }
 
-/** 数字だけの文字列を 1 以上の安全な整数に直す。外れは null。 */
-function positiveInteger(raw: string): number | null {
-  if (!/^[0-9]{1,16}$/.test(raw)) return null;
-  const n = Number(raw);
-  return Number.isSafeInteger(n) && n >= 1 ? n : null;
-}
-
 /** 受領の履歴の問い合わせを読む。limit は 1〜HISTORY_LIMIT_MAX（無ければ HISTORY_LIMIT_DEFAULT）、before は 1 以上の整数か無し。 */
 export function parseHistoryQuery(url: URL): HistoryQueryResult {
   const rawLimit = url.searchParams.get('limit');
@@ -42,7 +36,5 @@ export function parseHistoryQuery(url: URL): HistoryQueryResult {
   return { ok: true, value: { limit, before } };
 }
 
-/** UNIX 秒を ISO 8601 の UTC（秒まで。`2026-10-30T15:30:00Z`）に直す。 */
-export function isoSeconds(seconds: number): string {
-  return new Date(seconds * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
-}
+/** UNIX 秒を ISO 8601 の UTC（秒まで）に直す。定義は src/core/period.ts（ここから出し直す）。 */
+export { isoSeconds } from '../../core/period';

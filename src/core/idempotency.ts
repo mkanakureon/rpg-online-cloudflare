@@ -1,4 +1,4 @@
-// idempotency.ts — 二重の止めの Idempotency-Key の形と確かめ・本文のハッシュ（SHA-256 の 16 進）。入出力を持たない。
+// idempotency.ts — 二重の止めの Idempotency-Key の形と確かめ・本文のハッシュ（SHA-256 の 16 進。定義は hash.ts）。入出力を持たない。
 //
 // 管理の増減（src/core/admin/。鍵とハッシュは admin_audit_log の列）とプレイヤーデータの書き込み（src/modules/player-data/。
 // 鍵とハッシュは player_data_writes の列）の両方が読む。モジュールが src/core/admin/ を読み込まないように core に置く。
@@ -15,8 +15,5 @@ export function parseIdempotencyKey(raw: string | null): string | null {
   return raw !== null && IDEMPOTENCY_KEY_PATTERN.test(raw) ? raw : null;
 }
 
-/** text の UTF-8 のバイト列の SHA-256 を小文字の 16 進 64 文字で返す（request_hash に入れる）。 */
-export async function sha256Hex(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
+/** request_hash に入れるハッシュ（SHA-256 の小文字の 16 進）。定義は src/core/hash.ts（ここから出し直す）。 */
+export { sha256Hex } from './hash';

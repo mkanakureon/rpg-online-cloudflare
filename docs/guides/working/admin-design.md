@@ -90,7 +90,8 @@ Cloudflare の機能（2026-10-31。リポジトリに入っている wrangler 4
 | --- | --- | --- |
 | `src/core/admin/key.ts` | `adminSecret(env)`・`requireAdmin(req, secret)`（§3。入出力の無い関数と Web Crypto だけ） | O1 |
 | `src/core/admin/audit.ts` | 監査の行の文（§5。O1）・`parseActor`・`parseReason`（O2。書き込みの口で初めて使う）・`requestHash`（O3。増減の `Idempotency-Key` で使う）。入出力の無い関数 | O1〜O3 |
-| `src/core/admin/routes.ts` | `adminRoutes`（ルートの一覧。O1〜O4 で行を足す）と共通の確かめ `checkAdmin` | O1 |
+| `src/core/admin/routes.ts` | `adminRoutes`（ルートの一覧。口の種類ごとのファイル `routes-players.ts`〔プレイヤーを読む・BAN・増減・スコアを消す〕・`routes-definitions.ts`〔品目・イベント・クエストの定義〕・`routes-player-data.ts`〔プレイヤーデータのキー・実績・値〕・`routes-reports.ts`〔監査・集計〕の一覧を並べるだけ。並びの順は変えない） | O1（分けたのは Issue #69） |
+| `src/core/admin/common.ts` | 共通の確かめ `checkAdmin`・`checkAdminWrite` と、口のファイルどうしで使う時刻・SQL | O1（分けたのは Issue #69） |
 | `src/core/admin/parse.ts` | 本文の確かめ（増減・BAN・品目・イベントの定義）。入出力の無い関数 | O2〜O4 |
 | `src/core/bans.ts` | `isBanActive(row, now)`・`requireNotBanned(env, claims)`（§4） | O2 |
 | `src/core/ledger.ts` | 受領の履歴の種類の名前 `LEDGER_SOURCES`・1 品目の増減の文（§6） | O3 |

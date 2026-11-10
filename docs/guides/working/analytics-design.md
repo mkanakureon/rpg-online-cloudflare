@@ -152,7 +152,7 @@ CREATE INDEX IF NOT EXISTS quest_claims_game_claimed ON quest_claims (game_id, c
 
 ## 5. 読む口と集計（N1・N3）
 
-集計は**要求の時に D1 の SQL で数える**（日ごとにまとめた表を持たない。§13 の決めること 4）。どちらの口も管理の読み取りで、確かめの順は今の管理の読み取りと同じ（`src/core/admin/routes.ts` の `checkAdmin`: `APP_ENV=local` の門 → 鍵の有無 → `RATE_LIMITS.admin` → 鍵 → `gameId` の形 → ゲームの登録）。読み取りなので監査に残さない。機能の設定（`game_modules`）は見ない（管理の口の決まり。`admin-design.md` §2）。
+集計は**要求の時に D1 の SQL で数える**（日ごとにまとめた表を持たない。§13 の決めること 4）。どちらの口も管理の読み取りで、確かめの順は今の管理の読み取りと同じ（`src/core/admin/common.ts` の `checkAdmin`: `APP_ENV=local` の門 → 鍵の有無 → `RATE_LIMITS.admin` → 鍵 → `gameId` の形 → ゲームの登録）。読み取りなので監査に残さない。機能の設定（`game_modules`）は見ない（管理の口の決まり。`admin-design.md` §2）。
 
 ### `GET /v1/admin/analytics/players?gameId=demo-rpg&from=2026-10-01&to=2026-10-31`（N1）
 

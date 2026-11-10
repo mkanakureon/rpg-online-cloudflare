@@ -214,7 +214,7 @@ INSERT OR IGNORE INTO achievements (game_id, achievement_id, key, threshold) VAL
 
 2 つの口はどちらもトークンが要る。プレイヤーはトークンの `p` だけで決まる（本文・クエリの `playerId` を受け取らない）。読み取りも、セーブ・所持品の `GET` と同じく `APP_ENV` の守りを通す（§9）。
 
-### 確かめの順（2 つの口で同じ。イベントの `checkAccess` と同じ形）
+### 確かめの順（2 つの口で同じ。`src/core/access.ts` の `checkPlayerAccess`）
 
 ルート → `requireLocalWrite`（403 `NOT_READY_FOR_PRODUCTION`）→ `requireAuth`（401）→ **プレイヤーの利用制限 `RATE_LIMITS.playerData`（429 `RATE_LIMITED`・`Retry-After`。2 つの口を合わせて、鍵は `<トークンの g>:<トークンの p>`）** → `requireNotBanned`（403 `PLAYER_BANNED`）→ `gameId` の形（400 `INVALID_ARGUMENT`）→ トークンのゲームとの突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録と機能の設定 `requireGame(env, gameId, 'player-data', known)`（404）→ 口ごとの確かめ。
 

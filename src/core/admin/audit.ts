@@ -10,6 +10,7 @@
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
 import { sha256Hex } from '../idempotency';
+import { isoSeconds } from '../period';
 
 /** 監査の行を残す日数（operations-security.md の 6。src/core/cleanup.ts の掃除が、この日数を過ぎた行を消す）。 */
 export const AUDIT_RETENTION_DAYS = 365;
@@ -54,10 +55,8 @@ export type AuditEntry = {
   before: unknown; after: unknown; reason: string; createdAt: string;
 };
 
-/** UNIX 秒を ISO 8601 の UTC（秒まで。`2026-10-31T01:02:03Z`）に直す。 */
-export function isoSeconds(seconds: number): string {
-  return new Date(seconds * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
-}
+/** UNIX 秒を ISO 8601 の UTC（秒まで）に直す。定義は src/core/period.ts（管理の口が読む名前としてここから出し直す）。 */
+export { isoSeconds };
 
 /** 表の 1 行を応答の 1 行にする（前と後は JSON を読み直す。NULL は null）。 */
 export function shapeAuditRow(row: AuditRow): AuditEntry {

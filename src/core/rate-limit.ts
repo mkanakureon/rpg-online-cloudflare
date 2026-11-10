@@ -9,6 +9,7 @@
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
 import type { Database, Statement } from './env';
+import { sha256Hex } from './hash';
 import { error } from './http';
 import type { RateLimitRule } from './rate-limit-policy';
 
@@ -34,8 +35,7 @@ export function decide(count: number, limit: number): boolean {
 export async function ipSubject(req: Request): Promise<string> {
   const ip = req.headers.get('CF-Connecting-IP');
   if (!ip) return NO_IP_SUBJECT;
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(ip));
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return sha256Hex(ip);
 }
 
 /** 数える 2 文（いまの窓に足して数を返す・同じ鍵の古い窓を消す）。consume と src/core/activity.ts の consumeForPlayer が同じ batch の頭に置く。 */
