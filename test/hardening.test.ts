@@ -5,6 +5,7 @@
  * test/schema-conformance.test.ts の中にある。いまの挙動を確かめるだけで、src/ は変えない。
  * §11 の `ヘルスチェックはDBの失敗でINTERNAL_ERRORの500を返す` は、いまの GET /health が DB を引かず（src/core/router.ts）DB が壊れていても
  * 200 を返すので、ここに置いていない（src/ を変えない束のため。Issue #72 の報告に実測を残し、直し方はユーザーが決める）。
+ * → 2026-11-10 にユーザーがいまの挙動を正にすると決め（§7 の #12）、§11 の名前 `ヘルスチェックはDBが壊れていても読まずに200を返す` でここに置いた。
  * L2 は src/worker.ts の default.fetch を直に呼ぶ。管理の鍵は試験の中で作る秘密でない値（'a'.repeat(32)）。試験のゲームは専用の hard-game で、
  * プレイヤーは game_players・accounts に行を直に入れ、トークンは test/support/auth.ts で作る。
  *
@@ -28,6 +29,12 @@ const adminEnv: TestEnv = { ...localEnv, ADMIN_API_KEY: adminKey };
 const base = 'http://example.com';
 const game = 'hard-game';
 const modules = ['rankings', 'saves', 'inventory', 'player-data'];
+
+// prepare を呼ぶと D1 のエラーに似た例外を投げる偽の DB（DB を読む口なら 500 になる）
+let brokenReads = 0;
+const brokenDB = {
+  prepare(): never { brokenReads += 1; throw new Error('D1_ERROR: SQLITE_ERROR: no such table: games'); },
+};
 
 type ErrorBody = { error: { code: string; message: string } };
 
@@ -95,6 +102,18 @@ beforeEach(async () => {
 });
 
 describe('G2 入口の 500 と 400（§7 の #12・#18・#19）', () => {
+  it('ヘルスチェックはDBが壊れていても読まずに200を返す', async () => {
+    brokenReads = 0;
+    for (const e of [{ ...baseEnv, DB: brokenDB }, { ...localEnv, DB: brokenDB }]) {
+      const res = await worker.fetch(new Request(`${base}/health`), e as never);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('cache-control')).toBe('no-store');
+      expect(await res.json()).toEqual({ status: 'ok', service: 'rpg-online-backend' });
+    }
+    // DB を一度も読まない
+    expect(brokenReads).toBe(0);
+  });
+
   it('管理の書き込みの本文が配列ならObject requiredの400を返す', async () => {
     await addPlayer('p1');
     for (const body of ['[]', '[{"itemId":"gold","delta":5,"reason":"x"}]', 'null', '7']) {
