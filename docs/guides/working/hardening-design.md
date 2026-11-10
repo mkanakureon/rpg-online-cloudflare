@@ -30,7 +30,7 @@
 ### 実装の Issue の合格の条件（この設計書から作る）
 
 - 束ごとに、§13 の確認コマンドの案が exit 0 になる（`runTests()` が `Result: PASS`・`requireTests` の名前が全部ある・通る）。
-- 挙動を変えない束（G1・G2）は、いまの試験を 1 本も変えずに通る。契約が変わる束（G4〜G10）は、§13 の「直してよい試験」に挙げた試験だけを直し、`docs/api-contract.md`・スキーマ・3 つのクライアントを同じ束で合わせる。
+- 挙動を変えない束（G1・G2）は、いまの試験の名前と期待を 1 本も変えずに通る（変えてよいのは試験の準備〔`beforeEach` の消す表〕と、試験のスキーマの確かめの手伝い〔`test/support/schema-check.ts`〕だけ。§7）。G3 は契約を変えない内側の直しで、`Vary` の見出し・ログ・管理コマンドの挙動を変えるが、いまの試験の期待は変えない。契約が変わる束（G4〜G10）は、§13 の「直してよい試験」に挙げた試験だけを直し、`docs/api-contract.md`・スキーマ・3 つのクライアントを同じ束で合わせる。
 - どの束も `APP_ENV === 'local'` のときだけ書き込みを通す守りを外さない（P6 と #67 の範囲）。デプロイ・公開をしない。
 
 ## 1. 元の文書と、扱う項目の一覧
@@ -103,7 +103,7 @@
 
 ### 2.3 本文の大きさ（`Content-Length` の無い要求も含む）
 
-**いまの挙動（読み。影響は疑い）。** 本文の上限はセーブの PUT（`src/modules/saves/index.ts` の `readBody`）にしか無い。ほかの JSON の本文を読む口（ランキングの POST・プレイヤーデータの POST・ゲストの発行〔`src/core/accounts.ts`。トークンの前・IP の利用制限の後に読む〕・クエストの受け取り・管理の書き込みの口〔`src/core/admin/common.ts` の `checkAdminWrite`〕）は `req.json()` をそのまま呼ぶ。セーブの `readBody` も、`Content-Length` が無い要求は `arrayBuffer()` で全部読んでから比べる。Workers の本文の大きさの上限（プランごと）で最後は止まるが、その値と、そこまで読む CPU の時間が Free の上限に当たるかは**要確認**。
+**いまの挙動（読み。影響は疑い）。** 本文の上限はセーブの PUT（`src/modules/saves/index.ts` の `readBody`）にしか無い。ほかの JSON の本文を読む口（ランキングの POST・プレイヤーデータの POST・ゲストの発行〔`src/core/accounts.ts`。トークンの前・IP の利用制限の後に読む〕・管理の書き込みの口〔`src/core/admin/common.ts` の `checkAdminWrite`〕）は `req.json()` をそのまま呼ぶ。セーブの `readBody` も、`Content-Length` が無い要求は `arrayBuffer()` で全部読んでから比べる。Workers の本文の大きさの上限（プランごと）で最後は止まるが、その値と、そこまで読む CPU の時間が Free の上限に当たるかは**要確認**。
 
 **直す案。**
 
@@ -162,7 +162,7 @@
 
 ### 3.4 送り直し（`Idempotency-Key`）と `maxDelta` を下げた後の順
 
-**いまの挙動（読み）。** プレイヤーデータの POST は、宣言を読む（`loadKeys`）→ 宣言の無いキーは 404 → 書き方の範囲（`checkChange`。`maxDelta` を含む）→ 書き込みの batch → 記録を読み直して二重を判定、の順。成功した書き込みの応答を取りこぼし、その間に管理が `maxDelta` を下げた（またはキーを消した・書き方を変えた）後に同じ鍵で送り直すと、1 回目の本文でなく 400（か 404）が返る（値は書けている）。契約は「同じ鍵と同じ中身は 200 で 1 回目と同じ本文」と書いている。
+**いまの挙動（読み）。** プレイヤーデータの POST は、宣言を読む（`loadKeys`）→ 宣言の無いキーは 404 → 書き方の範囲（`checkChange`。`maxDelta` を含む）→ 書き込みの batch → 記録を読み直して二重を判定、の順。成功した書き込みの応答を取りこぼし、その間に管理が `maxDelta` を下げた（または `maxValue` を下げた・値の行が無いうちに書き方を変えた）後に同じ鍵で送り直すと、1 回目の本文でなく 400（か 404）が返る（値は書けている）。契約は「同じ鍵と同じ中身は 200 で 1 回目と同じ本文」と書いている。
 
 | 案 | 中身 | 良い点 | 悪い点 |
 | --- | --- | --- | --- |
@@ -200,7 +200,7 @@
 
 **推し: A。** C は BAN（403 `PLAYER_BANNED`）で同じ目的を果たせるので取らない（§14）。BAN された人の発行し直しは、ゲストが本人確認でない限り止められない（IP で止めると同じ回線の他人を巻き込む）。`distribution-design.md` P1 が公開の説明に「ゲストは本人確認でない」と書くので、ここでは範囲の外にする（§14）。外部の本人確認は `client-integration-design.md` §8 の境目のまま。
 **`APP_ENV` との関係:** 鍵が無いときに `local` だけ公開された鍵に戻る決まり（`tokenSecret`）は #67 の範囲。A は「鍵がある」ときの取り替えだけを変え、#67 の答えに左右されない。
-**契約が変わるか: 変わらない**（トークンの形・応答・3 つのクライアントは同じ）。新しい秘密の名前を `src/core/env.ts` の `Env` の型と、`distribution-design.md` P2 のデプロイの説明書（試験 `デプロイの説明書は秘密の名前をEnvの型と同じ集合で挙げる`）に足す。P2 が先に済んでいれば、その説明書も G9 で合わせる。
+**契約が変わるか: 変わらない**（トークンの形・応答・3 つのクライアントは同じ）。新しい秘密の名前を `src/core/env.ts` の `Env` の型と、デプロイの説明書 `docs/guides/manuals/deploy.md`（P2 で作った。試験 `デプロイの説明書は秘密の名前をEnvの型と同じ集合で挙げる` が `wrangler secret put` の名前の集合を `Env` の型と突き合わせる）に同じ束で足す。説明書には前の鍵を消す手順も書く。
 
 ## 5. 利用制限
 
@@ -215,7 +215,7 @@
 | C | いまのまま（本番は見出しがある前提） | 何も変えない | 前提が崩れたとき（別の前段のプロキシ）に気づけない |
 
 **推し: A。** 外れた要求の 429 は、正しい鍵の要求を数えないので、管理の人は塞がれない。
-**契約が変わるか: 管理の口の文だけ。** 状態コードは同じ（401・429）で、429 になる条件の説明が変わる。いまの試験 `管理の口を上限より多く呼ぶと鍵を確かめる前に429を返す` は、新しい決まりの名前（§11 の G9）に置き換える（直してよい試験。旧文は残さない）。
+**契約が変わるか: 管理の口の説明が変わる。** 状態コードは同じ（401・429）で、429 になる条件の説明が変わる。`docs/api-contract.md` の管理の API と、管理のスキーマ `openapi/rpg-online-admin.v1.json` の各口の 429 の説明（いまは「鍵を確かめる前に断る」）を同じ束で置き換える。いまの試験 `管理の口を上限より多く呼ぶと鍵を確かめる前に429を返す` は、新しい決まりの名前（§11 の G9）に置き換える（直してよい試験。旧文は残さない）。
 
 ### 5.2 IP のハッシュに塩が無い
 
@@ -223,7 +223,7 @@
 
 | 案 | 中身 | 良い点 | 悪い点 |
 | --- | --- | --- | --- |
-| A | **HMAC-SHA256 にする。鍵はトークンの署名の鍵から、用途の名前を混ぜて作る**（新しい秘密を足さない） | 秘密が増えない。鍵を替えると数え直しになるが、窓は 60 秒 | トークンの鍵が無い環境（`local` でなく秘密も無い）では作れない（その環境は書き込みが 403 か 500 で、数える前に止まる） |
+| A | **HMAC-SHA256 にする。鍵はトークンの署名の鍵から、用途の名前を混ぜて作る**（新しい秘密を足さない） | 秘密が増えない。鍵を替えると数え直しになるが、窓は 60 秒 | トークンの鍵が無い環境では作れない。とくに管理の口は、いまはトークンの鍵が無く（`AUTH_TOKEN_SECRET` が短いなど）ても管理の鍵だけで通るが、A では IP の鍵が作れず 500 になる（管理の口がトークンの鍵にも頼るようになる）。G9 でこの 500 を試験と `admin-design.md` に書く |
 | B | 専用の秘密（例 IP の塩）を足す | 用途が分かれる | 秘密が 1 つ増え、デプロイの説明書と `Env` の型の試験が変わる |
 | C | 日ごとに変わる塩を D1 に置く | 秘密が要らない | 塩も同じ D1 にあるので、表を読める人には意味が無い |
 
@@ -252,7 +252,7 @@
 | 元 | 足す試験の中身 |
 | --- | --- |
 | #12 | `getHealth` が DB の失敗で 500 `INTERNAL_ERROR` を HTTP で返す・管理の書き込みの本文がオブジェクトでないと HTTP で 400 `Object required` |
-| #17・#32 | `test/schema-conformance.test.ts` の `beforeEach` が、残す表（アカウント・プレイヤー・イベント・残高）も消す（試験の順で結果が変わらないことを、その試験のファイルの中の 1 本で見る） |
+| #17・#32 | いまの `test/schema-conformance.test.ts` の `beforeEach` は `ranking_entries` とお知らせしか消さず、アカウント・プレイヤー・イベント・残高の行が試験の後に残る。G2 で `beforeEach` に消す表を足し（試験の準備の直し。期待は変えない）、試験の順で結果が変わらないことをそのファイルの中の 1 本で見る |
 | #18・#19 | `AUTH_TOKEN_SECRET` が短くトークンの鍵が無い（`tokenSecret` が null）とき、ゲストの発行とトークンの要る書き込みが HTTP で 500 |
 | #29 | セーブの 1 つの GET と DELETE も利用制限で 429（#69 で `checkPlayerAccess` に寄せた後も、口ごとに 1 本） |
 | #35・#41 | 試験のスキーマの確かめ（`test/support/schema-check.ts`）が `type` の配列（`['string','null']`）を見る |
@@ -311,12 +311,12 @@
 | `docs/api-contract.md` | エラーコードの表（`RANKING_LIMIT_EXCEEDED`）・ランキングの POST・管理のプレイヤーを読む口の `rankings` の件数 | G5 |
 | `docs/api-contract.md`・`docs/guides/working/save-design.md` §2・§9 | 墓石の使い回しとリビジョン | G6 |
 | `docs/api-contract.md` | 本文を読む口の 413 | G4 |
-| `docs/api-contract.md`・`docs/guides/working/player-data-design.md` §8 | 実績の取り消しの 400・キーと実績の宣言の 400・競合の文 | G7 |
+| `docs/api-contract.md`・`docs/guides/working/player-data-design.md` §8・`docs/guides/working/quest-design.md` §8 | 実績の取り消しの 400・キーと実績とクエストの宣言の 400（`threshold` とキーの上限）・競合の文 | G7 |
 | `docs/api-contract.md`・`docs/guides/working/quest-design.md` §6・§8 | 区切りの宣言の付け替え・宣言を足した瞬間の書き込み | G8・G3 |
-| `docs/guides/working/admin-design.md` §3・`docs/guides/working/abuse-protection-design.md` §3 | 管理の利用制限の順（鍵の後・外れだけ数える）・IP の鍵付きのハッシュ | G9 |
-| `docs/guides/working/account-design.md` §4 | 鍵の取り替えの重なり（前の鍵で確かめる） | G9 |
+| `docs/guides/working/admin-design.md` §3・`docs/guides/working/abuse-protection-design.md` §3・`openapi/rpg-online-admin.v1.json`（各口の 429 の説明） | 管理の利用制限の順（鍵の後・外れだけ数える）・IP の鍵付きのハッシュ | G9 |
+| `docs/guides/working/account-design.md` §4・`docs/guides/manuals/deploy.md` | 鍵の取り替えの重なり（前の鍵で確かめる）・新しい秘密の名前と前の鍵を消す手順 | G9 |
 | `docs/guides/working/client-integration-design.md` §2.2 | `new-resource` の送り直しは 429 だけ | G10 |
-| `docs/api-contract.md` | `flags` の並び・CORS の `Vary` | G3 |
+| `docs/api-contract.md`・`openapi/rpg-online.v1.json`（`flags` の説明） | `flags` の並び・CORS の `Vary` | G3 |
 
 ## 11. 試験の名前の表
 
@@ -398,7 +398,7 @@
 | 9 | IP のハッシュの鍵 | A: トークンの鍵から作る。B: 専用の秘密。C: D1 の塩 | **A**（§5.2）。鍵の無い環境の扱いは #67 に従う |
 | 10 | 時計の差し替え | A: core の 1 つの関数と `vi.spyOn`。B: `Env` に時計。C: 差し替えない | **A**（§6） |
 | 11 | `issueGuest` の送り直し | A: 429 だけ。B: `Idempotency-Key`。C: いまのまま | **A**（§9.1） |
-| 12 | 束の順 | A: **G1 → G2 → G3（挙動を変えない・内側の直し）を先に、G4〜G10（契約が変わる）を後に。G4〜G10 は互いに独立で、どの順でもよい（推しは際限なく増えるもの G4・G5・G6 → 定義の整合 G7・G8 → G9 → G10）**。B: 重い順（G5 から） | **A**。時計と並びの試験（G1）が先にあると、G5〜G8 の境目の試験を同じ道具で書ける |
+| 12 | 束の順 | A: **G1 → G2（挙動を変えない）→ G3（契約を変えない内側の直し）を先に、G4〜G10（契約が変わる）を後に。G8 は G7 の後（同じ管理の定義の口の 1 文目の条件を足すため）で、ほかの G4〜G10 は互いに独立（推しは際限なく増えるもの G4・G5・G6 → 定義の整合 G7 → G8 → G9 → G10）**。B: 重い順（G5 から） | **A**。時計と並びの試験（G1）が先にあると、G5〜G8 の境目の試験を同じ道具で書ける |
 | 13 | P6 との順 | A: **G1〜G10 を P6 の前に全部回す**。B: 際限なく増えるもの（G4〜G6）と G9 だけ P6 の前 | **A**。P6 はユーザーが #67 と一緒に決める。この設計書の束は P6 を前提にしない |
 
 ## 13. 実装の束
@@ -409,13 +409,13 @@
 | --- | --- | --- | --- | --- | --- |
 | G1 | 挙動を変えない | 時刻を取る所を core の 1 つの関数にまとめる・時計を差し替える試験・境目と期限ちょうど・並べて送る試験（§6） | #69 | `src/`（時刻の写しだけ）・`test/` | §11 の G1 の 8 本 |
 | G2 | 挙動を変えない | 仕分けの試験の残り（§7）・`batch` の文の数の試験（§8）・スキーマの `minItems` | G1 | `test/`・`openapi/rpg-online.v1.json`（`minItems` だけ） | §11 の G2 の 11 本 |
-| G3 | 内側の直し（契約は文だけ） | `console.error`・`LIMIT 50` の定数・`Vary: Origin`・区切りの宣言を読む所・管理コマンドの引数・`flags` の並びと `Vary` の契約の文（§3.6・§9.2〜§9.6） | G2 | `src/`・`scripts/admin-cli.mjs`・`test/`・`docs/api-contract.md`・`docs/guides/working/quest-design.md` | §11 の G3 の 5 本 |
+| G3 | 内側の直し（契約は文だけ） | `console.error`・`LIMIT 50` の定数・`Vary: Origin`・区切りの宣言を読む所・管理コマンドの引数・`flags` の並びと `Vary` の契約の文（§3.6・§9.2〜§9.6） | G2 | `src/`・`scripts/admin-cli.mjs`・`test/`・`docs/api-contract.md`・`openapi/rpg-online.v1.json`（`flags` の説明の文だけ）・`docs/guides/working/quest-design.md` | §11 の G3 の 5 本 |
 | G4 | 契約が変わる | 本文の大きさの上限（§2.3） | G3 | `src/`・`openapi/`・`docs/api-contract.md`・`test/` | §11 の G4 の 3 本と互換の試験 |
 | G5 | 契約が変わる | ランキングのボードの上限・新しいエラーコード（§2.1） | G3 | `src/`・`openapi/`・`clients/`（エラーの表）・`docs/api-contract.md`・`test/` | §11 の G5 の 3 本と互換の試験 |
 | G6 | 契約が変わる（文） | セーブの墓石の使い回し（§2.2） | G3 | `src/`・`docs/api-contract.md`・`docs/guides/working/save-design.md`・`test/` | §11 の G6 の 3 本と互換の試験 |
-| G7 | 契約が変わる（管理の口） | 実績の取り消し・キーと閾値の整合・送り直しの順・競合の文（§3.1・§3.2・§3.4・§3.5） | G3 | `src/`・`openapi/rpg-online-admin.v1.json`・`docs/api-contract.md`・`docs/guides/working/player-data-design.md`・`test/` | §11 の G7 の 7 本と互換の試験 |
+| G7 | 契約が変わる（管理の口） | 実績の取り消し・キーと閾値の整合・送り直しの順・競合の文（§3.1・§3.2・§3.4・§3.5） | G3 | `src/`・`openapi/rpg-online-admin.v1.json`・`docs/api-contract.md`・`docs/guides/working/player-data-design.md`・`docs/guides/working/quest-design.md`・`test/` | §11 の G7 の 7 本と互換の試験 |
 | G8 | 契約が変わる（管理の口） | 区切りの宣言の付け替え（§3.3） | G7 | `src/`・`openapi/rpg-online-admin.v1.json`・`docs/api-contract.md`・`docs/guides/working/quest-design.md`・`test/` | §11 の G8 の 3 本と互換の試験 |
-| G9 | 契約が変わる（管理の口の文） | 鍵の取り替えの重なり・管理の利用制限の順・IP の鍵付きのハッシュ（§4・§5） | G3 | `src/`・`docs/api-contract.md`・`docs/guides/working/admin-design.md`・`docs/guides/working/abuse-protection-design.md`・`docs/guides/working/account-design.md`・`test/` | §11 の G9 の 5 本と互換の試験 |
+| G9 | 契約が変わる（管理の口の説明） | 鍵の取り替えの重なり・管理の利用制限の順・IP の鍵付きのハッシュ（§4・§5） | G3 | `src/`・`openapi/rpg-online-admin.v1.json`・`docs/api-contract.md`・`docs/guides/working/admin-design.md`・`docs/guides/working/abuse-protection-design.md`・`docs/guides/working/account-design.md`・`docs/guides/manuals/deploy.md`・`test/` | §11 の G9 の 5 本と互換の試験 |
 | G10 | 契約が変わる（クライアントの決まり） | `issueGuest` の送り直しを 429 だけに（§9.1） | G3 | `clients/`・`openapi/rpg-online.v1.json`（説明の文）・`docs/api-contract.md`・`docs/guides/working/client-integration-design.md`・`test/` | §11 の G10 の 2 本と互換の試験 |
 
 - どの束も `src/core/guards.ts`・`wrangler.jsonc`・`package.json`・`package-lock.json` を変えない（`APP_ENV` の門は #67・P6 の範囲。パッケージは足さない）。
@@ -486,7 +486,7 @@ requireTests([
   'ローカルでない環境と決めていないオリジンにはCORSの見出しを返さない',
   '旧CLIはスキーマ変更後のAPIでもランキングを送って読める',
 ]);
-gitClean(['migrations/', 'openapi/', 'clients/', 'src/core/guards.ts', 'wrangler.jsonc', 'package.json', 'package-lock.json'], { base });
+gitClean(['migrations/', 'openapi/rpg-online-admin.v1.json', 'clients/', 'src/core/guards.ts', 'wrangler.jsonc', 'package.json', 'package-lock.json'], { base });
 done();
 ```
 
@@ -591,9 +591,11 @@ requireTests([
   '管理の鍵の外れだけをIPごとに数え正しい鍵の要求は外れの上限で塞がれない',
   'IPの無い要求の管理の鍵の外れが上限でも正しい鍵の管理の口は通る',
   '利用制限のIPの鍵はトークンの鍵から作った鍵付きのハッシュで素のSHA-256と違う',
+  'デプロイの説明書は秘密の名前をEnvの型と同じ集合で挙げる',
+  '管理の鍵の無い環境では管理の口がINTERNAL_ERRORの500を返す',
   '旧CLIはスキーマ変更後のAPIでもランキングを送って読める',
 ]);
-gitClean(['migrations/', 'clients/', 'openapi/', 'src/core/guards.ts', 'wrangler.jsonc', 'package.json', 'package-lock.json'], { base });
+gitClean(['migrations/', 'clients/', 'openapi/rpg-online.v1.json', 'src/core/guards.ts', 'wrangler.jsonc', 'package.json', 'package-lock.json'], { base });
 done();
 ```
 
