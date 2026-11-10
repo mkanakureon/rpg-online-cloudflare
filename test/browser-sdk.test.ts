@@ -199,6 +199,43 @@ describe('B2 ブラウザの SDK の決まり（L1）', () => {
     else expect.unreachable('deleteSave はタイムアウトで失敗する');
   });
 
+  it('SDKはゲストの発行を500とタイムアウトで自動で送り直さず429だけ送り直す', async () => {
+    // new-resource（issueGuest・refreshToken）は送り直すと別のものができる。5xx・回線断・タイムアウトは呼び手に返す（設計書 §2.2）
+    const f = fake(() => json(500, errorBody('INTERNAL_ERROR')));
+    const res = await createClient({ baseUrl, fetch: f.fetch, sleep: f.sleep, random: () => 1 }).issueGuest();
+    expect(f.calls).toHaveLength(1);
+    expect(f.waits).toEqual([]);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatchObject({ code: 'INTERNAL_ERROR', category: 'network', status: 500, retryable: false, outcomeUnknown: false });
+    // コードの無い 503 も送り直さない
+    const plain = fake(() => new Response('busy', { status: 503 }));
+    await createClient({ baseUrl, fetch: plain.fetch, sleep: plain.sleep }).issueGuest();
+    expect(plain.calls).toHaveLength(1);
+    // タイムアウトも送り直さない
+    const h = fake(() => 'hang');
+    const timedOut = await createClient({ baseUrl, fetch: h.fetch, sleep: h.sleep }).issueGuest();
+    expect(h.calls).toHaveLength(1);
+    expect(h.timeouts).toEqual([10_000]);
+    expect(h.waits).toEqual([]);
+    if (!timedOut.ok) expect(timedOut.error).toMatchObject({ code: null, category: 'network', status: null, retryable: false });
+    else expect.unreachable('issueGuest はタイムアウトで失敗する');
+    // 429（何も作っていない）は Retry-After の秒だけ待って 1 回だけ送り直す
+    const r = fake((n) => (n === 1 ? json(429, errorBody('RATE_LIMITED'), { 'Retry-After': '5' }) : json(200, guestBody)));
+    const issued = await createClient({ baseUrl, fetch: r.fetch, sleep: r.sleep }).issueGuest();
+    expect(issued.ok).toBe(true);
+    expect(r.calls).toHaveLength(2);
+    expect(r.waits).toEqual([5000]);
+    // トークンの更新（refreshToken）も同じ種類で、500 を送り直さない
+    const t = fakeSignedIn(() => json(500, errorBody('INTERNAL_ERROR')));
+    const signedIn = createClient({ baseUrl, fetch: t.fetch, sleep: t.sleep });
+    expect((await signedIn.issueGuest()).ok).toBe(true);
+    const refreshed = await signedIn.refreshToken();
+    expect(t.sent()).toHaveLength(1);
+    expect(t.waits).toEqual([]);
+    if (!refreshed.ok) expect(refreshed.error).toMatchObject({ code: 'INTERNAL_ERROR', status: 500, retryable: false });
+    else expect.unreachable('refreshToken は 500 で失敗する');
+  });
+
   it('SDKはプレイヤーデータの書き込みの送り直しに同じIdempotency-Keyを使う', async () => {
     const written = { gameId: 'demo-rpg', writeId: 'w1', values: [{ key: 'slimes-defeated', value: 1 }], unlocked: [] };
     const f = fakeSignedIn((n) => (n === 1 ? 'hang' : json(200, written)));

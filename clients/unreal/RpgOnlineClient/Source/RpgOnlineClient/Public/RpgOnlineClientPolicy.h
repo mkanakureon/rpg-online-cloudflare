@@ -54,6 +54,9 @@ namespace RpgOnlineClientPolicy
 	// 再試行の種類のうち、自動で送り直さないもの（§2.2）
 	inline constexpr const TCHAR* NoAutoRetryKind = TEXT("revision");
 
+	// 再試行の種類のうち、429（何も作っていない）のときだけ送り直すもの（§2.2）。回線断・タイムアウト・5xx は送り直さず呼び手に返す
+	inline constexpr const TCHAR* RateLimitOnlyKind = TEXT("new-resource");
+
 	// §2.5 のエラーコードの表（スキーマの errorCatalog と同じ 19 行）
 	inline constexpr FRpgOnlineErrorRule ErrorCatalog[] = {
 		{ TEXT("INVALID_ARGUMENT"), TEXT("client-bug"), false },

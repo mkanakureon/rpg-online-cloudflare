@@ -84,13 +84,13 @@ Phase 1 の残り「エラーコード、タイムアウト、ページングを
 | `safe` | 読むだけ（`GET`） | する |
 | `natural-key` | 一意の鍵か `MAX` で、同じ要求を 2 回送っても記録と応答が同じ | する（同じ要求をそのまま） |
 | `idempotency-key` | `Idempotency-Key` で二重にならない | する（**同じ鍵**と同じ本文で） |
-| `new-resource` | 送り直すと新しいものができるが、余った 1 つは害が無い | する（利用制限の範囲で） |
+| `new-resource` | 送り直すと新しいものができる（ゲストの発行は届かなかった方にも「新しい人」の行を作り、分析の数が水増しされる） | **429 だけ**する（429 は何も作っていない。`Retry-After` の決まりのとおり）。回線断・タイムアウト・5xx は送り直さず呼び手に返す（`retryable` は false） |
 | `revision` | `baseRevision` で止まり、送り直すと 409 か 404 になる | **しない**。結果が分からない（タイムアウト・回線断・500）ときは `GET` で読み直して確かめる |
 
 | 操作（`operationId`） | 口 | 種類 | 送り直しの結果 |
 | --- | --- | --- | --- |
 | `getHealth` | `GET /health` | `safe` | — |
-| `issueGuest` | `POST /v1/accounts/guest` | `new-resource` | 別のプレイヤーができる。前の応答が届かなかった方は使われずに残る（IP ごと 60 秒に 10 回で抑える） |
+| `issueGuest` | `POST /v1/accounts/guest` | `new-resource` | 別のプレイヤーができ、前の応答が届かなかった方は使われずに残る（新しい人の数が増える）。そのため自動では 429 のときだけ送り直す（IP ごと 60 秒に 10 回で抑える） |
 | `listAnnouncements` | `GET /v1/announcements` | `safe` | — |
 | `getRanking` | `GET /v1/rankings/{boardId}` | `safe` | — |
 | `submitScore` | `POST /v1/rankings/{boardId}` | `natural-key` | 最高スコアだけ残るので同じ（回数は 2 回分数える） |
@@ -105,7 +105,7 @@ Phase 1 の残り「エラーコード、タイムアウト、ページングを
 | `writePlayerData` | `POST /v1/player-data` | `idempotency-key` | 同じ鍵と同じ本文なら 200 で同じ本文。鍵の期限 30 日 |
 | `listQuests` | `GET /v1/quests` | `safe` | — |
 | `claimQuest` | `POST /v1/quests/{questId}/claim` | `natural-key` | `claimEventReward` と同じ |
-| `refreshToken`（B3 で足す） | `POST /v1/accounts/token` | `new-resource` | 期限を先にした別のトークンができる。前の応答が届かなかった方のトークンも期限まで使えるが、同じプレイヤーなので害が無い（§2.7 の利用制限で抑える） |
+| `refreshToken`（B3 で足す） | `POST /v1/accounts/token` | `new-resource` | 期限を先にした別のトークンができる。前の応答が届かなかった方のトークンも期限まで使える。自動では 429 のときだけ送り直し、ほかの失敗は今のトークンのまま次の要求でまた更新を試す（§2.7 の利用制限で抑える） |
 
 - 操作は 19 個（`openapi/rpg-online.v1.json` の全部。B3 の `refreshToken` で 20 個）。管理の口（`openapi/rpg-online-admin.v1.json`）はゲームのクライアントが呼ばないので範囲の外（管理の CLI の決まりは `admin-design.md`）。
 - `Idempotency-Key` を `writePlayerData` 以外の口に付けても、サーバーは読んで無視する（`docs/api-contract.md` の「利用制限」）。クライアントは付けない。

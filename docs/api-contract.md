@@ -782,8 +782,8 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 3 つのクライアント（Unreal・Unity・ブラウザ）と CLI モックが同じに動くための、タイムアウト・再試行・`Retry-After`の待ち・エラーコードの扱いの決まり。**値の正はスキーマ`openapi/rpg-online.v1.json`**で、ここには値を写さない。設計（理由と案）の正は`docs/guides/working/client-integration-design.md` §2・§3。
 
 - 最上位の`x-client-policy`: 1 回の要求のタイムアウト（`timeoutSeconds`）・試す回数（`maxAttempts`。初回を含む）・再試行の前の待ち（`backoff`。指数・上限・揺らぎ）・429 の`Retry-After`を待つ上限と回数（`retryAfter`）・再試行する状態（`retryStatuses`。ほかに回線断・タイムアウトも再試行する）・トークンを更新する時期（`tokenRefreshBeforeSeconds`。期限までの残りがこの秒を切ったら、トークンの要る次の要求の前に`POST /v1/accounts/token`で更新する。期限切れ・壊れたトークンは更新できず、ゲストを自動で発行し直さずに画面の文の種類`session`を返す）・エラーコードの表（`errorCatalog`。コードごとの画面の文の種類`category`と自動の再試行の可否`retry`）。
-- 操作ごとの`x-retry`: 自動で送り直してよいかの種類。`safe`（読むだけ）・`natural-key`（一意の鍵か最高値で同じ結果）・`idempotency-key`（同じ`Idempotency-Key`と同じ本文で送り直す）・`new-resource`（送り直すと別のものができるが害が無い）は再試行してよい。`revision`（`baseRevision`で止まる）は自動で送り直さず、結果が分からないときは`GET`で読み直して確かめる。
-- 再試行は「状態が`retryStatuses`か回線断・タイムアウト」かつ「操作の`x-retry`が`revision`でない」ときだけ。`retryStatuses`に無い状態は送り直さない（同じ要求を送っても結果は変わらない）。429 は`Retry-After`の秒を`retryAfter`の上限まで待って送り直し、見出しが無い・数でない・上限を超えるときは待たずに`RATE_LIMITED`を返す。
+- 操作ごとの`x-retry`: 自動で送り直してよいかの種類。`safe`（読むだけ）・`natural-key`（一意の鍵か最高値で同じ結果）・`idempotency-key`（同じ`Idempotency-Key`と同じ本文で送り直す）は再試行してよい。`new-resource`（送り直すと別のものができる。`issueGuest`・`refreshToken`）は 429（何も作っていない）のときだけ送り直し、回線断・タイムアウト・5xx は送り直さず呼び手に返す。`revision`（`baseRevision`で止まる）は自動で送り直さず、結果が分からないときは`GET`で読み直して確かめる。
+- 再試行は「状態が`retryStatuses`か回線断・タイムアウト」かつ「操作の`x-retry`が`revision`でない」かつ「`new-resource`なら状態が 429」のときだけ。`retryStatuses`に無い状態は送り直さない（同じ要求を送っても結果は変わらない）。429 は`Retry-After`の秒を`retryAfter`の上限まで待って送り直し、見出しが無い・数でない・上限を超えるときは待たずに`RATE_LIMITED`を返す。
 - `errorCatalog`に無いコード・JSON でない 4xx は種類`unknown`、コードの無い回線断・タイムアウト・5xx は`network`として扱う（新しいサーバーがコードを足しても古いクライアントが壊れない）。サーバーの`message`は画面に出さない。
 - コードを足すときは、`ErrorCode`の列挙と`errorCatalog`を同じコミットで直す（`test/client-policy.test.ts`が揃いを見張る）。
 - この決まりで送る実装は、ブラウザの SDK`clients/browser/rpg-online-client.mjs`（型は`.d.mts`。値はスキーマから書き写し、揃いは`test/browser-sdk.test.ts`が見張る）。CLI モック（`scripts/cli-mock.mjs`）は SDK で送り、流れと表示は`scripts/cli-flow.mjs`の`runCli`。失敗したら画面の文の種類と理由を出して終了コード 1 で止まる。

@@ -228,6 +228,8 @@ export function createClient(options = {}) {
   async function request(operationId, { method = 'GET', path, query, body, auth = false, headers: extra = {}, skipRefresh = false }) {
     const kind = OPERATION_RETRY[operationId];
     const autoRetry = kind !== undefined && kind !== 'revision';
+    // new-resource は送り直すと別のものができる。何も作っていない 429 のときだけ送り直す（設計書 §2.2）
+    const rateLimitOnly = kind === 'new-resource';
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(query ?? {})) if (v !== undefined && v !== null) qs.set(k, String(v));
     const queryText = qs.toString();
@@ -279,6 +281,7 @@ export function createClient(options = {}) {
       const retryableByPolicy = code !== null
         ? CLIENT_POLICY.errorCatalog[code]?.retry === true
         : outcome.failure !== undefined || CLIENT_POLICY.retryStatuses.includes(status);
+      const retryableByKind = !rateLimitOnly || status === 429;
       const fail = (extraReason) => ({
         ok: false,
         attempts,
@@ -286,7 +289,7 @@ export function createClient(options = {}) {
           code,
           category,
           status,
-          retryable: autoRetry && retryableByPolicy,
+          retryable: autoRetry && retryableByPolicy && retryableByKind,
           reason: extraReason ? `${reason} (${extraReason})` : reason,
           // revision の操作が通信の失敗・5xx で終わったら、書けたかどうか分からない（§2.4。confirmSave で読み直す）
           outcomeUnknown: kind === 'revision' && category === 'network',
@@ -294,6 +297,7 @@ export function createClient(options = {}) {
       });
 
       if (!autoRetry || !retryableByPolicy) return fail(kind === 'revision' && category === 'network' ? 'not retried: revision' : '');
+      if (!retryableByKind) return fail('not retried: new-resource');
       if (attempts >= CLIENT_POLICY.maxAttempts) return fail(`gave up after ${attempts} attempts`);
 
       let waitMs;

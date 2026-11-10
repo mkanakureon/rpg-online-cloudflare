@@ -348,6 +348,8 @@ namespace RpgOnline
         {
             var kind = RpgOnlineClientPolicy.RetryKindOf(operationId);
             var autoRetry = kind != null && kind != RpgOnlineClientPolicy.NoAutoRetryKind;
+            // new-resource は送り直すと別のものができる。何も作っていない 429 のときだけ送り直す（§2.2）
+            var isRateLimitOnly = kind == RpgOnlineClientPolicy.RateLimitOnlyKind;
             var pathWithQuery = BuildQuery(path, query);
             var headers = extraHeaders != null ? new Dictionary<string, string>(extraHeaders) : new Dictionary<string, string>();
 
@@ -408,6 +410,7 @@ namespace RpgOnline
                     ? RpgOnlineClientPolicy.TryGetError(code, out var rule) && rule.Retry
                     : outcome.Failed || RpgOnlineClientPolicy.IsRetryStatus(status);
                 var isRevision = kind == RpgOnlineClientPolicy.NoAutoRetryKind;
+                var retryableByKind = !isRateLimitOnly || status == 429;
 
                 RpgOnlineResult Fail(string extra) => new RpgOnlineResult
                 {
@@ -419,7 +422,7 @@ namespace RpgOnline
                         code = code,
                         category = category,
                         status = status,
-                        retryable = autoRetry && retryableByPolicy,
+                        retryable = autoRetry && retryableByPolicy && retryableByKind,
                         reason = string.IsNullOrEmpty(extra) ? reason : reason + " (" + extra + ")",
                         // revision の操作が通信の失敗・5xx で終わったら、書けたかどうか分からない（§2.4）
                         outcomeUnknown = isRevision && category == RpgOnlineClientPolicy.NetworkCategory,
@@ -428,6 +431,7 @@ namespace RpgOnline
 
                 if (!autoRetry || !retryableByPolicy)
                     return Fail(isRevision && category == RpgOnlineClientPolicy.NetworkCategory ? "not retried: revision" : "");
+                if (!retryableByKind) return Fail("not retried: new-resource");
                 if (attempts >= RpgOnlineClientPolicy.MaxAttempts) return Fail("gave up after " + attempts + " attempts");
 
                 int waitMs;

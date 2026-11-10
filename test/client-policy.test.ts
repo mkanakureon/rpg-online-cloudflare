@@ -8,6 +8,10 @@
  */
 import { describe, expect, it } from 'vitest';
 import specJson from '../openapi/rpg-online.v1.json';
+import unityPolicyCs from '../clients/unity/Runtime/RpgOnlineClientPolicy.cs?raw';
+import unityClientCs from '../clients/unity/Runtime/RpgOnlineClient.cs?raw';
+import unrealPolicyH from '../clients/unreal/RpgOnlineClient/Source/RpgOnlineClient/Public/RpgOnlineClientPolicy.h?raw';
+import unrealClientCpp from '../clients/unreal/RpgOnlineClient/Source/RpgOnlineClient/Private/RpgOnlineClient.cpp?raw';
 
 type Parameter = { name: string; in: string; required?: boolean };
 type Operation = { operationId: string; 'x-retry'?: string; parameters?: Parameter[] };
@@ -116,5 +120,39 @@ describe('クライアントの共通の決まり（スキーマの x-client-pol
       .map(([code]) => code)
       .sort();
     expect(retryable).toEqual(['INTERNAL_ERROR', 'RATE_LIMITED']);
+  });
+});
+
+/** C# と C++ の注釈（// と /* *\/）を除く。注釈の中の文を手順として読まないため。 */
+const stripComments = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+/** 空白を 1 つに詰める（行の折り返しと字下げに依らずに手順の形を探す）。 */
+const squash = (src: string) => stripComments(src).replace(/\s+/g, ' ');
+
+describe('Unity と Unreal のクライアント層の再試行の決まり（G10。L1）', () => {
+  it('UnityとUnrealのクライアント層の再試行の決まりはnew-resourceを429だけ送り直す', () => {
+    // スキーマで new-resource の操作は issueGuest と refreshToken（x-retry の値は変えない）
+    const newResource = operations().filter(({ op }) => op['x-retry'] === 'new-resource').map(({ op }) => op.operationId).sort();
+    expect(newResource).toEqual(['issueGuest', 'refreshToken']);
+
+    // Unity: 決まりの定数と、Request の中で 429 のほかは送り直さず返す手順
+    const unityPolicy = squash(unityPolicyCs);
+    expect(unityPolicy).toMatch(/public const string RateLimitOnlyKind = "new-resource";/);
+    const unity = squash(unityClientCs);
+    expect(unity).toMatch(/var isRateLimitOnly = kind == RpgOnlineClientPolicy\.RateLimitOnlyKind;/);
+    expect(unity).toMatch(/var retryableByKind = !isRateLimitOnly \|\| status == 429;/);
+    expect(unity).toMatch(/retryable = autoRetry && retryableByPolicy && retryableByKind,/);
+    expect(unity).toMatch(/if \(!retryableByKind\) return Fail\("not retried: new-resource"\);/);
+    // 送り直しの判定（回数・Retry-After・待ち）より前で返す
+    expect(unity.indexOf('if (!retryableByKind)')).toBeLessThan(unity.indexOf('if (attempts >= RpgOnlineClientPolicy.MaxAttempts)'));
+
+    // Unreal: 同じ定数と手順
+    const unrealPolicy = squash(unrealPolicyH);
+    expect(unrealPolicy).toMatch(/inline constexpr const TCHAR\* RateLimitOnlyKind = TEXT\("new-resource"\);/);
+    const unreal = squash(unrealClientCpp);
+    expect(unreal).toMatch(/const bool bIsRateLimitOnly = Kind != nullptr && FCString::Strcmp\(Kind, RpgOnlineClientPolicy::RateLimitOnlyKind\) == 0;/);
+    expect(unreal).toMatch(/const bool bRetryableByKind = !bIsRateLimitOnly \|\| Status == 429;/);
+    expect(unreal).toMatch(/Res\.Error\.bRetryable = bAutoRetry && bRetryableByPolicy && bRetryableByKind;/);
+    expect(unreal).toMatch(/if \(!bRetryableByKind\) \{ Fail\(TEXT\("not retried: new-resource"\)\); return; \}/);
+    expect(unreal.indexOf('if (!bRetryableByKind)')).toBeLessThan(unreal.indexOf('if (State->Attempts >= RpgOnlineClientPolicy::MaxAttempts)'));
   });
 });

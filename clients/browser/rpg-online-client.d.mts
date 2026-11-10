@@ -102,7 +102,7 @@ export interface ClientError {
   category: ErrorCategory;
   /** 状態コード。応答が無い（回線断・タイムアウト）ときは null。 */
   status: number | null;
-  /** 決まりの上で、後でゲームが送り直してよいか（revision の操作は false）。 */
+  /** 決まりの上で、後でゲームが送り直してよいか（revision の操作と、new-resource の操作の 429 のほかの失敗は false）。 */
   retryable: boolean;
   /** 人が読む理由（ログ向け。画面には category で選んだ文を出す）。 */
   reason: string;

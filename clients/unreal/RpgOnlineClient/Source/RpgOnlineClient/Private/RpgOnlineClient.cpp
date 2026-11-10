@@ -425,6 +425,8 @@ void FRpgOnlineClient::HandleComplete(TSharedRef<FRequestState, ESPMode::ThreadS
 	const TCHAR* Kind = RpgOnlineClientPolicy::RetryKindOf(Spec.OperationId);
 	const bool bIsRevision = Kind != nullptr && FCString::Strcmp(Kind, RpgOnlineClientPolicy::NoAutoRetryKind) == 0;
 	const bool bAutoRetry = Kind != nullptr && !bIsRevision;
+	// new-resource は送り直すと別のものができる。何も作っていない 429 のときだけ送り直す（§2.2）
+	const bool bIsRateLimitOnly = Kind != nullptr && FCString::Strcmp(Kind, RpgOnlineClientPolicy::RateLimitOnlyKind) == 0;
 
 	const bool bFailed = !bConnectedSuccessfully || !Response.IsValid() || Response->GetResponseCode() <= 0;
 	const FString Failure = State->bTimedOut ? TEXT("timeout") : TEXT("network");
@@ -476,6 +478,7 @@ void FRpgOnlineClient::HandleComplete(TSharedRef<FRequestState, ESPMode::ThreadS
 	{
 		bRetryableByPolicy = bFailed || RpgOnlineClientPolicy::IsRetryStatus(Status);
 	}
+	const bool bRetryableByKind = !bIsRateLimitOnly || Status == 429;
 
 	auto Fail = [&](const FString& Extra)
 	{
@@ -485,7 +488,7 @@ void FRpgOnlineClient::HandleComplete(TSharedRef<FRequestState, ESPMode::ThreadS
 		Res.Error.Code = Code;
 		Res.Error.Category = Category;
 		Res.Error.Status = Status;
-		Res.Error.bRetryable = bAutoRetry && bRetryableByPolicy;
+		Res.Error.bRetryable = bAutoRetry && bRetryableByPolicy && bRetryableByKind;
 		Res.Error.Reason = Extra.IsEmpty() ? Reason : Reason + TEXT(" (") + Extra + TEXT(")");
 		// revision の操作が通信の失敗・5xx で終わったら、書けたかどうか分からない（§2.4）
 		Res.Error.bOutcomeUnknown = bIsRevision && Category == RpgOnlineClientPolicy::NetworkCategory;
@@ -495,6 +498,11 @@ void FRpgOnlineClient::HandleComplete(TSharedRef<FRequestState, ESPMode::ThreadS
 	if (!bAutoRetry || !bRetryableByPolicy)
 	{
 		Fail(bIsRevision && Category == RpgOnlineClientPolicy::NetworkCategory ? TEXT("not retried: revision") : TEXT(""));
+		return;
+	}
+	if (!bRetryableByKind)
+	{
+		Fail(TEXT("not retried: new-resource"));
 		return;
 	}
 	if (State->Attempts >= RpgOnlineClientPolicy::MaxAttempts)

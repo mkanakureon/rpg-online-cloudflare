@@ -12,7 +12,7 @@
     }
   ],
   "x-client-policy": {
-    "description": "3 つのクライアント（Unreal・Unity・ブラウザ）と CLI モックで共通の決まり。値の正はここ（docs/api-contract.md の「クライアントの決まり」は指すだけ）。timeoutSeconds は 1 回の要求のタイムアウト、maxAttempts は初回を含む試す回数、backoff は再試行の前の待ち（baseSeconds × factor の n 乗・maxSeconds で頭打ち・jitter full は 0〜その秒の一様乱数）、retryAfter は 429 の Retry-After を待つ上限と送り直す回数（maxAttempts の中に数える）、retryStatuses は再試行する状態（回線断・タイムアウトも再試行する）。再試行してよいのは各操作の x-retry が safe・natural-key・idempotency-key・new-resource のときだけで、revision は自動で送り直さない。tokenRefreshBeforeSeconds はトークンの期限までの残りがこの秒（7 日）を切ったら次の要求の前に POST /v1/accounts/token で更新する時期（期限切れ・壊れたトークンは更新できず、ゲストを自動で発行し直さずに session を返す）。errorCatalog はエラーコードごとの画面の文の種類（category）と自動の再試行の可否（retry）。表に無いコードと JSON でない 4xx は unknown、コードの無い回線断・タイムアウト・5xx は network。設計は docs/guides/working/client-integration-design.md §2・§3。",
+    "description": "3 つのクライアント（Unreal・Unity・ブラウザ）と CLI モックで共通の決まり。値の正はここ（docs/api-contract.md の「クライアントの決まり」は指すだけ）。timeoutSeconds は 1 回の要求のタイムアウト、maxAttempts は初回を含む試す回数、backoff は再試行の前の待ち（baseSeconds × factor の n 乗・maxSeconds で頭打ち・jitter full は 0〜その秒の一様乱数）、retryAfter は 429 の Retry-After を待つ上限と送り直す回数（maxAttempts の中に数える）、retryStatuses は再試行する状態（回線断・タイムアウトも再試行する）。再試行してよいのは各操作の x-retry が safe・natural-key・idempotency-key・new-resource のときだけで、new-resource（送り直すと別のものができる）は 429 のときだけ送り直し（回線断・タイムアウト・5xx は送り直さず呼び手に返す）、revision は自動で送り直さない。tokenRefreshBeforeSeconds はトークンの期限までの残りがこの秒（7 日）を切ったら次の要求の前に POST /v1/accounts/token で更新する時期（期限切れ・壊れたトークンは更新できず、ゲストを自動で発行し直さずに session を返す）。errorCatalog はエラーコードごとの画面の文の種類（category）と自動の再試行の可否（retry）。表に無いコードと JSON でない 4xx は unknown、コードの無い回線断・タイムアウト・5xx は network。設計は docs/guides/working/client-integration-design.md §2・§3。",
     "timeoutSeconds": 10,
     "maxAttempts": 3,
     "backoff": {
