@@ -1,7 +1,9 @@
 // cors.ts — ブラウザから呼ぶための CORS の見出しを作る 1 か所（ローカルだけ）。
 //
 // APP_ENV が local で、Origin が決めた 2 つ（ブラウザのサンプルを出す 127.0.0.1:5173・localhost:5173）のどちらかのときだけ見出しを足す。
-// それ以外（local でない環境・決めていないオリジン・file:// の null・Origin の無い要求）には何も足さない（APP_ENV の守りと同じ向き）。
+// それ以外（local でない環境・決めていないオリジン・file:// の null・Origin の無い要求）には CORS の見出しを足さない（APP_ENV の守りと同じ向き）。
+// ただし local で Origin のある要求には、許すかどうかに関わらず Vary: Origin を足す（間のキャッシュが許さないオリジンへの応答を
+// 許すオリジンに返さないため。hardening-design §9.2）。local でない環境は何も足さない。
 // どのオリジンでも許す形（ワイルドカード）は使わない。事前確認（OPTIONS）は入口の src/worker.ts がルーターの前で preflight に答えさせる。
 // 許す見出し・公開の見出しの正は docs/guides/working/client-integration-design.md §5.6 と docs/api-contract.md の「CORS」。
 //
@@ -45,10 +47,15 @@ export function preflight(req: Request, env: Pick<Env, 'APP_ENV'>): Response | n
   });
 }
 
-/** 応答に CORS の見出しを足す（許さないときは応答をそのまま返す）。 */
+/** 応答に CORS の見出しを足す。local で Origin のある要求で許さないときは Vary: Origin だけを足し、それ以外で許さないときは応答をそのまま返す。 */
 export function withCors(req: Request, env: Pick<Env, 'APP_ENV'>, res: Response): Response {
   const headers = corsHeaders(req, env);
-  if (!headers) return res;
+  if (!headers) {
+    if (env.APP_ENV !== 'local' || req.headers.get('Origin') === null) return res;
+    const out = new Response(res.body, res);
+    out.headers.append('Vary', 'Origin');
+    return out;
+  }
   const out = new Response(res.body, res);
   for (const [name, value] of Object.entries(headers)) {
     if (name === 'Vary') out.headers.append(name, value);

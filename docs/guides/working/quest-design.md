@@ -318,7 +318,7 @@ INSERT INTO inventory_balances (game_id, player_id, item_id, amount, updated_at)
 
 ### 区切りごとの値の書き込み（Q2。`src/modules/player-data/index.ts`）
 
-プレイヤーデータの書き込みの `batch` の文 2（値）の後ろに、**区切りを宣言した `add` のキーの変更ごと・区切りの種類ごとに 1 文**を足す。宣言は文 3 の宣言の読み込み（`loadKeys`）と一緒に `player_data_key_periods` から読み、`periodKey(kind, now, reset_offset_minutes)` を TypeScript で決めて渡す。
+プレイヤーデータの書き込みの `batch` の文 2（値）の後ろに、**区切りを宣言した `add` のキーの変更ごと・区切りの種類ごとに 1 文**を足す。宣言は文 3 の宣言の読み込み（`loadKeys`）の後に、送った変更に `add` のキーがあるときだけ `player_data_key_periods` から読み、`periodKey(kind, now, reset_offset_minutes)` を TypeScript で決めて渡す。
 
 ```sql
 -- 2b. 区切りごとの値（この要求の記録が入ったときだけ）
@@ -333,6 +333,7 @@ INSERT INTO player_data_period_values (game_id, player_id, key, kind, period_key
 - 同じ `Idempotency-Key` の送り直しは文 1 で止まり、区切りの値も増えない（二重に数えない）。409 `PLAYER_DATA_LIMIT_EXCEEDED` の書き込みも区切りの値を書かない。
 - 書き込みの応答（`result_json`）と `GET /v1/player-data` の形は変えない（区切りの値はクエストの一覧の `progress` で見せる）。
 - `max`・`set`・`flag` のキーは区切りで数えない（区切りの中の「増えた分」の意味が無い。§16）。
+- 宣言は `batch` の外で読むので、管理が宣言を足した瞬間の書き込みは数えないことがある（読んだ後・`batch` の前に宣言が入った 1 回だけ。窓は数ミリ秒。区切りの値を `batch` の中で宣言と JOIN して足す案は、文が重くなる割に窓が小さいので取らない。`hardening-design.md` §3.6）。
 
 ## 7. デイリー・週間・期間つきのクエスト（Q2）
 

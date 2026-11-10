@@ -9,7 +9,7 @@
 // 実績は同じ batch の中でサーバーが解く（書いた後の値が閾値以上で、まだ解いていない実績。主キーで二重に解かない。値が下がっても消さない）。
 // 解いたと申告する口は作らず、本文の申告の欄も読まない。POST の unlocked はこの書き込みで解いた実績、GET の achievements は解いた実績の全部。
 // 区切りを宣言した add のキー（player_data_key_periods）は、同じ batch で区切りごとの値（player_data_period_values）も足す。区切りの鍵は
-// src/core/period.ts の periodKey にサーバーの時刻を渡して決める。クエストのモジュールが読むだけで、応答の形は変えない。
+// src/core/period.ts の periodKey にサーバーの時刻を渡して決める。区切りの宣言は add のキーがある書き込みのときだけ読む。クエストのモジュールが読むだけで、応答の形は変えない。
 // 順と SQL の正は docs/guides/working/player-data-design.md §4〜§7 と docs/guides/working/quest-design.md §6（区切りごとの値）。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
@@ -92,6 +92,11 @@ async function loadKeys(db: Database, gameId: string, keys: readonly string[]): 
   return new Map(rows.results.map((r) => [r.key, r]));
 }
 
+/** 送った変更に add のキーがあるか（区切りの宣言を読むかどうか）。 */
+export function hasAddKey(changes: readonly Change[], defs: Map<string, PlayerDataKey>): boolean {
+  return changes.some((c) => defs.get(c.key)?.mode === 'add');
+}
+
 /** 送ったキーのうち、区切りで数える宣言（add のキーだけが持つ）を読む。 */
 async function loadKeyPeriods(db: Database, gameId: string, keys: readonly string[]): Promise<KeyPeriod[]> {
   const rows = await db.prepare(`SELECT key, kind, reset_offset_minutes AS offsetMinutes FROM player_data_key_periods
@@ -160,7 +165,8 @@ export const playerData: GameModule = {
         if (changes.some((c) => !defs.has(c.key))) return error('NOT_FOUND', 'Unknown key', 404);
         const outside = changes.find((c) => !checkChange(defs.get(c.key)!, c.value));
         if (outside) return error('INVALID_ARGUMENT', `value is out of range for key ${outside.key}`, 400);
-        const periods = await loadKeyPeriods(env.DB, gameId, changes.map((c) => c.key));
+        // 区切りの宣言は add のキーだけが持つので、add のキーがある書き込みのときだけ読む（hardening-design §3.6）
+        const periods = hasAddKey(changes, defs) ? await loadKeyPeriods(env.DB, gameId, changes.map((c) => c.key)) : [];
         const hash = await writeRequestHash(gameId, changes);
         const ref = crypto.randomUUID();
         await env.DB.batch(writeStatements(env.DB, { ref, gameId, playerId, key, hash, now: serverNow() }, changes, defs, periods));

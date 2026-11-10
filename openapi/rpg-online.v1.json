@@ -4270,7 +4270,7 @@
             "additionalProperties": {
               "type": "boolean"
             },
-            "description": "機能フラグ（名前 → 真偽値。名前の昇順）。名前も意味もゲームが決める。無ければ {}。"
+            "description": "機能フラグ（名前 → 真偽値。並びは保証しない〔名前で引く〕）。名前も意味もゲームが決める。無ければ {}。"
           },
           "masterData": {
             "type": "array",

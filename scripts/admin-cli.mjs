@@ -22,16 +22,17 @@
 // 行き先は RPG_API_BASE（既定 http://127.0.0.1:8787。CLI モックと同じ）。X-Admin-Actor は --actor（既定 local-admin。OS の名前は使わない）。
 // 管理の鍵は環境変数 ADMIN_API_KEY から読み、無ければ行き先が 127.0.0.1・localhost のときだけリポジトリの .dev.vars の ADMIN_API_KEY の行を
 // 読む（読むだけ。作らない・書かない）。鍵は表示・記録しない。要求の形は scripts/admin-requests.mjs（試験と共有）。
+// 数の引数（--limit・--before など）は送る前に整数かを見て、外れは HTTP を呼ばずに手元で止める（サーバーの 400 は今のまま）。
+// 試験が Workers のランタイムから commands を読み込めるように、node:fs は使う時だけ読み込み、コマンドとして起動した時だけ走らせる。
 // ゲームのクライアントの代わりの CLI モック（scripts/cli-mock.mjs）には管理の操作を入れない（管理の鍵を持たせない）。
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
-import { readFileSync } from 'node:fs';
 import {
   DEFAULT_GAME_ID, adjustOp, adminRequest, analyticsGrantsOp, analyticsPlayersOp, auditOp, banOp, deleteScoreOp, newIdempotencyKey, playerOp, putAchievementOp, putDataKeyOp,
   defaultAnalyticsRange, putEventOp, putItemOp, putQuestOp, retentionRates, revokeAchievementOp, runSmoke, setDataOp, unbanOp
 } from './admin-requests.mjs';
 
-const base = process.env.RPG_API_BASE || 'http://127.0.0.1:8787';
+const base = (typeof process !== 'undefined' && process.env?.RPG_API_BASE) || 'http://127.0.0.1:8787';
 const localHosts = ['127.0.0.1', 'localhost'];
 /** X-Admin-Actor の既定（OS のユーザー名を使わない。admin-requests.mjs の DEFAULT_ACTOR と同じ値）。 */
 const defaultActor = 'local-admin';
@@ -55,7 +56,8 @@ function parseArgs(argv) {
 }
 
 /** 管理の鍵。環境変数 ADMIN_API_KEY、無ければローカルの行き先のときだけ .dev.vars の行（読むだけ）。 */
-function loadAdminKey() {
+async function loadAdminKey() {
+  const { readFileSync } = await import('node:fs');
   if (process.env.ADMIN_API_KEY) return process.env.ADMIN_API_KEY;
   if (!localHosts.includes(new URL(base).hostname)) return null;
   let text;
@@ -89,6 +91,14 @@ function integerOf(raw, name, min) {
   return n;
 }
 
+/** 整数の引数（--limit・--before など。無ければ undefined）。整数でなければ送る前に止める。 */
+function optionalIntegerOf(raw, name) {
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  if (raw.trim() === '' || !Number.isInteger(n)) throw new Error(`${name} must be an integer`);
+  return n;
+}
+
 /** 応答を表示する（管理の口の応答に鍵は入らない）。失敗の状態なら投げる。 */
 async function show(op, res) {
   const body = await res.json();
@@ -102,7 +112,8 @@ async function send(adminKey, op, options) {
 }
 
 /** 定義の JSON のファイルを読む（読むだけ）。--reason があればファイルの reason より先に使う。 */
-function definitionOf(file, flags) {
+async function definitionOf(file, flags) {
+  const { readFileSync } = await import('node:fs');
   const definition = JSON.parse(readFileSync(required(file, '<definition.json>'), 'utf8'));
   if (flags.reason !== undefined) definition.reason = flags.reason;
   required(definition.reason, '--reason (or "reason" in the definition file)');
@@ -119,10 +130,11 @@ async function adjust(adminKey, args, flags, sign, actor, gameId) {
   return send(adminKey, op, { actor, idempotencyKey });
 }
 
-const commands = {
+/** 操作の名前ごとの実行（試験が読み込む。引数の確かめは送る前）。 */
+export const commands = {
   'player': (k, [playerId], _f, actor, gameId) => send(k, playerOp(required(playerId, '<playerId>'), gameId), { actor }),
-  'audit': (k, _a, f, actor, gameId) => send(k, auditOp(gameId, {
-    limit: f.limit === undefined ? undefined : Number(f.limit), before: f.before === undefined ? undefined : Number(f.before),
+  'audit': async (k, _a, f, actor, gameId) => send(k, auditOp(gameId, {
+    limit: optionalIntegerOf(f.limit, '--limit'), before: optionalIntegerOf(f.before, '--before'),
   }), { actor }),
   'grant': (k, a, f, actor, gameId) => adjust(k, a, f, 1, actor, gameId),
   'revoke': (k, a, f, actor, gameId) => adjust(k, a, f, -1, actor, gameId),
@@ -134,10 +146,10 @@ const commands = {
     send(k, deleteScoreOp(required(boardId, '<boardId>'), required(playerId, '<playerId>'), required(f.reason, '--reason'), gameId), { actor }),
   'put-item': (k, [itemId, kind], f, actor, gameId) =>
     send(k, putItemOp(required(itemId, '<itemId>'), required(kind, '<kind>'), required(f.reason, '--reason'), gameId), { actor }),
-  'put-event': (k, [eventId, file], f, actor, gameId) =>
-    send(k, putEventOp(required(eventId, '<eventId>'), definitionOf(file, f), gameId), { actor }),
-  'put-quest': (k, [questId, file], f, actor, gameId) =>
-    send(k, putQuestOp(required(questId, '<questId>'), definitionOf(file, f), gameId), { actor }),
+  'put-event': async (k, [eventId, file], f, actor, gameId) =>
+    send(k, putEventOp(required(eventId, '<eventId>'), await definitionOf(file, f), gameId), { actor }),
+  'put-quest': async (k, [questId, file], f, actor, gameId) =>
+    send(k, putQuestOp(required(questId, '<questId>'), await definitionOf(file, f), gameId), { actor }),
   'put-data-key': (k, [key, mode, maxValue], f, actor, gameId) =>
     send(k, putDataKeyOp(required(key, '<key>'), {
       mode: required(mode, '<mode>'), maxValue: integerOf(maxValue, '<maxValue>', 1),
@@ -174,7 +186,8 @@ const commands = {
 
 const usage = `usage: node scripts/admin-cli.mjs <${Object.keys(commands).join('|')}> [args] [--game <gameId>] [--actor <label>]`;
 
-try {
+/** コマンドとして起動した時（node scripts/admin-cli.mjs ...）だけ走らせる。試験から読み込んだ時は走らせない。 */
+async function main() {
   const [name, ...rest] = process.argv.slice(2);
   const run = commands[name];
   if (!run) {
@@ -182,12 +195,18 @@ try {
     process.exit(2);
   }
   const { positional, flags } = parseArgs(rest);
-  const adminKey = loadAdminKey();
+  const adminKey = await loadAdminKey();
   if (!adminKey) {
     throw new Error('ADMIN_API_KEY is not set (set the environment variable, or write it in .dev.vars for a local target)');
   }
   await run(adminKey, positional, flags, flags.actor ?? defaultActor, flags.game ?? DEFAULT_GAME_ID);
-} catch (e) {
-  console.error('FAIL:', e instanceof Error ? e.message : e);
-  process.exit(1);
+}
+
+if (typeof process !== 'undefined' && /admin-cli\.mjs$/.test(process.argv?.[1] ?? '')) {
+  try {
+    await main();
+  } catch (e) {
+    console.error('FAIL:', e instanceof Error ? e.message : e);
+    process.exit(1);
+  }
 }

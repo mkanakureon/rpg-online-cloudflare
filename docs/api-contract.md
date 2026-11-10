@@ -67,6 +67,8 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 {"gameId":"demo-rpg","items":[{"id":"welcome","title":"ようこそ","body":"ローカル検証用のお知らせです。"}]}
 ```
 
+- `items`は`id`の昇順で最大 50 件。
+
 ## GET /v1/rankings/boss-score?gameId=demo-rpg&limit=10
 
 レスポンス例（200）:
@@ -348,7 +350,7 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 - `clientVersion`（問い合わせ）はクライアントのビルドの版。形は`1`・`1.2`・`1.2.3`（数字の区切りが 1〜3 つ。各区切り 1〜9 桁）。英字の付いた版（`1.2.3-beta`）・空の`clientVersion=`は**400 `INVALID_ARGUMENT`**（`message`は`Invalid clientVersion`）。版はドットの区切りごとに数として比べ（`1.10`は`1.9`より新しい）、足りない区切りは 0 とみなす（`1`と`1.0.0`は同じ）。
 - `clientVersion.minimum`・`latest`（応答）はゲームごとの最低の版・最新の版。決まりが無ければ`null`。
 - `clientVersion.update`: 送った版が最低の版より古ければ`"required"`、最新の版より古ければ`"available"`、ほか（決まりが無いときも）は`"none"`。`clientVersion`を送らなければ`"unknown"`。`"required"`でもエラーにせず 200 で設定を返す（更新の画面を出すかはクライアントが決める）。ほかの API は版で断らない。
-- `flags`は機能フラグ（名前 → 真偽値。名前の昇順）。名前も意味もゲームが決め、サーバーの挙動はフラグで変わらない。無ければ`{}`。
+- `flags`は機能フラグ（名前 → 真偽値。並びは保証しない〔名前で引く〕）。名前も意味もゲームが決め、サーバーの挙動はフラグで変わらない。無ければ`{}`。
 - `masterData`はマスターデータのキーとバイト数（`size`。UTF-8）の一覧（キーの昇順）。中身は入らず、キーごとに`GET /v1/config/master/{key}`で読む。マスターデータが 1 つも無いゲームでは`masterData`の欄そのものが載らない（`demo-rpg`はいまマスターデータを持たないので載らない）。マスターデータが変わると`size`が変わりうるので、設定の`ETag`も変わる。
 - 応答の見出しに`ETag`（本文の SHA-256 の 16 進を`"`で囲んだもの）と`Cache-Control: no-cache`が付く。次から前の`ETag`を`If-None-Match`に付けて読むと、設定が変わっていなければ**304**（本文なし。見出しは`ETag`と`Cache-Control: no-cache`だけ）。変わっていれば 200 と新しい本文・新しい`ETag`。`If-None-Match`は`*`・`,`で区切った複数・`W/`の弱い印を受ける。エラーの応答は`no-store`のまま。
 - 読むだけの API なので、**トークンは要らず、`APP_ENV`が`local`でなくても読める**（`Authorization`が付いていても見ない）。設定を書き換える API は無い。設定はマイグレーションで入れる（`migrations/0006_config.sql`。`demo-rpg`は最低の版・最新の版が`1.0.0`、フラグ`demo-flag`が`true`）。
@@ -781,7 +783,8 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 
 ブラウザのサンプル（`clients/browser/sample/index.html`。`clients/browser/`で`python3 -m http.server 5173 --bind 127.0.0.1`を起動して`http://127.0.0.1:5173/sample/`を開く）から Worker を呼ぶための決まり。見出しを作るのは`src/core/cors.ts`の 1 か所。設計の正は`docs/guides/working/client-integration-design.md` §5.5・§5.6。
 
-- **`APP_ENV=local`のときだけ**、要求の`Origin`が決めた 2 つ（`http://127.0.0.1:5173`・`http://localhost:5173`）のどちらかなら CORS の見出しを返す。`local`でない環境・ほかのオリジン・`null`のオリジン（`file://`で開いたページ）・`Origin`の無い要求には何も足さない。どのオリジンでも許す形（ワイルドカード）は使わない。本番のオリジンは、守りを外す束 P6 で環境ごとの`vars`の`CORS_ORIGINS`（カンマ区切り・ワイルドカード無し）として足す予定（`docs/guides/working/distribution-design.md` §4.5）。
+- **`APP_ENV=local`のときだけ**、要求の`Origin`が決めた 2 つ（`http://127.0.0.1:5173`・`http://localhost:5173`）のどちらかなら CORS の見出しを返す。`local`でない環境・ほかのオリジン・`null`のオリジン（`file://`で開いたページ）・`Origin`の無い要求には CORS の見出し（`Access-Control-*`）を足さない。どのオリジンでも許す形（ワイルドカード）は使わない。本番のオリジンは、守りを外す束 P6 で環境ごとの`vars`の`CORS_ORIGINS`（カンマ区切り・ワイルドカード無し）として足す予定（`docs/guides/working/distribution-design.md` §4.5）。
+- `local`では、許さないオリジン（`null`を含む）の応答にも`Vary: Origin`を足す（間のキャッシュが許さないオリジンへの応答を許すオリジンに返さないため。`Access-Control-*`は足さない）。`local`でない環境と`Origin`の無い要求には何も足さない。
 - 事前確認（`OPTIONS`）: 許すときはルーターの前で**204**（本文無し）を返す。見出しは`Access-Control-Allow-Origin`（要求のオリジンそのまま）・`Access-Control-Allow-Methods: GET, POST, PUT, DELETE`・`Access-Control-Allow-Headers: Authorization, Content-Type, Idempotency-Key, If-None-Match`・`Access-Control-Max-Age: 600`・`Vary: Origin`。許さないときは`OPTIONS`のルートが無いので 404 `NOT_FOUND`。
 - ふつうの応答（エラー・304・500 を含む全部）: 許すときは`Access-Control-Allow-Origin`・`Access-Control-Expose-Headers: Retry-After, ETag`（ページから 429 の待ちと設定の`ETag`を読めるように）・`Vary: Origin`を足す。本文と状態コードは変えない。
 

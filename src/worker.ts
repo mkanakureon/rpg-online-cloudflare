@@ -2,6 +2,7 @@
 // worker.ts — Worker の入口。モジュールの一覧をルーターに渡し、例外を 500 で受け止める。
 // scheduled は Cron Triggers（wrangler.jsonc の triggers.crons）の入口で、掃除（src/core/cleanup.ts の runScheduled）を
 // ctx.waitUntil で待ち合わせる。APP_ENV が local でなければ何も消さない。controller.cron は見ない（Cron は 1 つだけ）。
+// 500 のログはエラーの名前だけを出し、message と cause（DB のエラーの文・SQL・値）は出さない。
 // ブラウザの CORS（ローカルだけ・決めたオリジンだけ。src/core/cors.ts）は、事前確認をルーターの前で答え、500 を含む全部の応答に足す。
 //
 // ルートと SQL は src/modules/<機能>/、共通の手伝いは src/core/ にある。試験と
@@ -11,7 +12,7 @@
 import { runScheduled } from './core/cleanup';
 import { preflight, withCors } from './core/cors';
 import type { Env } from './core/env';
-import { error } from './core/http';
+import { error, errorName } from './core/http';
 import { createRouter } from './core/router';
 import { modules } from './modules';
 
@@ -20,8 +21,9 @@ const route = createRouter(modules);
 async function handle(req: Request, env: Env): Promise<Response> {
   try { return await route(req, env); }
   catch (err) {
-    // Intentionally do not leak database errors to the client.
-    console.error('Unhandled Worker error', err);
+    // DB のエラーの文（SQL・値）はクライアントにもログにも出さない。出すのは名前と決まったラベルだけ（設計書 hardening-design §9.3）。
+    const name = errorName(err);
+    console.error('Unhandled Worker error', name);
     return error('INTERNAL_ERROR', 'Internal server error', 500);
   }
 }
