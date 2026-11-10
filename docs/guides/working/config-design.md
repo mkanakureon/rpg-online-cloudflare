@@ -171,7 +171,7 @@ C2 からは、マスターデータのあるゲームに `masterData` を足す
 
 - `clientVersion.minimum`・`latest`: 表の値。行が無い・`NULL` なら `null`。
 - `clientVersion.update`: 問い合わせの `clientVersion` を `updateStatus` で比べた結果。`clientVersion` を送らなければ `"unknown"`。最低の版より古い → `"required"`、最新の版より古い → `"available"`、ほか（決まりが無いときも）→ `"none"`（§5）。
-- `flags`: 名前 → 真偽値。名前の昇順に並べる（同じ設定なら同じ本文 → 同じ `ETag`）。無ければ `{}`。
+- `flags`: 名前 → 真偽値。SQL は名前の順（`ORDER BY name`）で読むが、JSON のオブジェクトでは数字だけの名前が先に来るので、並びは契約で保証しない（名前で引く。`docs/api-contract.md`）。同じ設定なら同じ本文 → 同じ `ETag`。無ければ `{}`。
 - `masterData`（C2）: キーとバイト数の一覧（キーの昇順）。中身は入れない（§10 の決めること 3）。マスターデータが 1 つも無いゲームでは欄ごと載せない（C1 の形の応答のまま。スキーマで必須にしない）。
 
 検査の順（上から。最初に当たったもので返す）:
