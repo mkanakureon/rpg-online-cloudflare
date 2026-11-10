@@ -3,6 +3,8 @@
  * 見る語と決まりの正は docs/guides/working/api-schema-design.md §2・§3。語を増やすときは、ここと
  * test/schema-conformance.test.ts の自己試験（スキーマの検証関数は型と必須と範囲と形の外れを見つける）を同じコミットで直す。
  * 知らない語があれば黙って通さず例外にする（見ていない制約で「合う」と言わないため）。
+ * `type` は 1 つの名前か名前の配列（`['string', 'null']` はどれか 1 つに合えばよい）。配列の要素の数は `minItems`・`maxItems` で見る
+ * （docs/guides/working/hardening-design.md §7 の #35・#41・#39）。
  *
  * 概要記述: Claude Opus 5.5 — 2026-10-24
  */
@@ -13,7 +15,7 @@ export type SchemaRoot = { components?: { schemas?: Record<string, Schema> } };
 
 /** 検証で見る語。 */
 const checkedKeywords = new Set([
-  'type', 'properties', 'required', 'additionalProperties', 'items', 'maxItems', 'pattern',
+  'type', 'properties', 'required', 'additionalProperties', 'items', 'minItems', 'maxItems', 'pattern',
   'minLength', 'maxLength', 'minimum', 'maximum', 'const', 'enum', '$ref',
 ]);
 /** 値の合否に関わらない注釈の語（見ずに通す）。 */
@@ -34,6 +36,14 @@ function typeOf(value: unknown): string {
   if (Array.isArray(value)) return 'array';
   if (typeof value === 'number') return Number.isInteger(value) ? 'integer' : 'number';
   return typeof value;
+}
+
+/** `type` の語を名前の配列にする（無ければ null）。名前でも名前の配列でもなければ例外（見ていない形で「合う」と言わない）。 */
+function typeNames(type: unknown, path: string): string[] | null {
+  if (type === undefined) return null;
+  if (typeof type === 'string') return [type];
+  if (Array.isArray(type) && type.length > 0 && type.every((t) => typeof t === 'string')) return type as string[];
+  throw new Error(`type の形が読めない: ${JSON.stringify(type)}（${path}）`);
 }
 
 function matchesType(value: unknown, type: string): boolean {
@@ -62,8 +72,9 @@ export function validate(value: unknown, schema: Schema, root: SchemaRoot, path 
   if (Array.isArray(schema.enum) && !schema.enum.some((v) => JSON.stringify(v) === JSON.stringify(value))) {
     fail(`列挙 ${JSON.stringify(schema.enum)} に無い（${JSON.stringify(value)}）`);
   }
-  if (typeof schema.type === 'string' && !matchesType(value, schema.type)) {
-    fail(`型が ${schema.type} でない（${typeOf(value)}）`);
+  const types = typeNames(schema.type, path);
+  if (types && !types.some((t) => matchesType(value, t))) {
+    fail(`型が ${types.join('|')} でない（${typeOf(value)}）`);
     return errors; // 型が違えば、その型の語は見ない
   }
 
@@ -77,6 +88,7 @@ export function validate(value: unknown, schema: Schema, root: SchemaRoot, path 
     if (typeof schema.maximum === 'number' && value > schema.maximum) fail(`${schema.maximum} 超え（${value}）`);
   }
   if (Array.isArray(value)) {
+    if (typeof schema.minItems === 'number' && value.length < schema.minItems) fail(`要素が ${schema.minItems} 個未満（${value.length}）`);
     if (typeof schema.maxItems === 'number' && value.length > schema.maxItems) fail(`要素が ${schema.maxItems} 個超え（${value.length}）`);
     if (schema.items && typeof schema.items === 'object') {
       value.forEach((item, i) => errors.push(...validate(item, schema.items as Schema, root, `${path}[${i}]`)));

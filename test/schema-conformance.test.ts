@@ -201,10 +201,27 @@ async function expectConforms(res: Response, operationId: string): Promise<{ spe
   return { spec: r, body };
 }
 
+// 前の試験の行を消す（試験の順で結果を変えない。hardening-design.md §7 の #17・#32）。マイグレーションの手本（demo-rpg の
+// ゲーム・品目・イベント daily-login・キーと実績とクエストの宣言・お知らせ welcome）は残し、プレイヤーの行と試験が足したイベントを消す
 beforeEach(async () => {
   await baseEnv.DB.batch([
     baseEnv.DB.prepare('DELETE FROM ranking_entries'),
     baseEnv.DB.prepare("DELETE FROM announcements WHERE id <> 'welcome'"),
+    baseEnv.DB.prepare('DELETE FROM saves'),
+    baseEnv.DB.prepare('DELETE FROM event_claims'),
+    baseEnv.DB.prepare("DELETE FROM event_rewards WHERE event_id LIKE 'schema-%'"),
+    baseEnv.DB.prepare("DELETE FROM events WHERE event_id LIKE 'schema-%'"),
+    baseEnv.DB.prepare('DELETE FROM inventory_ledger'),
+    baseEnv.DB.prepare('DELETE FROM inventory_balances'),
+    baseEnv.DB.prepare('DELETE FROM player_bans'),
+    baseEnv.DB.prepare('DELETE FROM player_achievements'),
+    baseEnv.DB.prepare('DELETE FROM player_data_period_values'),
+    baseEnv.DB.prepare('DELETE FROM player_data'),
+    baseEnv.DB.prepare('DELETE FROM player_data_writes'),
+    baseEnv.DB.prepare('DELETE FROM quest_claims'),
+    baseEnv.DB.prepare('DELETE FROM player_activity_days'),
+    baseEnv.DB.prepare('DELETE FROM game_players'),
+    baseEnv.DB.prepare('DELETE FROM accounts'),
   ]);
   await resetRateLimits(baseEnv.DB);
 });
@@ -235,6 +252,8 @@ describe('S1: スキーマのファイル', () => {
       ['additionalProperties', { type: 'object', additionalProperties: false, properties: { a: {} } }, { a: 1 }, { a: 1, b: 2 }],
       ['items', { type: 'array', items: { type: 'integer' } }, [1, 2], [1, 'x']],
       ['maxItems', { type: 'array', maxItems: 2 }, [1, 2], [1, 2, 3]],
+      ['minItems', { type: 'array', minItems: 1 }, [1], []],
+      ['type の配列', { type: ['string', 'null'] }, null, 1],
       ['pattern', { type: 'string', pattern: '^[a-z]{1,3}$' }, 'abc', 'abcd'],
       ['minLength', { type: 'string', minLength: 2 }, 'ab', 'a'],
       ['maxLength', { type: 'string', maxLength: 2 }, 'ab', 'abc'],
@@ -256,6 +275,31 @@ describe('S1: スキーマのファイル', () => {
     expect(() => validate('a', { type: 'string', format: 'email' }, root)).toThrow();
     expect(() => validate(1, { $ref: '#/components/schemas/Missing' }, root)).toThrow();
     expect(() => validate(1, { $ref: 'other.json#/X' }, root)).toThrow();
+  });
+
+  it('試験のスキーマの確かめはtypeの配列とminItemsを見る', () => {
+    const root: SchemaRoot = { components: { schemas: {} } };
+    // type の配列は、どれか 1 つの型に合えば通し、どれにも合わなければ外れ（hardening-design.md §7 の #35・#41）
+    const nullableText: Schema = { type: ['string', 'null'], pattern: '^[a-z]+$' };
+    expect(validate('abc', nullableText, root)).toEqual([]);
+    expect(validate(null, nullableText, root)).toEqual([]);
+    expect(validate(1, nullableText, root).length).toBeGreaterThan(0);
+    expect(validate({}, nullableText, root).length).toBeGreaterThan(0);
+    // 型に合った値には、その型の語（ここでは pattern）も見る
+    expect(validate('ABC', nullableText, root).length).toBeGreaterThan(0);
+    // 名前でも名前の配列でもない type は黙って通さない
+    expect(() => validate('a', { type: [] }, root)).toThrow();
+    expect(() => validate('a', { type: [1] }, root)).toThrow();
+    // minItems は要素の数の下限（§7 の #39）
+    expect(validate([], { type: 'array', minItems: 1 }, root).length).toBeGreaterThan(0);
+    expect(validate([1], { type: 'array', minItems: 1 }, root)).toEqual([]);
+    // スキーマのファイルの ClientVersion（type の配列）と PlayerDataWrite（changes の minItems: 1）にも効く
+    const clientVersion = spec.components.schemas.ClientVersion;
+    expect(validate({ minimum: null, latest: '1.2.0', update: 'none' }, clientVersion, spec)).toEqual([]);
+    expect(validate({ minimum: 1, latest: '1.2.0', update: 'none' }, clientVersion, spec).length).toBeGreaterThan(0);
+    const playerDataWrite = spec.components.schemas.PlayerDataWrite;
+    expect(validate({ changes: [] }, playerDataWrite, spec).length).toBeGreaterThan(0);
+    expect(validate({ changes: [{ key: 'slimes-defeated', value: 1 }] }, playerDataWrite, spec)).toEqual([]);
   });
 
   it('スキーマのErrorCodeの列挙は19個のエラーコードと一致する', () => {
@@ -619,5 +663,26 @@ describe('S1: 応答がスキーマに合う', () => {
         baseEnv.DB.prepare("DELETE FROM games WHERE game_id = 'schema-master'"),
       ]);
     }
+  });
+});
+
+describe('S1: 試験の準備', () => {
+  // ファイルの最後に置く: 前の試験（ゲストの発行・セーブ・受け取り・プレイヤーデータの書き込み・止めた印）が残した行を、
+  // beforeEach が消していることを見る（hardening-design.md §7 の #17・#32）。行が残ると、止めた印・スロットの上限・残高の上限で
+  // ほかの試験の結果が試験の順で変わる
+  it('スキーマの突き合わせの試験は前の試験の行に左右されない', async () => {
+    const tables = ['accounts', 'game_players', 'saves', 'inventory_balances', 'inventory_ledger', 'event_claims', 'player_bans',
+      'player_data', 'player_data_writes', 'player_data_period_values', 'player_achievements', 'quest_claims', 'player_activity_days',
+      'ranking_entries'];
+    const counts: Record<string, number> = {};
+    for (const t of tables) {
+      counts[t] = (await baseEnv.DB.prepare(`SELECT COUNT(*) AS n FROM ${t}`).first<{ n: number }>())?.n ?? 0;
+    }
+    expect(counts).toEqual(Object.fromEntries(tables.map((t) => [t, 0])));
+    const events = await baseEnv.DB.prepare("SELECT COUNT(*) AS n FROM events WHERE event_id LIKE 'schema-%'").first<{ n: number }>();
+    expect(events?.n).toBe(0);
+    // お知らせは手本の welcome だけ
+    const announcements = await baseEnv.DB.prepare('SELECT id FROM announcements').all<{ id: string }>();
+    expect(announcements.results.map((r) => r.id)).toEqual(['welcome']);
   });
 });

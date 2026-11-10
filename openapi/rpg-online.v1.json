@@ -4697,6 +4697,7 @@
         "properties": {
           "changes": {
             "type": "array",
+            "minItems": 1,
             "maxItems": 20,
             "description": "1〜20 行（MAX_CHANGES_PER_WRITE）。キーは重ならない。宣言の無いキーが 1 つでもあれば 404。",
             "items": {
