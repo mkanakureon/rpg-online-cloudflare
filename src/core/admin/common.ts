@@ -3,6 +3,7 @@
 // 確かめの順: APP_ENV=local の門（403）→ 管理の鍵の有無（無ければ投げて入口の try/catch で 500）→ 管理の利用制限
 // （RATE_LIMITS.admin・IP ごと。正しい鍵でも数え、鍵を確かめる前に 429）→ 管理の鍵（401）→ gameId の形（400）→
 // ゲームの登録（404 Unknown game。機能の設定は見ない）→ 書き込みの口は X-Admin-Actor・本文の大きさ（413。src/core/body.ts）・本文の JSON・reason（400）。
+// 読み直しても断る理由の無い競合は、どの口も conflicted の 1 つの文（400）。
 // 口のファイル（routes-*.ts）が読み、一覧は routes.ts が組み立てる。正は docs/guides/working/admin-design.md §2・§3。
 //
 // 概要記述: Claude Opus 5.5 — 2026-11-10
@@ -67,3 +68,12 @@ export const auditByRef = 'SELECT audit_id AS auditId FROM admin_audit_log WHERE
 /** UNIX 秒の列を ISO 8601 の UTC（秒まで）にする SQL の式。 */
 export const isoColumn = (column: string) => `strftime('%Y-%m-%dT%H:%M:%SZ', ${column}, 'unixepoch')`;
 export const unknownKey = () => error('NOT_FOUND', 'Unknown key', 404);
+/** 実績・クエストの閾値がキーの上限を超える（解けない・達成できない）。 */
+export const thresholdAboveMax = (key: string, maxValue: number) =>
+  error('INVALID_ARGUMENT', `threshold must be at most ${maxValue}, the maxValue of key ${key}`, 400);
+/**
+ * 書き込みの口で、batch の 1 文目（監査の行）が入らず、読み直しても断る理由が見つからないときの 400 の文（同時の変更とぶつかった。
+ * もう一度送る。どの口も同じ文。正は docs/api-contract.md の管理の API と hardening-design.md §3.5）。
+ */
+export const CONFLICT_MESSAGE = 'Conflicted with a concurrent change; send the request again';
+export const conflicted = () => error('INVALID_ARGUMENT', CONFLICT_MESSAGE, 400);

@@ -3,7 +3,9 @@
 // どちらも APP_ENV=local の門 → トークン → プレイヤーの利用制限（2 つの口を合わせて RATE_LIMITS.playerData。429）→
 // 止めた印（403 PLAYER_BANNED）→ gameId の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定 → 口ごとの確かめ の順
 // （src/core/access.ts の checkPlayerAccess）。プレイヤーはトークンの p だけで決まる（本文・問い合わせの playerId を読まない）。
-// 書き込みは Idempotency-Key が必須（形は src/core/idempotency.ts。管理の口のコードは読み込まない）。宣言の無いキーは 404、
+// 書き込みは Idempotency-Key が必須（形は src/core/idempotency.ts。管理の口のコードは読み込まない）。宣言を読む前に同じプレイヤー・同じ鍵の
+// 記録を引き、あれば中身のハッシュが同じなら 200 で 1 回目と同じ本文・違えば 422（管理が宣言を変えた後の送り直しも 1 回目の本文。
+// hardening-design.md §3.4）。記録が無ければ、宣言の無いキーは 404、
 // 書き方の範囲の外は 400（src/core/player-data.ts の checkChange）で、どちらも何も書かない。書き込みの記録・値・応答の写しを
 // 1 つの batch で書き、記録の一意の鍵（ゲーム・プレイヤー・鍵）で二重を止める。2 回目は 200 で 1 回目と同じ本文。時刻はサーバーの時刻だけ。
 // 実績は同じ batch の中でサーバーが解く（書いた後の値が閾値以上で、まだ解いていない実績。主キーで二重に解かない。値が下がっても消さない）。
@@ -12,7 +14,7 @@
 // src/core/period.ts の periodKey にサーバーの時刻を渡して決める。区切りの宣言は add のキーがある書き込みのときだけ読む。クエストのモジュールが読むだけで、応答の形は変えない。
 // 順と SQL の正は docs/guides/working/player-data-design.md §4〜§7 と docs/guides/working/quest-design.md §6（区切りごとの値）。
 //
-// 概要記述: Claude Opus 5.5 — 2026-10-31
+// 概要記述: Claude Opus 5.5 — 2026-11-10
 import { checkPlayerAccess } from '../../core/access';
 import { MAX_JSON_BODY_BYTES, readJson } from '../../core/body';
 import type { Database, Env } from '../../core/env';
@@ -84,6 +86,20 @@ function saveResultSql(keyCount: number): string {
     'unlocked', json((SELECT json_group_array(json_object('achievementId', achievement_id, 'unlockedAt', unlocked_at)) FROM
       (SELECT achievement_id, unlocked_at FROM player_achievements WHERE write_ref = ? ORDER BY achievement_id))))
   WHERE write_ref = ?`;
+}
+
+/** 記録の行（この要求か、前の同じ鍵の要求）を応答にする。中身のハッシュが違えば 422。 */
+function replyFromWrite(row: WriteRow, gameId: string, hash: string, ref: string | null): Response {
+  if (row.writeRef !== ref && row.requestHash !== hash) {
+    return error('IDEMPOTENCY_KEY_REUSED', 'Idempotency-Key was used for a different request', 422);
+  }
+  if (row.resultJson === null) throw new Error('Player data write has no result');
+  // 実績の欄が入る前（0014 の前）の記録の写しには unlocked が無い。その書き込みで解いた実績は無いので空にする
+  const result = JSON.parse(row.resultJson) as { values: WrittenValue[]; unlocked?: UnlockedRow[] };
+  const values = result.values
+    .map((v) => ({ key: v.key, value: v.value }))
+    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return json({ gameId, writeId: row.writeRef, values, unlocked: unlockedOf(result.unlocked ?? []) });
 }
 
 /** 送ったキーの宣言を読む。 */
@@ -160,6 +176,10 @@ export const playerData: GameModule = {
         const parsed = parseChanges(body.value);
         if (!parsed.ok) return error('INVALID_ARGUMENT', parsed.message, 400);
         const changes = parsed.value;
+        const hash = await writeRequestHash(gameId, changes);
+        // 送り直し: 宣言を読む前に同じ鍵の記録を引く（宣言が変わった後でも 1 回目の本文を返す）
+        const earlier = (await env.DB.prepare(writeByKey).bind(gameId, playerId, key).all<WriteRow>()).results[0];
+        if (earlier) return replyFromWrite(earlier, gameId, hash, null);
         const defs = await loadKeys(env.DB, gameId, changes.map((c) => c.key));
         // 宣言の無いキーが 1 つでもあれば、ほかのキーも書かない
         if (changes.some((c) => !defs.has(c.key))) return error('NOT_FOUND', 'Unknown key', 404);
@@ -167,23 +187,13 @@ export const playerData: GameModule = {
         if (outside) return error('INVALID_ARGUMENT', `value is out of range for key ${outside.key}`, 400);
         // 区切りの宣言は add のキーだけが持つので、add のキーがある書き込みのときだけ読む（hardening-design §3.6）
         const periods = hasAddKey(changes, defs) ? await loadKeyPeriods(env.DB, gameId, changes.map((c) => c.key)) : [];
-        const hash = await writeRequestHash(gameId, changes);
         const ref = crypto.randomUUID();
         await env.DB.batch(writeStatements(env.DB, { ref, gameId, playerId, key, hash, now: serverNow() }, changes, defs, periods));
-        // この要求の行か、前の要求の行（二重）を読み直す
+        // この要求の行か、前の要求の行（並べて送った 2 つがどちらも最初の読みをすり抜けた二重）を読み直す
         const row = (await env.DB.prepare(writeByKey).bind(gameId, playerId, key).all<WriteRow>()).results[0];
         // 行が無い: 文 1 の add の上限の条件で止まった（何も書いていない）
         if (!row) return error('PLAYER_DATA_LIMIT_EXCEEDED', 'Write would exceed the player data limit', 409);
-        if (row.writeRef !== ref && row.requestHash !== hash) {
-          return error('IDEMPOTENCY_KEY_REUSED', 'Idempotency-Key was used for a different request', 422);
-        }
-        if (row.resultJson === null) throw new Error('Player data write has no result');
-        // 実績の欄が入る前（0014 の前）の記録の写しには unlocked が無い。その書き込みで解いた実績は無いので空にする
-        const result = JSON.parse(row.resultJson) as { values: WrittenValue[]; unlocked?: UnlockedRow[] };
-        const values = result.values
-          .map((v) => ({ key: v.key, value: v.value }))
-          .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-        return json({ gameId, writeId: row.writeRef, values, unlocked: unlockedOf(result.unlocked ?? []) });
+        return replyFromWrite(row, gameId, hash, ref);
       },
     },
   ],

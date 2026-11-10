@@ -1074,7 +1074,8 @@ describe('U3 プレイヤーデータの管理', () => {
       await expectError(await adminSend(putDataKeyOp('kills', declaration, '外れ', game)), 400, 'INVALID_ARGUMENT');
     }
     expect(await dataSnapshot()).toEqual(before);
-    // maxValue だけの変更は通る（前の値は消さない）
+    // maxValue だけの変更は通る（前の値は消さない）。準備: 見る実績の閾値を新しい上限より下げておく（上限は参照する閾値より下げられない。hardening §3.2）
+    await baseEnv.DB.prepare("UPDATE achievements SET threshold = 2 WHERE game_id = ? AND achievement_id = 'kill-10'").bind(game).run();
     const lowered = await adminSend(putDataKeyOp('kills', { mode: 'add', maxValue: 2, maxDelta: 1 }, '上限を下げる', game));
     expect(lowered.status).toBe(200);
     expect(await valueOf('p1', 'kills')).toBe(3);
@@ -1158,6 +1159,8 @@ describe('U3 プレイヤーデータの管理', () => {
     const written = await writeData(token, 'kills', 10);
     const unlocked = (await written.json<{ unlocked: Array<{ achievementId: string; unlockedAt: string }> }>()).unlocked;
     expect(unlocked.map((u) => u.achievementId)).toEqual(['kill-10']);
+    // 準備: 値を閾値より下げておく（閾値以上の値が残る取り消しは 400。hardening §3.1。監査に残さないよう表を直に直す）
+    await baseEnv.DB.prepare("UPDATE player_data SET value = 9 WHERE game_id = ? AND player_id = ? AND key = 'kills'").bind(game, playerId).run();
     const res = await adminSend(revokeAchievementOp(playerId, 'kill-10', '不正な値で解けた', game));
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ gameId: game, playerId, achievementId: 'kill-10', revoked: true });

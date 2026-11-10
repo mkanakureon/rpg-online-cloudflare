@@ -1773,7 +1773,7 @@
             }
           },
           "400": {
-            "description": "gameId・X-Admin-Actor・reason・定義の本文（kind・startsAt < endsAt・resetOffsetMinutes・rewards の行の数と重なり・amount）の外れか、受け取りのあるイベントの kind・startsAt・resetOffsetMinutes を変えようとした（INVALID_ARGUMENT）か、本文が JSON でない（INVALID_JSON）。何も書かない。",
+            "description": "gameId・X-Admin-Actor・reason・定義の本文（kind・startsAt < endsAt・resetOffsetMinutes・rewards の行の数と重なり・amount）の外れか、受け取りのあるイベントの kind・startsAt・resetOffsetMinutes を変えようとした（INVALID_ARGUMENT）か、読み直しても断る理由の無い同時の変更との競合（INVALID_ARGUMENT。message は Conflicted with a concurrent change; send the request again）か、本文が JSON でない（INVALID_JSON）。何も書かない。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -2016,7 +2016,7 @@
             }
           },
           "400": {
-            "description": "gameId・X-Admin-Actor・reason・宣言の本文（mode・maxValue・maxDelta）の外れか、値の行があるキーの mode を変えようとした・宣言の数が上限を超える（INVALID_ARGUMENT）か、本文が JSON でない（INVALID_JSON）。何も書かない。",
+            "description": "gameId・X-Admin-Actor・reason・宣言の本文（mode・maxValue・maxDelta）の外れか、値の行があるキーの mode を変えようとした・区切りで数えるキー（区切りの宣言がある・デイリー・週間のクエストが見る）を add 以外にしようとした・見る実績とクエストの一番高い threshold より maxValue を下げようとした・宣言の数が上限を超える（INVALID_ARGUMENT）か、読み直しても断る理由の無い同時の変更との競合（INVALID_ARGUMENT。message は Conflicted with a concurrent change; send the request again）か、本文が JSON でない（INVALID_JSON）。何も書かない。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -2259,7 +2259,7 @@
             }
           },
           "400": {
-            "description": "gameId・X-Admin-Actor・reason・key・threshold の外れか、解いた人がいる実績の key を変えようとした（INVALID_ARGUMENT）か、本文が JSON でない（INVALID_JSON）。何も書かない。",
+            "description": "gameId・X-Admin-Actor・reason・key・threshold の外れか、threshold がキーの maxValue を超える・解いた人がいる実績の key を変えようとした（INVALID_ARGUMENT）か、読み直しても断る理由の無い同時の変更との競合（INVALID_ARGUMENT。message は Conflicted with a concurrent change; send the request again）か、本文が JSON でない（INVALID_JSON）。何も書かない。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -2511,7 +2511,7 @@
             }
           },
           "400": {
-            "description": "gameId・X-Admin-Actor・reason・value の外れか、value がキーの maxValue を超える（INVALID_ARGUMENT）か、本文が JSON でない（INVALID_JSON）。何も書かない。",
+            "description": "gameId・X-Admin-Actor・reason・value の外れか、value がキーの maxValue を超える（INVALID_ARGUMENT）か、読み直しても断る理由の無い同時の変更との競合（INVALID_ARGUMENT。message は Conflicted with a concurrent change; send the request again）か、本文が JSON でない（INVALID_JSON）。何も書かない。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -2763,7 +2763,7 @@
             }
           },
           "400": {
-            "description": "gameId・X-Admin-Actor・reason の外れ（INVALID_ARGUMENT）か、本文が JSON でない（INVALID_JSON）。",
+            "description": "gameId・X-Admin-Actor・reason の外れか、そのプレイヤーの実績のキーの値が閾値以上のまま（先に値を閾値より下げる。INVALID_ARGUMENT）か、読み直しても断る理由の無い同時の変更との競合（INVALID_ARGUMENT。message は Conflicted with a concurrent change; send the request again）か、本文が JSON でない（INVALID_JSON）。何も消さない。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
@@ -3006,7 +3006,7 @@
             }
           },
           "400": {
-            "description": "gameId・X-Admin-Actor・reason・定義の本文（kind・startsAt < endsAt・resetOffsetMinutes・key の形・threshold が 1〜1000000000・rewards の行の数と重なり・amount）の外れか、デイリー・週間のクエストのキーが add でない・キーに同じ区切りの宣言が違う時差である・受け取りのあるクエストの kind・startsAt・resetOffsetMinutes・key を変えようとした・新しいクエストで宣言の数が 200（MAX_QUESTS）を超える（INVALID_ARGUMENT）か、本文が JSON でない（INVALID_JSON）。何も書かない。",
+            "description": "gameId・X-Admin-Actor・reason・定義の本文（kind・startsAt < endsAt・resetOffsetMinutes・key の形・threshold が 1〜1000000000・rewards の行の数と重なり・amount）の外れか、threshold が見るキーの maxValue を超える・デイリー・週間のクエストのキーが add でない・キーに同じ区切りの宣言が違う時差である・受け取りのあるクエストの kind・startsAt・resetOffsetMinutes・key を変えようとした・新しいクエストで宣言の数が 200（MAX_QUESTS）を超える（INVALID_ARGUMENT）か、読み直しても断る理由の無い同時の変更との競合（INVALID_ARGUMENT。message は Conflicted with a concurrent change; send the request again）か、本文が JSON でない（INVALID_JSON）。何も書かない。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",
