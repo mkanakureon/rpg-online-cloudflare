@@ -140,7 +140,7 @@
             }
           },
           "500": {
-            "description": "想定外の失敗（DB の失敗など）。中身は返さない。",
+            "description": "想定外の失敗（Worker の中の例外）。DB は読まないので、DB の失敗では起きない。中身は返さない。",
             "headers": {
               "Cache-Control": {
                 "description": "応答はどれも no-store。",

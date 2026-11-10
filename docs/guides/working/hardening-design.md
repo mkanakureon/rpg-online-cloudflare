@@ -251,7 +251,7 @@
 
 | 元 | 足す試験の中身 |
 | --- | --- |
-| #12 | `getHealth` が DB の失敗で 500 `INTERNAL_ERROR` を HTTP で返す・管理の書き込みの本文がオブジェクトでないと HTTP で 400 `Object required` |
+| #12 | `getHealth` は DB を読まず、DB が壊れていても 200 を返す（`src/core/router.ts` の `createRouter`。2026-11-10 にユーザーが「いまの挙動を正にする」と決めた。#72 の回で、DB の失敗で 500 を見る試験はいまの挙動では起きないと分かったため）・管理の書き込みの本文がオブジェクトでないと HTTP で 400 `Object required` |
 | #17・#32 | いまの `test/schema-conformance.test.ts` の `beforeEach` は `ranking_entries` とお知らせしか消さず、アカウント・プレイヤー・イベント・残高の行が試験の後に残る。G2 で `beforeEach` に消す表を足し（試験の準備の直し。期待は変えない）、試験の順で結果が変わらないことをそのファイルの中の 1 本で見る |
 | #18・#19 | `AUTH_TOKEN_SECRET` が短くトークンの鍵が無い（`tokenSecret` が null）とき、ゲストの発行とトークンの要る書き込みが HTTP で 500 |
 | #29 | セーブの 1 つの GET と DELETE も利用制限で 429（#69 で `checkPlayerAccess` に寄せた後も、口ごとに 1 本） |
@@ -332,7 +332,7 @@
 | G1 | `ゲストの発行を並べて送ってもIPごとの上限を超えて発行しない` | L2 | §6 |
 | G1 | `新しいスロットへの書き込みを並べて送ってもMAX_SLOTSを超えない` | L2 | §6 |
 | G1 | `同じプレイヤーの要求を並べて送っても利用制限は全部を数える` | L2 | §6 |
-| G2 | `ヘルスチェックはDBの失敗でINTERNAL_ERRORの500を返す` | L2 | §7 #12 |
+| G2 | `ヘルスチェックはDBが壊れていても読まずに200を返す` | L2 | §7 #12 |
 | G2 | `管理の書き込みの本文が配列ならObject requiredの400を返す` | L2 | §7 #12 |
 | G2 | `トークンの鍵が短い環境ではゲストの発行と書き込みがINTERNAL_ERRORの500を返す` | L2 | §7 #18・#19 |
 | G2 | `スキーマの突き合わせの試験は前の試験の行に左右されない` | L1 | §7 #17・#32 |
@@ -456,7 +456,7 @@ import { runTests, requireTests, gitClean, done } from './scripts/issue-run/chec
 const base = '<Issue を作った時点の main>';
 runTests();
 requireTests([
-  'ヘルスチェックはDBの失敗でINTERNAL_ERRORの500を返す',
+  'ヘルスチェックはDBが壊れていても読まずに200を返す',
   '管理の書き込みの本文が配列ならObject requiredの400を返す',
   'トークンの鍵が短い環境ではゲストの発行と書き込みがINTERNAL_ERRORの500を返す',
   'スキーマの突き合わせの試験は前の試験の行に左右されない',
