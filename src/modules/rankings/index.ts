@@ -1,7 +1,7 @@
 // rankings/index.ts — ランキングのモジュール（GET・POST /v1/rankings/{boardId}）。
 //
 // GET は gameId → limit → ゲームの登録と機能の設定の順に確かめて上位を返す。POST は APP_ENV=local の門（本文を読む前）
-// → トークン（本文を読む前）→ JSON の読み取り → 形の検証（validate.ts）→ トークンのプレイヤーごとの利用制限（429。DB を引くので
+// → トークン（本文を読む前）→ 本文の大きさ（413。src/core/body.ts）→ JSON の読み取り → 形の検証（validate.ts）→ トークンのプレイヤーごとの利用制限（429。DB を引くので
 // 形の検証の後。形の外れは DB を引かずに 400）→ 止めた印（403 PLAYER_BANNED）→ トークンと本文の突き合わせ
 // → ゲームの登録と機能の設定 → 書き込み（高いほうのスコアを残す。updated_at はスコアが上がったときだけ進め、同点は先にそのスコアに届いた人が上）。順の正は docs/guides/working/account-design.md §5。
 //
@@ -9,6 +9,7 @@
 import { consumeForPlayer } from '../../core/activity';
 import { requireAuth, requireSamePlayer } from '../../core/auth';
 import { requireNotBanned } from '../../core/bans';
+import { MAX_JSON_BODY_BYTES, readJson } from '../../core/body';
 import { requireGame } from '../../core/games';
 import { requireLocalWrite } from '../../core/guards';
 import { error, json } from '../../core/http';
@@ -55,10 +56,9 @@ export const rankings: GameModule = {
         if (blocked) return blocked;
         const auth = await requireAuth(req, env);
         if (!auth.ok) return auth.response;
-        let value: unknown;
-        try { value = await req.json(); }
-        catch { return error('INVALID_JSON', 'Request body must be JSON', 400); }
-        const parsed = parseScoreSubmission(value);
+        const body = await readJson(req, MAX_JSON_BODY_BYTES);
+        if (!body.ok) return body.response;
+        const parsed = parseScoreSubmission(body.value);
         if (!parsed.ok) return error('INVALID_ARGUMENT', parsed.message, 400);
         const { gameId, playerId, displayName, score } = parsed.value;
         // 本文の playerId でなくトークンのプレイヤーで数える（偽れない鍵）

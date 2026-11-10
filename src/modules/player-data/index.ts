@@ -14,6 +14,7 @@
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-31
 import { checkPlayerAccess } from '../../core/access';
+import { MAX_JSON_BODY_BYTES, readJson } from '../../core/body';
 import type { Database, Env } from '../../core/env';
 import { error, json } from '../../core/http';
 import { parseIdempotencyKey } from '../../core/idempotency';
@@ -154,10 +155,9 @@ export const playerData: GameModule = {
         const playerId = claims.playerId;
         const key = parseIdempotencyKey(req.headers.get('Idempotency-Key'));
         if (key === null) return error('INVALID_ARGUMENT', 'Invalid Idempotency-Key', 400);
-        let body: unknown;
-        try { body = await req.json(); }
-        catch { return error('INVALID_JSON', 'Request body must be JSON', 400); }
-        const parsed = parseChanges(body);
+        const body = await readJson(req, MAX_JSON_BODY_BYTES);
+        if (!body.ok) return body.response;
+        const parsed = parseChanges(body.value);
         if (!parsed.ok) return error('INVALID_ARGUMENT', parsed.message, 400);
         const changes = parsed.value;
         const defs = await loadKeys(env.DB, gameId, changes.map((c) => c.key));

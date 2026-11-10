@@ -2,10 +2,11 @@
 //
 // 確かめの順: APP_ENV=local の門（403）→ 管理の鍵の有無（無ければ投げて入口の try/catch で 500）→ 管理の利用制限
 // （RATE_LIMITS.admin・IP ごと。正しい鍵でも数え、鍵を確かめる前に 429）→ 管理の鍵（401）→ gameId の形（400）→
-// ゲームの登録（404 Unknown game。機能の設定は見ない）→ 書き込みの口は X-Admin-Actor・本文の JSON・reason（400）。
+// ゲームの登録（404 Unknown game。機能の設定は見ない）→ 書き込みの口は X-Admin-Actor・本文の大きさ（413。src/core/body.ts）・本文の JSON・reason（400）。
 // 口のファイル（routes-*.ts）が読み、一覧は routes.ts が組み立てる。正は docs/guides/working/admin-design.md §2・§3。
 //
 // 概要記述: Claude Opus 5.5 — 2026-11-10
+import { MAX_JSON_BODY_BYTES, readJson } from '../body';
 import type { Env } from '../env';
 import { loadGame } from '../games';
 import { requireLocalWrite } from '../guards';
@@ -44,9 +45,9 @@ export async function checkAdminWrite(req: Request, env: Env, url: URL, known: r
   if (!access.ok) return access;
   const actor = parseActor(req.headers.get('X-Admin-Actor'));
   if (actor === null) return { ok: false, response: error('INVALID_ARGUMENT', 'Invalid X-Admin-Actor', 400) };
-  let value: unknown;
-  try { value = await req.json(); }
-  catch { return { ok: false, response: error('INVALID_JSON', 'Request body must be JSON', 400) }; }
+  const read = await readJson(req, MAX_JSON_BODY_BYTES);
+  if (!read.ok) return read;
+  const value = read.value;
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return { ok: false, response: error('INVALID_ARGUMENT', 'Object required', 400) };
   }

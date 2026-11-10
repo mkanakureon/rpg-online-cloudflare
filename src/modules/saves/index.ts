@@ -2,7 +2,7 @@
 //
 // どれも APP_ENV=local の門 → トークン → プレイヤーの利用制限（4 つの操作を合わせて RATE_LIMITS.saves。429）→ 止めた印（403 PLAYER_BANNED）→ gameId の形 →
 // トークンのゲームとの突き合わせの順に確かめる（本文を読む前。制限の順の正は docs/guides/working/abuse-protection-design.md §3）。
-// PUT はその後に本文の大きさ → JSON → 形（validate.ts）→ data の大きさ → チェックサム（checksum.ts）→ ゲームの登録と
+// PUT はその後に本文の大きさ（src/core/body.ts）→ JSON → 形（validate.ts）→ data の大きさ → チェックサム（checksum.ts）→ ゲームの登録と
 // 機能の設定 → 書き込み（リビジョンを比べて書く 1 つの文。合わなければ 409 SAVE_CONFLICT、新しいスロットで MAX_SLOTS を
 // 超えれば 409 SLOT_LIMIT_EXCEEDED）。GET・一覧は登録と設定の後に読む。DELETE は baseRevision の形の後に、行を消さず
 // 墓石（deleted = 1）にしてリビジョンを進める（消して書き直しても古い端末のリビジョンが合わないように）。
@@ -10,6 +10,7 @@
 //
 // 概要記述: Claude Opus 5.5 — 2026-10-30
 import { checkPlayerAccess } from '../../core/access';
+import { readJson } from '../../core/body';
 import type { Env } from '../../core/env';
 import { requireGame } from '../../core/games';
 import { error, json } from '../../core/http';
@@ -54,15 +55,6 @@ const tombstoneAt = `UPDATE saves SET deleted = 1, data = '', checksum = '', siz
   RETURNING slot_id AS slotId`;
 const liveSlot = 'SELECT 1 AS live FROM saves WHERE game_id = ? AND player_id = ? AND slot_id = ? AND deleted = 0';
 
-/** 本文を MAX_REQUEST_BYTES まで読む。超えれば null（Content-Length があれば読まずに断る）。 */
-async function readBody(req: Request): Promise<string | null> {
-  const length = req.headers.get('Content-Length');
-  if (length !== null && Number(length) > MAX_REQUEST_BYTES) return null;
-  const bytes = await req.arrayBuffer();
-  if (bytes.byteLength > MAX_REQUEST_BYTES) return null;
-  return new TextDecoder().decode(bytes);
-}
-
 /** そのスロットに消していない行があるか（書き込み・削除が行を返さなかったときに、どの 409・404 かを分ける）。 */
 async function hasLiveSlot(env: Env, gameId: string, playerId: string, slotId: string): Promise<boolean> {
   const rows = await env.DB.prepare(liveSlot).bind(gameId, playerId, slotId).all<{ live: number }>();
@@ -80,12 +72,10 @@ export const saves: GameModule = {
         const access = await checkPlayerAccess(req, env, url, RATE_LIMITS.saves);
         if (!access.ok) return access.response;
         const { gameId, claims } = access;
-        const text = await readBody(req);
-        if (text === null) return error('PAYLOAD_TOO_LARGE', 'Request body too large', 413);
-        let value: unknown;
-        try { value = JSON.parse(text); }
-        catch { return error('INVALID_JSON', 'Request body must be JSON', 400); }
-        const parsed = parseSaveWrite(value);
+        // 本文は MAX_REQUEST_BYTES まで読む（超えれば 413。Content-Length があれば読まずに断る。src/core/body.ts）
+        const body = await readJson(req, MAX_REQUEST_BYTES);
+        if (!body.ok) return body.response;
+        const parsed = parseSaveWrite(body.value);
         if (!parsed.ok) return error('INVALID_ARGUMENT', parsed.message, 400);
         const { formatVersion, data, checksum, baseRevision } = parsed.value;
         const size = utf8Size(data);

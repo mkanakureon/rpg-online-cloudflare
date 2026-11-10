@@ -35,7 +35,7 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 - 登録の無い`gameId`は**404 `NOT_FOUND`**（`message`は`Unknown game`）。アカウントはどのゲームにも要る土台なので、ゲームの機能の設定（`game_modules`）は見ない。
 - 書込み系 API なので、`npm run dev`でローカル実行し`APP_ENV=local`を与えた時のみ発行できる（ほかは本文を読む前に**403 `NOT_READY_FOR_PRODUCTION`**）。
 - 同じ IP（`CF-Connecting-IP`）からは 60 秒の窓に 10 回、同じゲームへは 60 秒の窓に 300 回まで。超えると**429 `RATE_LIMITED`**と`Retry-After`で、行を作らない（下の「利用制限」）。
-- 確かめの順: `APP_ENV`の守り（403）→ IP の利用制限（429。本文を読む前）→ 本文の JSON（400 `INVALID_JSON`）→ 欄の形（400 `INVALID_ARGUMENT`）→ ゲームの登録（404 `NOT_FOUND`）→ ゲームの利用制限（429）→ 書き込み。
+- 確かめの順: `APP_ENV`の守り（403）→ IP の利用制限（429。本文を読む前）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ 欄の形（400 `INVALID_ARGUMENT`）→ ゲームの登録（404 `NOT_FOUND`）→ ゲームの利用制限（429）→ 書き込み。
 - 発行した日（UTC）の「遊んだ」の印を、新しい人として同じ書き込みで 1 行残す（下の「管理の API」の`GET /v1/admin/analytics/players`が数える。応答は変わらない）。
 
 ## POST /v1/accounts/token
@@ -102,7 +102,7 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 - `score`は0～1,000,000,000の整数。
 - `npm run dev`でローカル実行し`APP_ENV=local`を与えた時だけ・トークンがある時だけ書込み可能。`APP_ENV`が`local`でなければ、トークンがあっても無くても本文を読む前に**403 `NOT_READY_FOR_PRODUCTION`**。
 - 同じプレイヤー（トークンのゲームとプレイヤー）は 60 秒の窓に 30 回まで。超えると**429 `RATE_LIMITED`**と`Retry-After`で、記録を変えない（下の「利用制限」）。トークンの無い・正しくない要求と、本文の形の外れた要求は数えない（401・400 が先）。
-- 確かめの順: `APP_ENV`の守り（403）→ トークン（本文を読む前）→ 本文の JSON（400 `INVALID_JSON`）→ 欄の形（400 `INVALID_ARGUMENT`。ここまで DB を引かない）→ プレイヤーの利用制限（429）→ 止めた印（403 `PLAYER_BANNED`）→ トークンと本文の突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録（404 `NOT_FOUND`）→ 書き込み。
+- 確かめの順: `APP_ENV`の守り（403）→ トークン（本文を読む前）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ 欄の形（400 `INVALID_ARGUMENT`。ここまで DB を引かない）→ プレイヤーの利用制限（429）→ 止めた印（403 `PLAYER_BANNED`）→ トークンと本文の突き合わせ（403 `PERMISSION_DENIED`）→ ゲームの登録（404 `NOT_FOUND`）→ 書き込み。
 - `Authorization`が無い・`Bearer`でない・トークンの形か署名が正しくなければ**401 `UNAUTHENTICATED`**（`message`は`Missing or malformed Authorization`か`Invalid token`。どちらが外れたかの詳しい理由は返さない）。期限が切れていれば**401 `TOKEN_EXPIRED`**（ゲストを発行し直す）。
 - 本文の`gameId`・`playerId`がトークンのゲームとプレイヤーと違えば**403 `PERMISSION_DENIED`**（`message`は`Token does not match player`）。本文の形は変わらない（`playerId`も送る）。
 
@@ -295,7 +295,7 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 - 実績はサーバーが解く: 書き込みの中で、書いた後のキーの値が実績の閾値以上で、まだ解いていない実績を解く（同じ`batch`）。`unlocked`はこの書き込みで解いた実績だけ（実績の ID の昇順。無ければ空の配列。前に解いた実績は載せず、`GET`の`achievements`で読む）。一度解いた実績は二重に解けず、解いた時刻も変わらない。実績の宣言を足した・閾値を下げたときは、そのプレイヤーが次に書き込んだときに判定する（さかのぼって解かない）。実績を解いたと申告する口は無く、本文の`achievements`・`unlocked`などの欄は読まない。
 - **`Idempotency-Key`が無い・形の外れは 400 `INVALID_ARGUMENT`**（`add`以外のキーだけの書き込みも必須）。同じプレイヤーが同じ鍵と同じ中身（`gameId`と`changes`。`changes`の並びは比べない）をもう一度送ると、何も書かずに**200 で 1 回目と同じ本文**（同じ`writeId`・`values`・`unlocked`〔解いた実績と時刻〕）を返す（並べて送っても 1 回分）。同じ鍵で違う中身は**422 `IDEMPOTENCY_KEY_REUSED`**（何も書かない）。鍵の範囲はプレイヤーごとで、ほかのプレイヤーが同じ鍵を使っても別の書き込みになる。クライアントは書き込みごとに新しい鍵（`crypto.randomUUID()`など）を作り、届かなかった要求の送り直しだけ同じ鍵を使う。`Idempotency-Key`の期限は 30 日（書き込みの記録と一緒に 30 日で消え、その後に同じ鍵で送ると新しい書き込みになる）。
 - 時刻はサーバーが付ける（本文・`Date`の見出しの時刻は読まない）。値は**自己申告**として扱う（サーバーはゲームの中で取れた値かを確かめられない。守るのは宣言・範囲・1 回の増加の上限・書き方・利用制限だけ）。
-- 書込み系 API なので`APP_ENV=local`の時だけ・トークンがある時だけ通る（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順: `GET /v1/player-data`と同じ（`APP_ENV`の守り → トークン → プレイヤーの利用制限 → 止めた印 →`gameId`の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定）→ `Idempotency-Key`の形（400）→ 本文の JSON（400 `INVALID_JSON`）→ `changes`の形（400）→ キーの宣言（404）→ 書き方ごとの範囲（400）→ 書く（409 `PLAYER_DATA_LIMIT_EXCEEDED`・422 `IDEMPOTENCY_KEY_REUSED`）。
+- 書込み系 API なので`APP_ENV=local`の時だけ・トークンがある時だけ通る（ほかは**403 `NOT_READY_FOR_PRODUCTION`**）。確かめの順: `GET /v1/player-data`と同じ（`APP_ENV`の守り → トークン → プレイヤーの利用制限 → 止めた印 →`gameId`の形 → トークンのゲームとの突き合わせ → ゲームの登録と機能の設定）→ `Idempotency-Key`の形（400）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ `changes`の形（400）→ キーの宣言（404）→ 書き方ごとの範囲（400）→ 書く（409 `PLAYER_DATA_LIMIT_EXCEEDED`・422 `IDEMPOTENCY_KEY_REUSED`）。
 
 ## GET /v1/quests?gameId=demo-rpg
 
@@ -382,7 +382,7 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 - 鍵が無い・`Bearer`でない・違う（プレイヤーのトークンも含む）は、どれも**401 `UNAUTHENTICATED`**（`message`は`Invalid admin credentials`。外れた理由は返さない）。鍵は SHA-256 にしてから時間の一定な比べで確かめる。鍵を取り替えると、前の鍵はその時から 401（前の鍵を並べて受ける期間は無い）。
 - 読むのも`APP_ENV=local`の時だけ（ほかは正しい鍵があっても**403 `NOT_READY_FOR_PRODUCTION`**）。
 - 確かめの順（どの口も同じ）: `APP_ENV`の守り（403）→ 管理の鍵の有無（500）→ 管理の利用制限（IP ごと。**429 `RATE_LIMITED`**と`Retry-After`。正しい鍵でも数え、鍵を確かめる前に断る）→ 管理の鍵（401）→ `gameId`の形（**400 `INVALID_ARGUMENT`**）→ ゲームの登録（**404 `NOT_FOUND`**・`Unknown game`。機能の設定は見ない）→ 口ごとの確かめ。
-- 書き込みの口（BAN・BAN を解く・所持品と通貨の増減・スコアを消す・品目とイベントとクエストの定義・プレイヤーデータのキーと実績の宣言・値を置く・実績の取り消し）は、口ごとの確かめの前に見出し`X-Admin-Actor`（操作した人のラベル。`^[a-zA-Z0-9_.@-]{1,64}$`。自己申告で、そのまま監査のログに残る）と、本文（JSON でなければ**400 `INVALID_JSON`**）の`reason`（1〜200 文字。空白だけは外れ）を確かめる。外れは**400 `INVALID_ARGUMENT`**。
+- 書き込みの口（BAN・BAN を解く・所持品と通貨の増減・スコアを消す・品目とイベントとクエストの定義・プレイヤーデータのキーと実績の宣言・値を置く・実績の取り消し）は、口ごとの確かめの前に見出し`X-Admin-Actor`（操作した人のラベル。`^[a-zA-Z0-9_.@-]{1,64}$`。自己申告で、そのまま監査のログに残る）と、本文（16 KiB を超えれば**413 `PAYLOAD_TOO_LARGE`**、JSON でなければ**400 `INVALID_JSON`**）の`reason`（1〜200 文字。空白だけは外れ）を確かめる。外れは**400 `INVALID_ARGUMENT`**。
 - 書き込みの口は、操作 1 回で監査のログに 1 行（誰が・いつ・何を・前と後）を残し、書き込みと監査の行を 1 つの`batch`に入れる（片方だけ残らない）。読み取りの口は監査のログに残さない。
 - データ修正は行を直に書き換えず、履歴に残る形にする（所持品と通貨は受領の履歴に`sourceType: "admin"`の行。スコアは消して前のスコアを監査に残す。プレイヤーデータは台帳を持たないので、値を置く・実績を取り消すときの前と後を監査に残し、監査のログが直しの履歴になる）。セーブは直さない（読むだけ）。
 - ローカルの管理コマンド`node scripts/admin-cli.mjs <操作>`（`player`・`audit`・`analytics`・`analytics-grants`・`grant`・`revoke`・`ban`・`unban`・`delete-score`・`put-item`・`put-event`・`put-quest`・`put-data-key`・`put-achievement`・`set-data`・`revoke-achievement`・`smoke`）がこれらの口を呼ぶ。鍵は環境変数`ADMIN_API_KEY`から読み、無ければ行き先が`127.0.0.1`・`localhost`のときだけ`.dev.vars`の`ADMIN_API_KEY`の行を読む（読むだけ）。`X-Admin-Actor`は`--actor`（既定は`local-admin`）。CLI モック（`scripts/cli-mock.mjs`）は管理の口を呼ばない。
@@ -474,7 +474,7 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 - 印があれば理由と期限と`bannedAt`を置き換える（2 回送っても印は 1 つ）。
 - そのゲームに無いプレイヤーは**404 `NOT_FOUND`**（`message`は`Unknown player`。印を作らない）。
 - 監査のログに`player.ban`の 1 行（`before`は前の印`{"reason","expiresAt"}`か`null`、`after`は新しい印`{"reason","expiresAt"}`）。
-- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・`expiresAt`（400）→ プレイヤー（404）→ 書く。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・`expiresAt`（400）→ プレイヤー（404）→ 書く。
 
 ### DELETE /v1/admin/players/{playerId}/ban?gameId=demo-rpg
 
@@ -522,7 +522,7 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 - 知らない品目は**404 `NOT_FOUND`**（`Unknown item`）、そのゲームに無いプレイヤーは**404 `NOT_FOUND`**（`Unknown player`）。
 - 取り消しで残高が 0 未満になるときは**409 `INSUFFICIENT_BALANCE`**、付与で上限を超えるときは**409 `INVENTORY_LIMIT_EXCEEDED`**。どれも何も書かない（同じ鍵で流し直せる）。
 - 監査のログに`inventory.adjust`の 1 行（`before`は`{"itemId","amount"}`の前の残高、`after`は後の残高。残高の行が無ければ`amount`は 0）。
-- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`（400）→ `Idempotency-Key`（400）→ `itemId`・`delta`（400）→ 書く（同じ鍵の行 → 品目・プレイヤー（404）→ 残高（409）の順で見分ける）。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`（400）→ `Idempotency-Key`（400）→ `itemId`・`delta`（400）→ 書く（同じ鍵の行 → 品目・プレイヤー（404）→ 残高（409）の順で見分ける）。
 
 ### DELETE /v1/admin/rankings/{boardId}/entries/{playerId}?gameId=demo-rpg
 
@@ -545,7 +545,7 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 - スコアの行が無ければ**404 `NOT_FOUND`**（`Unknown ranking entry`。監査のログに残さない）。2 回目は 404（もう無い）。`Idempotency-Key`は要らない。
 - ランキングの行だけを見る（そのゲームに無いプレイヤーの行も消せる）。
 - 監査のログに`ranking.delete`の 1 行（`before`は消した行の`{"score","displayName"}`、`after`は`null`）。
-- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`（400）→ 書く。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`（400）→ 書く。
 
 ### PUT /v1/admin/items/{itemId}?gameId=demo-rpg
 
@@ -568,7 +568,7 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 - `kind`は`currency`（通貨）か`item`（所持品）。外れは**400 `INVALID_ARGUMENT`**。
 - 無ければ作る。あって`kind`が同じなら何も変えずに 200（監査の行は残す）。**あって`kind`が違えば 400 `INVALID_ARGUMENT`**（残高と報酬が種類を前提にしているので、種類は後から変えられない）。
 - 監査のログに`item.put`の 1 行（`before`は前の`{"kind"}`か`null`、`after`は`{"kind"}`）。
-- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・`kind`（400）→ 種類の違い（400）→ 書く。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・`kind`（400）→ 種類の違い（400）→ 書く。
 
 ### PUT /v1/admin/events/{eventId}?gameId=demo-rpg
 
@@ -594,7 +594,7 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 - 無ければ作り、あれば置き換える（報酬の行は送った中身だけになる）。**受け取りが 1 つでもあるイベントは`kind`・`startsAt`・`resetOffsetMinutes`を変えられない**（**400 `INVALID_ARGUMENT`**。区切りの意味が変わり、二重の受け取りの止めが崩れるため）。`endsAt`と`rewards`は変えられ、変えた後の受け取りから新しい中身になる。
 - 応答の`startsAt`・`endsAt`は秒まで、`rewards`は品目の ID の昇順（イベントの一覧と同じ欄の名前）。
 - 監査のログに`event.put`の 1 行（`before`は前の定義`{"kind","startsAt","endsAt","resetOffsetMinutes","rewards"}`か`null`、`after`は入れた定義）。監査の行・イベント・報酬の行は 1 つの`batch`で書く。
-- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・定義の本文（400）→ 報酬の品目（404）→ 受け取りのあるイベントの守り（400）→ 宣言の数（400）→ 書く。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・定義の本文（400）→ 報酬の品目（404）→ 受け取りのあるイベントの守り（400）→ 宣言の数（400）→ 書く。
 
 ### PUT /v1/admin/quests/{questId}?gameId=demo-rpg
 
@@ -621,7 +621,7 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 - 1 ゲームの宣言は 200 個まで（`MAX_QUESTS`）。超える新しいクエストは**400 `INVALID_ARGUMENT`**（あるクエストの置き換えは通る）。
 - 応答の`startsAt`・`endsAt`は秒まで、`rewards`は品目の ID の昇順。`Idempotency-Key`は要らない（何度送っても同じ定義）。
 - 監査のログに`quest.put`の 1 行（`before`は前の定義`{"kind","startsAt","endsAt","resetOffsetMinutes","key","threshold","rewards"}`か`null`、`after`は入れた定義）。監査の行・区切りの宣言・クエスト・報酬の行は 1 つの`batch`で書く。
-- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・定義の本文（400）→ キーの宣言（404）→ 報酬の品目（404）→ 区切りのあるクエストのキーの書き方と区切りの時差（400）→ 受け取りのあるクエストの守り（400）→ クエストの数（400）→ 書く。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・定義の本文（400）→ キーの宣言（404）→ 報酬の品目（404）→ 区切りのあるクエストのキーの書き方と区切りの時差（400）→ 受け取りのあるクエストの守り（400）→ クエストの数（400）→ 書く。
 
 ### PUT /v1/admin/player-data/keys/{key}?gameId=demo-rpg
 
@@ -645,7 +645,7 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 - プレイヤーの値の行が 1 つでもあるキーの`mode`は変えられない（**400 `INVALID_ARGUMENT`**）。`maxValue`・`maxDelta`は変えられる（前に書いた値が新しい上限を超えても消さない。次の書き込みから効く）。
 - 1 ゲームの宣言は 200 個まで（`MAX_PLAYER_DATA_KEYS`）。超える新しいキーは**400 `INVALID_ARGUMENT`**。
 - 監査のログに`player-data-key.put`の 1 行（`before`は前の宣言`{"mode","maxValue","maxDelta"}`か`null`、`after`は入れた宣言）。
-- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・宣言の本文（400）→ 値のあるキーの`mode`（400）→ 宣言の数（400）→ 書く。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・宣言の本文（400）→ 値のあるキーの`mode`（400）→ 宣言の数（400）→ 書く。
 
 ### PUT /v1/admin/achievements/{achievementId}?gameId=demo-rpg
 
@@ -669,7 +669,7 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 - 宣言の無いキーは**404 `NOT_FOUND`**（`Unknown key`。何も書かない）。先にキーを宣言する。
 - 解いたプレイヤーがいる実績の`key`は変えられない（**400 `INVALID_ARGUMENT`**）。`threshold`は変えられる（解いた人の行は消さない）。
 - 監査のログに`achievement.put`の 1 行（`before`は前の宣言`{"key","threshold"}`か`null`、`after`は入れた宣言）。
-- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・宣言の本文（400）→ キーの宣言（404）→ 解いた人のいる実績の`key`（400）→ 書く。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・宣言の本文（400）→ キーの宣言（404）→ 解いた人のいる実績の`key`（400）→ 書く。
 
 ### PUT /v1/admin/players/{playerId}/player-data/{key}?gameId=demo-rpg
 
@@ -694,7 +694,7 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 - **実績は判定しない**（閾値を超える値に置いても解かず、解いた人の値を下げても取り消さない。取り消すのは下の口）。
 - 区切りの値（デイリー・週間のクエストの進捗。プレイヤーとキーの区切りごとの値）は、同じ`batch`で新しい値を上限に**頭打ちにする**（どの区切りの行も`MIN(いまの値, value)`。下げるだけで、上げる直しでは区切りの値を上げない）。合計を下げても区切りの値が前のまま残り、クエストの進捗が直らないのを止める。値の`updatedAt`はサーバーの時刻になる。`Idempotency-Key`は要らない（何度送っても同じ値）。
 - 監査のログに`player-data.set`の 1 行（`before`は前の`{"key","value"}`か、値の行が無ければ`null`、`after`は`{"key","value"}`）。`auditId`はその行の番号。
-- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・`value`（400）→ プレイヤー（404）→ キー（404）→ キーの`maxValue`（400）→ 書く。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`・`value`（400）→ プレイヤー（404）→ キー（404）→ キーの`maxValue`（400）→ 書く。
 
 ### DELETE /v1/admin/players/{playerId}/achievements/{achievementId}?gameId=demo-rpg
 
@@ -716,7 +716,7 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 
 - 解いた行が無ければ**404 `NOT_FOUND`**（`Unknown achievement`。監査のログに残さない）。2 回目は 404（もう無い）。`Idempotency-Key`は要らない。
 - 監査のログに`achievement.revoke`の 1 行（`before`は消した行の`{"achievementId","unlockedAt"}`、`after`は`null`）。
-- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`（400）→ 書く。
+- 確かめの順: 管理の口の共通の確かめ → `X-Admin-Actor`（400）→ 本文の大きさ（413）→ 本文の JSON（400 `INVALID_JSON`）→ `reason`（400）→ 書く。
 
 ## エラーレスポンス
 
@@ -726,8 +726,9 @@ Worker が動いているかだけを見る。DB を読まないので、DB が�
 
 ゲームのクライアントの口が返すコードは次の 19 個で全部（列挙の正はスキーマの`ErrorCode`。コードごとの画面の文の種類と自動の再試行の可否は下の「クライアントの決まり」）: `INVALID_ARGUMENT`（400）、`NOT_FOUND`（404）、`NOT_READY_FOR_PRODUCTION`（403）、`INVALID_JSON`（400）、`INTERNAL_ERROR`（500）、`UNAUTHENTICATED`（401）、`TOKEN_EXPIRED`（401）、`PERMISSION_DENIED`（403）、`SAVE_CONFLICT`（409）、`PAYLOAD_TOO_LARGE`（413）、`SLOT_LIMIT_EXCEEDED`（409）、`RATE_LIMITED`（429）、`EVENT_NOT_ACTIVE`（409）、`INVENTORY_LIMIT_EXCEEDED`（409）、`PLAYER_BANNED`（403）、`PLAYER_DATA_LIMIT_EXCEEDED`（409）、`IDEMPOTENCY_KEY_REUSED`（422）、`QUEST_NOT_COMPLETED`（409）、`QUEST_NOT_ACTIVE`（409）。
 
-管理の口だけのコード（ゲームのクライアントの口は返さない。形の正は`openapi/rpg-online-admin.v1.json`）: `INSUFFICIENT_BALANCE`（409）。
+管理の口だけのコード（ゲームのクライアントの口は返さない。形の正は`openapi/rpg-online-admin.v1.json`）: `INSUFFICIENT_BALANCE`（409）。管理の書き込みの口は、ゲームのクライアントの口と同じ`PAYLOAD_TOO_LARGE`（413）も返す。
 
+- **本文の大きさの上限（413 `PAYLOAD_TOO_LARGE`）**: 本文を受け取る口は、セーブの`PUT /v1/saves/{slotId}`が 394,240 バイト、ほかの口（ゲストの発行・スコアの投稿・プレイヤーデータの書き込み・管理の書き込みの口の全部）が**16 KiB（16,384 バイト）**まで。`Content-Length`が上限を超えれば本文を読まずに、`Content-Length`が無い（または実際より小さい）ときは上限を超えた所で読むのをやめて**413 `PAYLOAD_TOO_LARGE`**（`message`は`Request body too large`）を返し、何も書かない。確かめるのは各口が本文を読む所（各口の「確かめの順」の「本文の大きさ（413）」。門・トークン・利用制限・止めた印より後）。再試行しない。
 - **`PLAYER_BANNED`（403）**: トークンの要る口（トークンの更新・スコアの投稿・セーブの 4 つ・所持品・受領の履歴・イベントの一覧と受け取り・プレイヤーデータの読み書き・クエストの一覧と受け取り）で、トークンのプレイヤーが管理の口（`PUT /v1/admin/players/{playerId}/ban`）で止められているとき。`message`は`Player is banned`で、止めた理由・期限は返さない。トークンは正しいので、ゲストを発行し直しても同じプレイヤーには戻らない（別の`playerId`の新しいゲストになる）。確かめるのはプレイヤーの利用制限の後（止めた人の要求も数える）で、トークンの無い要求（401）・本文の形の外れ（400）はそれより先に断る。止めた人の要求は何も書かない。トークンを読まない口（お知らせ・ランキングの`GET`・設定）は止めない。
 - **`INSUFFICIENT_BALANCE`（409。管理の口だけ）**: 管理の所持品と通貨の増減で、取り消すと残高が 0 未満になるとき。何も書かない。
 - **`PLAYER_DATA_LIMIT_EXCEEDED`（409）**: プレイヤーデータの書き込み（`POST /v1/player-data`）で、`add`のキーの書いた後の値がキーの値の上限を超えるとき。その書き込みを全部断り、何も書かない。

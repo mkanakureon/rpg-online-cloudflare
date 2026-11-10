@@ -586,6 +586,29 @@
               }
             }
           },
+          "413": {
+            "description": "要求の本文が 16,384 バイト（16 KiB）を超える（PAYLOAD_TOO_LARGE）。Content-Length が超えていれば読まずに、無ければ超えた所で読むのをやめて断る。何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "PAYLOAD_TOO_LARGE"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "429": {
             "description": "管理の口の利用制限を超えた（IP ごと。正しい鍵でも数え、鍵を確かめる前に断る）。どの鍵で断ったか・上限の数は返さない。",
             "headers": {
@@ -795,6 +818,29 @@
             },
             "x-error-codes": [
               "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "要求の本文が 16,384 バイト（16 KiB）を超える（PAYLOAD_TOO_LARGE）。Content-Length が超えていれば読まずに、無ければ超えた所で読むのをやめて断る。何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "PAYLOAD_TOO_LARGE"
             ],
             "content": {
               "application/json": {
@@ -1058,6 +1104,29 @@
               }
             }
           },
+          "413": {
+            "description": "要求の本文が 16,384 バイト（16 KiB）を超える（PAYLOAD_TOO_LARGE）。Content-Length が超えていれば読まずに、無ければ超えた所で読むのをやめて断る。何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "PAYLOAD_TOO_LARGE"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "422": {
             "description": "同じゲームの同じ Idempotency-Key を違う中身に使った。何も書かない。",
             "headers": {
@@ -1310,6 +1379,29 @@
               }
             }
           },
+          "413": {
+            "description": "要求の本文が 16,384 バイト（16 KiB）を超える（PAYLOAD_TOO_LARGE）。Content-Length が超えていれば読まずに、無ければ超えた所で読むのをやめて断る。何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "PAYLOAD_TOO_LARGE"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "429": {
             "description": "管理の口の利用制限を超えた（IP ごと。正しい鍵でも数え、鍵を確かめる前に断る）。どの鍵で断ったか・上限の数は返さない。",
             "headers": {
@@ -1521,6 +1613,29 @@
             },
             "x-error-codes": [
               "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "要求の本文が 16,384 バイト（16 KiB）を超える（PAYLOAD_TOO_LARGE）。Content-Length が超えていれば読まずに、無ければ超えた所で読むのをやめて断る。何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "PAYLOAD_TOO_LARGE"
             ],
             "content": {
               "application/json": {
@@ -1750,6 +1865,29 @@
               }
             }
           },
+          "413": {
+            "description": "要求の本文が 16,384 バイト（16 KiB）を超える（PAYLOAD_TOO_LARGE）。Content-Length が超えていれば読まずに、無ければ超えた所で読むのをやめて断る。何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "PAYLOAD_TOO_LARGE"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "429": {
             "description": "管理の口の利用制限を超えた（IP ごと。正しい鍵でも数え、鍵を確かめる前に断る）。どの鍵で断ったか・上限の数は返さない。",
             "headers": {
@@ -1970,6 +2108,29 @@
               }
             }
           },
+          "413": {
+            "description": "要求の本文が 16,384 バイト（16 KiB）を超える（PAYLOAD_TOO_LARGE）。Content-Length が超えていれば読まずに、無ければ超えた所で読むのをやめて断る。何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "PAYLOAD_TOO_LARGE"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "429": {
             "description": "管理の口の利用制限を超えた（IP ごと。正しい鍵でも数え、鍵を確かめる前に断る）。どの鍵で断ったか・上限の数は返さない。",
             "headers": {
@@ -2181,6 +2342,29 @@
             },
             "x-error-codes": [
               "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "要求の本文が 16,384 バイト（16 KiB）を超える（PAYLOAD_TOO_LARGE）。Content-Length が超えていれば読まずに、無ければ超えた所で読むのをやめて断る。何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "PAYLOAD_TOO_LARGE"
             ],
             "content": {
               "application/json": {
@@ -2419,6 +2603,29 @@
               }
             }
           },
+          "413": {
+            "description": "要求の本文が 16,384 バイト（16 KiB）を超える（PAYLOAD_TOO_LARGE）。Content-Length が超えていれば読まずに、無ければ超えた所で読むのをやめて断る。何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "PAYLOAD_TOO_LARGE"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "429": {
             "description": "管理の口の利用制限を超えた（IP ごと。正しい鍵でも数え、鍵を確かめる前に断る）。どの鍵で断ったか・上限の数は返さない。",
             "headers": {
@@ -2648,6 +2855,29 @@
               }
             }
           },
+          "413": {
+            "description": "要求の本文が 16,384 バイト（16 KiB）を超える（PAYLOAD_TOO_LARGE）。Content-Length が超えていれば読まずに、無ければ超えた所で読むのをやめて断る。何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "PAYLOAD_TOO_LARGE"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "429": {
             "description": "管理の口の利用制限を超えた（IP ごと。正しい鍵でも数え、鍵を確かめる前に断る）。どの鍵で断ったか・上限の数は返さない。",
             "headers": {
@@ -2859,6 +3089,29 @@
             },
             "x-error-codes": [
               "NOT_FOUND"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "要求の本文が 16,384 バイト（16 KiB）を超える（PAYLOAD_TOO_LARGE）。Content-Length が超えていれば読まずに、無ければ超えた所で読むのをやめて断る。何も書かない。",
+            "headers": {
+              "Cache-Control": {
+                "description": "応答はどれも no-store。",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "x-error-codes": [
+              "PAYLOAD_TOO_LARGE"
             ],
             "content": {
               "application/json": {
@@ -3658,7 +3911,8 @@
           "INTERNAL_ERROR",
           "INVENTORY_LIMIT_EXCEEDED",
           "INSUFFICIENT_BALANCE",
-          "IDEMPOTENCY_KEY_REUSED"
+          "IDEMPOTENCY_KEY_REUSED",
+          "PAYLOAD_TOO_LARGE"
         ]
       },
       "AdminReason": {

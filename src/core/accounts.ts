@@ -1,7 +1,7 @@
 // accounts.ts — ゲストの発行（POST /v1/accounts/guest）のルートと、その本文の検証。
 //
 // 検査の順は docs/guides/working/account-design.md §3 と abuse-protection-design.md §3: APP_ENV=local の門（本文を読む前）
-// → IP ごとの利用制限（本文を読む前。429）→ JSON → 本文の形 → ゲームの登録（game_modules は見ない。アカウントはどのゲームにも
+// → IP ごとの利用制限（本文を読む前。429）→ 本文の大きさ（413。src/core/body.ts）→ JSON → 本文の形 → ゲームの登録（game_modules は見ない。アカウントはどのゲームにも
 // 要る土台）→ ゲームごとの利用制限（429）→ 鍵 → accounts と game_players と、発行の日の遊んだ行（player_activity_days の is_new = 1。
 // docs/guides/working/analytics-design.md §4）に 1 行ずつ（batch で全部か無し）→ トークン。応答・トークン・ログに account_id を出さない。
 // トークンの更新（POST /v1/accounts/token。refreshRoute）も同じファイルに置く。確かめの順はほかのトークンの口と同じ:
@@ -14,6 +14,7 @@
 import { activityDay } from './activity';
 import { requireAuth } from './auth';
 import { requireNotBanned } from './bans';
+import { MAX_JSON_BODY_BYTES, readJson } from './body';
 import { loadGame } from './games';
 import { requireLocalWrite } from './guards';
 import { error, json } from './http';
@@ -47,10 +48,9 @@ export const guestRoute: Route = {
     if (blocked) return blocked;
     const ipLimited = await consume(env.DB, RATE_LIMITS.guestIp, await ipSubject(req));
     if (ipLimited) return ipLimited;
-    let value: unknown;
-    try { value = await req.json(); }
-    catch { return error('INVALID_JSON', 'Request body must be JSON', 400); }
-    const parsed = parseGuestRequest(value);
+    const body = await readJson(req, MAX_JSON_BODY_BYTES);
+    if (!body.ok) return body.response;
+    const parsed = parseGuestRequest(body.value);
     if (!parsed.ok) return error('INVALID_ARGUMENT', parsed.message, 400);
     const { gameId } = parsed;
     if (!await loadGame(env.DB, gameId, known)) return error('NOT_FOUND', 'Unknown game', 404);
