@@ -69,7 +69,7 @@ Cloudflare の機能（**公式の文書と、リポジトリに入っている 
 
 | 口 | 単位（鍵） | 上限（推し） | 数える場所 | 束 |
 | --- | --- | --- | --- | --- |
-| `POST /v1/accounts/guest` | IP（`CF-Connecting-IP` のハッシュ） | 60 秒に 10 回 | D1 | R1 |
+| `POST /v1/accounts/guest` | IP（`CF-Connecting-IP` の鍵付きのハッシュ。§「鍵」） | 60 秒に 10 回 | D1 | R1 |
 | `POST /v1/accounts/guest` | ゲーム（`gameId`） | 60 秒に 300 回 | D1 | R1 |
 | `POST /v1/rankings/{boardId}` | プレイヤー（トークンの `g`・`p`） | 60 秒に 30 回 | D1 | R1 |
 | `/v1/saves` の 4 つの操作（`PUT`・`GET`・一覧・`DELETE`） | プレイヤー（トークンの `g`・`p`） | 60 秒に 60 回（4 つで合わせて） | D1 | R2 |

@@ -239,9 +239,10 @@ INSERT OR IGNORE INTO achievements (game_id, achievement_id, key, threshold) VAL
 
 1. `Idempotency-Key` の形（無い・形の誤りは 400 `INVALID_ARGUMENT`）。
 2. 本文が JSON でなければ 400 `INVALID_JSON`。`parseChanges`: `changes` が 1〜`MAX_CHANGES_PER_WRITE` 行・キーが ID の形で重ならない・`value` が安全な整数（400 `INVALID_ARGUMENT`）。
-3. 宣言を読む（`SELECT key, mode, max_value, max_delta FROM player_data_keys WHERE game_id = ? AND key IN (…)`）。無いキーがあれば 404 `NOT_FOUND`（`Unknown key`）。何も書かない。
-4. キーごとに `checkChange`（§5 の表。外れは 400 `INVALID_ARGUMENT`）。何も書かない。
-5. §6 の `batch` を流し、書き込みの記録を読み直して応答を作る。
+3. 同じプレイヤー・同じ鍵の書き込みの記録を引く。あれば中身のハッシュを比べ、同じなら 1 回目の本文（200）、違えば 422 `IDEMPOTENCY_KEY_REUSED`。宣言は読まない（宣言が後から変わっても、送り直しは 1 回目と同じ本文を返す。`hardening-design.md` §3.4）。無ければ次へ。
+4. 宣言を読む（`SELECT key, mode, max_value, max_delta FROM player_data_keys WHERE game_id = ? AND key IN (…)`）。無いキーがあれば 404 `NOT_FOUND`（`Unknown key`）。何も書かない。
+5. キーごとに `checkChange`（§5 の表。外れは 400 `INVALID_ARGUMENT`）。何も書かない。
+6. §6 の `batch` を流し、書き込みの記録を読み直して応答を作る（並べて送った 2 つがどちらも 3 の読みをすり抜けたときの二重は、ここで見分ける）。
 
 ```json
 {"gameId":"demo-rpg","writeId":"<writeRef>","values":[{"key":"boss-1-defeated","value":1},{"key":"highest-floor","value":12},{"key":"slimes-defeated","value":3}],"unlocked":[{"achievementId":"boss-1","unlockedAt":"2026-10-31T15:30:00Z"},{"achievementId":"first-slime","unlockedAt":"2026-10-31T15:30:00Z"}]}

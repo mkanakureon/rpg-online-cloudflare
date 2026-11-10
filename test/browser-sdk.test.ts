@@ -1,6 +1,6 @@
 /**
  * クライアント統合の試験 B2: ブラウザの SDK（clients/browser/rpg-online-client.mjs）と、SDK で送る CLI モックの流れ（scripts/cli-flow.mjs）。
- * 名前と期待する結果の正は docs/guides/working/client-integration-design.md §9 の B2 の 13 本と、
+ * 名前と期待する結果の正は docs/guides/working/client-integration-design.md §9 の B2 の 13 本と、docs/guides/working/hardening-design.md §11 の G10 の 1 本と、
  * docs/guides/working/failure-case-test-plan.md の K4 の `CLIはタイムアウトしたら決めた回数だけ再試行して失敗を表示する`（設計書 §7）と、
  * B3 の SDK の 2 本（期限まで 7 日を切ったトークンの更新・TOKEN_EXPIRED で session を返す。§9）。
  * L1 の試験は偽の fetch と差し替えた sleep で、実時間を待たずにタイムアウト・再試行・Retry-After を見る（AbortSignal.timeout に依らない）。

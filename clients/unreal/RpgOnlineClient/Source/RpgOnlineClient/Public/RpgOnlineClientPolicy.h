@@ -57,7 +57,7 @@ namespace RpgOnlineClientPolicy
 	// 再試行の種類のうち、429（何も作っていない）のときだけ送り直すもの（§2.2）。回線断・タイムアウト・5xx は送り直さず呼び手に返す
 	inline constexpr const TCHAR* RateLimitOnlyKind = TEXT("new-resource");
 
-	// §2.5 のエラーコードの表（スキーマの errorCatalog と同じ 19 行）
+	// §2.5 のエラーコードの表（スキーマの errorCatalog と同じ 20 行）
 	inline constexpr FRpgOnlineErrorRule ErrorCatalog[] = {
 		{ TEXT("INVALID_ARGUMENT"), TEXT("client-bug"), false },
 		{ TEXT("INVALID_JSON"), TEXT("client-bug"), false },

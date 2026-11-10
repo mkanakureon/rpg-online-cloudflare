@@ -68,7 +68,7 @@ namespace RpgOnline
         // 再試行の種類のうち、429（何も作っていない）のときだけ送り直すもの（§2.2）。回線断・タイムアウト・5xx は送り直さず呼び手に返す
         public const string RateLimitOnlyKind = "new-resource";
 
-        /// <summary>§2.5 のエラーコードの表（スキーマの errorCatalog と同じ 19 行）。</summary>
+        /// <summary>§2.5 のエラーコードの表（スキーマの errorCatalog と同じ 20 行）。</summary>
         public static readonly ErrorRule[] ErrorCatalog =
         {
             new ErrorRule("INVALID_ARGUMENT", "client-bug", false),
